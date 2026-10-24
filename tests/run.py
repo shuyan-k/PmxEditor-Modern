@@ -5004,3 +5004,149 @@ def scen_vmdphys():
     shot(WIN, "vmd_phys_on")
     log("physics ready=%s enabled=%s" % (vp.physics._ready, vp.physics.enabled))
     H.dump()
+
+
+def scen_vmdcheck():
+    """逐帧扫描动作：用「三角边拉伸率」找画面异常帧，并记录 IK 钳制次数。"""
+    path = (r"D:\Project\MMD\03_动作库\摇摇乐 A279-006_by_A279-006_"
+            r"f4635fd03f79792ab68dd769f91084d4\残虹摇摇乐.vmd")
+    import numpy as np
+    vp = WIN.viewport
+    model = vp.model
+    if model is None or not WIN.load_vmd_path(path):
+        anomaly("vmdcheck-setup", "模型或动作载入失败")
+        H.dump()
+        return
+    idx = np.asarray(model.indices, dtype=np.int64).reshape(-1, 3)[:, :2]
+    tri = np.asarray(model.indices, dtype=np.int64).reshape(-1, 3)
+    edges = np.unique(np.sort(np.concatenate(
+        [tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]], axis=0), axis=1), axis=0)
+    rest = np.asarray(model.v_pos, dtype=np.float64)
+    rest_len = np.linalg.norm(rest[edges[:, 1]] - rest[edges[:, 0]], axis=1)
+    keep = rest_len > 0.02   # 忽略退化的极短边（重复顶点 / 细缝），否则拉伸率会爆表
+    edges, rest_len = edges[keep], rest_len[keep]
+    log("边数=%d 静止边长方差=%.6f" % (len(edges), float(rest_len.var())))
+
+    top = WIN.action.max_frame
+    rows = []
+    for frame in range(0, top + 1, 5):
+        WIN.seek_action_frame(frame)
+        pump(30)
+        pos = np.asarray(vp._skin_pos, dtype=np.float64)
+        if pos.shape[0] != rest.shape[0]:
+            anomaly("vmdcheck-skin", "蒙皮顶点数与模型不一致")
+            break
+        cur = np.linalg.norm(pos[edges[:, 1]] - pos[edges[:, 0]], axis=1)
+        ratio = cur / rest_len
+        rows.append((float(np.percentile(ratio, 99.9)), frame,
+                     int(vp.pose.ik_clamp_hits) if vp.pose else 0,
+                     float(np.median(ratio))))
+    rows.sort(reverse=True)
+    for r in rows[:8]:
+        log("拉伸 p99.9 %.2f× 帧 %d 钳制=%d 中位=%.2f" % r)
+    bad = [r for r in rows if r[0] > 1.5]
+    log("拉伸 p99.9 >1.5× 的采样帧数 = %d / %d" % (len(bad), len(rows)))
+    for ratio, frame, _hits, _med in bad[:4]:
+        WIN.seek_action_frame(frame)
+        pump(60)
+        shot(WIN, "vmdcheck_%03d" % frame)
+    H.dump()
+
+
+def scen_vmdbad():
+    """找出被拉伸的顶点：看它们的权重类型/骨骼/位移，判断是蒙皮还是 IK。"""
+    import numpy as np
+    path = (r"D:\Project\MMD\03_动作库\摇摇乐 A279-006_by_A279-006_"
+            r"f4635fd03f79792ab68dd769f91084d4\残虹摇摇乐.vmd")
+    vp = WIN.viewport
+    model = vp.model
+    if model is None or not WIN.load_vmd_path(path):
+        anomaly("vmdbad-setup", "模型或动作载入失败")
+        H.dump()
+        return
+    tri = np.asarray(model.indices, dtype=np.int64).reshape(-1, 3)
+    edges = np.unique(np.sort(np.concatenate(
+        [tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]], axis=0), axis=1), axis=0)
+    rest = np.asarray(model.v_pos, dtype=np.float64)
+    wt = np.asarray(model.v_wtype).reshape(-1)
+    vb = np.asarray(model.v_bones).reshape(-1, 4)
+    vw = np.asarray(model.v_weights).reshape(-1, 4)
+    rl = np.linalg.norm(rest[edges[:, 1]] - rest[edges[:, 0]], axis=1)
+    keep = rl > 0.02
+    edges, rl = edges[keep], rl[keep]
+
+    for frame in (0, 60, 165):
+        WIN.seek_action_frame(frame)
+        pump(40)
+        pos = np.asarray(vp._skin_pos, dtype=np.float64)
+        cur = np.linalg.norm(pos[edges[:, 1]] - pos[edges[:, 0]], axis=1)
+        ratio = cur / rl
+        bad = np.argsort(ratio)[-40:]
+        verts = np.unique(np.concatenate([edges[bad, 0], edges[bad, 1]]))
+        log("帧 %d: 边长比 p99.9=%.2f max=%.1f 异常顶点数=%d"
+            % (frame, float(np.percentile(ratio, 99.9)),
+               float(ratio.max()), len(verts)))
+        types = {}
+        for vi in verts:
+            t = int(wt[vi])
+            types[t] = types.get(t, 0) + 1
+        log("  权重类型分布=%s" % types)
+        for vi in verts[:5]:
+            vi = int(vi)
+            d = float(np.linalg.norm(pos[vi] - rest[vi]))
+            log("  v%d type=%d bones=%s weights=%s 位移=%.3f 位置=%s"
+                % (vi, wt[vi], vb[vi].tolist(), np.round(vw[vi], 3).tolist(),
+                   d, np.round(pos[vi], 2).tolist()))
+    H.dump()
+
+
+def scen_vmdsdef():
+    """把 SDEF 顶点临时当 BDEF2 处理，看拉伸是否消失 —— 判定 SDEF 是否是画面异常来源。"""
+    import numpy as np
+    path = (r"D:\Project\MMD\03_动作库\摇摇乐 A279-006_by_A279-006_"
+            r"f4635fd03f79792ab68dd769f91084d4\残虹摇摇乐.vmd")
+    vp = WIN.viewport
+    model = vp.model
+    if model is None or not WIN.load_vmd_path(path):
+        anomaly("vmdsdef-setup", "模型或动作载入失败")
+        H.dump()
+        return
+    tri = np.asarray(model.indices, dtype=np.int64).reshape(-1, 3)
+    edges = np.unique(np.sort(np.concatenate(
+        [tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]], axis=0), axis=1), axis=0)
+    rest = np.asarray(model.v_pos, dtype=np.float64)
+    rl = np.linalg.norm(rest[edges[:, 1]] - rest[edges[:, 0]], axis=1)
+    keep = rl > 0.05
+    edges, rl = edges[keep], rl[keep]
+    wt = np.asarray(model.v_wtype).reshape(-1)
+    sdef_idx = np.nonzero(wt == 3)[0]
+
+    def measure(tag):
+        p99, mx = [], []
+        for frame in (0, 60, 120, 165, 220):
+            WIN.seek_action_frame(frame)
+            pump(30)
+            pos = np.asarray(vp._skin_pos, dtype=np.float64)
+            cur = np.linalg.norm(pos[edges[:, 1]] - pos[edges[:, 0]], axis=1)
+            ratio = cur / rl
+            p99.append(float(np.percentile(ratio, 99.9)))
+            mx.append(float(ratio.max()))
+            log("%s 帧 %d p99.9=%.2f max=%.2f SDEF顶点位移max=%.3f"
+                % (tag, frame, p99[-1], mx[-1],
+                   float(np.linalg.norm(pos[sdef_idx] - rest[sdef_idx], axis=1).max())))
+        return max(p99), max(mx)
+
+    a_p99, a_max = measure("SDEF")
+    orig = np.array(model.v_wtype, copy=True)
+    model.v_wtype = np.where(orig == 3, 1, orig).astype(orig.dtype)
+    from pmxeditor import skinning as SK
+    vp.deformer = SK.SkinDeformer(model)
+    vp._mark_full_skin_dirty()
+    b_p99, b_max = measure("BDEF2替代")
+    model.v_wtype = orig
+    vp.deformer = SK.SkinDeformer(model)
+    log("对比：SDEF p99.9=%.2f max=%.2f ｜ 当 BDEF2 p99.9=%.2f max=%.2f"
+        % (a_p99, a_max, b_p99, b_max))
+    if a_p99 > b_p99 * 1.5:
+        anomaly("sdef-tear", "SDEF 明显加剧拉伸：%.2f vs %.2f" % (a_p99, b_p99))
+    H.dump()

@@ -251,6 +251,10 @@ void deform_vertices(
                     }
                     if (sum_rest > 1e-12f && sum_cur > 1e-12f) {
                         radius = rest_len * std::sqrt(sum_rest / sum_cur);
+                        // 椭球比在极端弯曲时会给出离谱半径（实测到 4.8 单位），把修正量
+                        // 夹在 [0.6, 1.4] 倍静止半径内，保证不会撕裂网格。
+                        if (radius < rest_len * 0.6f) radius = rest_len * 0.6f;
+                        else if (radius > rest_len * 1.4f) radius = rest_len * 1.4f;
                     }
                 }
             }

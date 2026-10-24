@@ -24,7 +24,7 @@ setup(
             "pmxeditor._pmx_core",
             sources=[str(NATIVE / "pmx_core.cpp")],
             include_dirs=[pybind11.get_include()],
-            library_dirs=[str(NATIVE)],
+            library_dirs=[str(NATIVE), str(NATIVE / "obj")],
             libraries=["bullet_phys"],
             language="c++",
             extra_compile_args=["/O2", "/EHsc", "/std:c++17", "/utf-8"],

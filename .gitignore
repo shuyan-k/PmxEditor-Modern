@@ -57,3 +57,5 @@ assets/*.svg
 verify_native_report.json
 
 tests/action.vmd
+
+tests/*.npz

@@ -947,6 +947,10 @@ class SkinDeformer:
                         if sum_rest > 1e-12 and sum_cur > 1e-12:
                             radius = float(np.linalg.norm(d_rest)) * math.sqrt(
                                 sum_rest / sum_cur)
+                            # 与 C++ 一致：椭球修正量夹在 [0.6, 1.4] 倍静止半径内，
+                            # 避免极端弯曲时把网格拉出尖刺。
+                            rest_len = float(np.linalg.norm(d_rest))
+                            radius = min(max(radius, rest_len * 0.6), rest_len * 1.4)
                 if dlen > 1e-6 and radius > 1e-6:
                     out[vi] = center + direction * (radius / dlen)
                 continue
