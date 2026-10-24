@@ -396,10 +396,18 @@ def main_start():
     if not mode.startswith("nohook_"):
         install_hooks()
     log("APP STARTED", mode, th, model)
+    # 场景会改设置文件（亮度/显示开关/主题），跑完还原，避免污染真实偏好。
+    import json as _json
+    from pmxeditor.config import Config as _Config
+    _cfg = _Config.load()
+    _snapshot = _json.loads(_json.dumps(_cfg._data))
     try:
         globals()["scen_" + mode]()
     except Exception:
         anomaly("scenario-crash", traceback.format_exc())
+    finally:
+        _cfg._data = _snapshot
+        _cfg.save()
     H.dump()
     log("DONE anomalies:", len(H.ANOM))
     try:
@@ -3795,7 +3803,7 @@ def scen_restmove():
 
 def scen_mouse():
     """视角操作：左键拖动旋转、右键拖动平移、左键单击选择；骨骼页开关持久化。"""
-    from PyQt5.QtCore import QEvent, QPointF, QSettings, Qt
+    from PyQt5.QtCore import QEvent, QPointF, Qt
     from PyQt5.QtGui import QMouseEvent
     from pmxeditor import panels as pn
 
@@ -3850,34 +3858,33 @@ def scen_mouse():
     if doc.sel_kind != "":
         anomaly("click-blank", "左键单击空白没有取消选择")
 
-    # 4) 「移动时带动顶点」开关持久化
+    # 4) 「移动时带动顶点」开关持久化（settings.json）
+    from pmxeditor.config import Config
     bp = WIN._pages[1]
-    st = QSettings("PmxEditorModern", "editor")
-    prev = st.value("editor/move_bone_vertices", False, type=bool)
+    prev = bool(Config.load().get("editor/move_bone_vertices", False))
     bp.move_verts_sw.setChecked(True)
     pump(60)
-    got = st.value("editor/move_bone_vertices", False, type=bool)
+    got = bool(Config.load().get("editor/move_bone_vertices", False))
     bp2 = pn.BonePage(doc)
     log("开关持久化: 写入=%s 新实例=%s" % (got, bp2.move_verts_sw.isChecked()))
     if not got or not bp2.move_verts_sw.isChecked():
         anomaly("move-verts-persist", "开关状态没有持久化")
     bp2.deleteLater()
     bp.move_verts_sw.setChecked(bool(prev))
-    st.sync()
     H.dump()
 
 
 def scen_bright():
     """设置页亮度：背景/模型倍率是否真的作用到视口，并持久化。"""
-    from PyQt5.QtCore import QSettings
+    from pmxeditor.config import Config
     WIN.resize(1560, 920)
     WIN._select_page(5)
     pump(300)
     sp = WIN._pages[5]
     vp = WIN.viewport
-    st = QSettings("PmxEditorModern", "editor")
-    prev_bg = st.value("view/bg_brightness", 1.0, type=float)
-    prev_mb = st.value("view/model_brightness", 1.0, type=float)
+    cfg = Config.load()
+    prev_bg = float(cfg.get("view/bg_brightness", 1.0))
+    prev_mb = float(cfg.get("view/model_brightness", 1.0))
     log("初始: bg_slider=%d model_slider=%d vp.bg=%.2f vp.model=%.2f"
         % (sp.bg_slider.value(), sp.model_slider.value(),
            vp.bg_brightness, vp.model_brightness))
@@ -3912,7 +3919,7 @@ def scen_bright():
         % (vp.bg_brightness, tuple(round(c, 3) for c in bgc), STATUS.text))
     if abs(vp.bg_brightness - 2.0) > 1e-6:
         anomaly("bright-bg-prop", "背景亮度没有传到视口（%.3f）" % vp.bg_brightness)
-    if abs(st.value("view/bg_brightness", 1.0, type=float) - 2.0) > 1e-6:
+    if abs(float(cfg.get("view/bg_brightness", 1.0)) - 2.0) > 1e-6:
         anomaly("bright-bg-save", "背景亮度没有持久化")
     log("    像素差=%.2f%%" % H.pixdiff(WIN, base))
     shot(WIN, "bright_bg")
@@ -3936,7 +3943,7 @@ def scen_bright():
     # 还原用户原设置
     sp.bg_slider.setValue(int(round(prev_bg * 100)))
     sp.model_slider.setValue(int(round(prev_mb * 100)))
-    st.sync()
+    cfg.save()
     H.dump()
 
 
@@ -5450,7 +5457,7 @@ def scen_theme_probe():
     from pmxeditor import theme as TH
     log("[theme-probe] current=%r seg=%r viewbg=%r stored=%r dark=%r"
         % (TH.current_name(), WIN._pages[5].theme_seg.value(), TH.VIEW_BG_RGB,
-           WIN.settings.value("theme"), TH.DARK.get("VIEW_BG_RGB")))
+           WIN.config.get("theme"), TH.DARK.get("VIEW_BG_RGB")))
 
 
 def scen_theme_persist():
@@ -5462,20 +5469,122 @@ def scen_theme_persist():
     seg.buttons[other].click()
     pump(240)
     log("[theme] 切到", other, "current=", TH.current_name(),
-        "seg=", seg.value(), "stored=", WIN.settings.value("theme"),
+        "seg=", seg.value(), "stored=", WIN.config.get("theme"),
         "viewbg=", TH.VIEW_BG_RGB)
     if TH.current_name() != other:
         anomaly("theme-apply", "当前主题未切换：%r" % (TH.current_name(),))
-    if str(WIN.settings.value("theme")) != other:
-        anomaly("theme-store", "存档未更新：%r" % (WIN.settings.value("theme"),))
+    if str(WIN.config.get("theme")) != other:
+        anomaly("theme-store", "存档未更新：%r" % (WIN.config.get("theme"),))
     if seg.value() != other:
         anomaly("theme-seg", "分段控件未同步：%r" % (seg.value(),))
     if TH.VIEW_BG_RGB == before_bg:
         anomaly("theme-viewport", "视口底色未变")
     seg.buttons[start].click()
     pump(240)
-    log("[theme] 切回", start, "stored=", WIN.settings.value("theme"))
-    if TH.current_name() != start or str(WIN.settings.value("theme")) != start:
+    log("[theme] 切回", start, "stored=", WIN.config.get("theme"))
+    if TH.current_name() != start or str(WIN.config.get("theme")) != start:
         anomaly("theme-back", "切回失败：%r / %r"
-                % (TH.current_name(), WIN.settings.value("theme")))
+                % (TH.current_name(), WIN.config.get("theme")))
     log("[theme] done")
+
+def scen_config():
+    """settings.json：写入、重载、损坏恢复、类型纠正与启动恢复。"""
+    import copy
+    import io
+    import json
+    import os
+    import tempfile
+    from pmxeditor import theme as TH
+    from pmxeditor.config import Config
+
+    win = WIN
+    live = Config.load()
+    snapshot = copy.deepcopy(live._data)
+    tmpdir = os.path.join(tempfile.gettempdir(), "pmxe_cfg_test")
+    path = os.path.join(tmpdir, "settings.json")
+    try:
+        os.makedirs(tmpdir, exist_ok=True)
+        if os.path.exists(path):
+            os.remove(path)
+
+        cfg = Config.load(path, force=True)
+        log("[cfg] 新建:", path, "存在=", os.path.exists(path))
+        if not os.path.exists(path):
+            anomaly("cfg-create", "首次加载没有生成设置文件")
+
+        cfg.set("theme", "light")
+        cfg.update({"view/bg_brightness": 1.25, "view/show_grid": False,
+                    "physics/gravity": -12.5})
+        with io.open(path, encoding="utf-8") as fh:
+            data = json.loads(fh.read())
+        log("[cfg] 写入后 theme=%r bg=%r grid=%r"
+            % (data.get("theme"), data.get("view", {}).get("bg_brightness"),
+               data.get("view", {}).get("show_grid")))
+        if data.get("theme") != "light" or abs(float(
+                data["view"]["bg_brightness"]) - 1.25) > 1e-9 \
+                or data["view"]["show_grid"] is not False:
+            anomaly("cfg-write", "设置没有按预期写进文件：%r" % (data,))
+
+        again = Config.load(path, force=True)
+        log("[cfg] 重载: theme=%r bg=%r grid=%r gravity=%r"
+            % (again.get("theme"), again.get("view/bg_brightness"),
+               again.get("view/show_grid"), again.get("physics/gravity")))
+        if again.get("theme") != "light" or abs(
+                float(again.get("view/bg_brightness")) - 1.25) > 1e-9 \
+                or again.get("view/show_grid") is not False \
+                or abs(float(again.get("physics/gravity")) + 12.5) > 1e-9:
+            anomaly("cfg-reload", "重载后取值不一致：%r" % (again._data,))
+
+        # 手工编辑成字符串也能纠正成正确类型
+        with io.open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"theme": "light",
+                                 "view": {"show_grid": "false",
+                                          "bg_brightness": "1.5"},
+                                 "editor": {"move_bone_vertices": "true"}}))
+        fixed = Config.load(path, force=True)
+        log("[cfg] 类型纠正: grid=%r(%s) bg=%r(%s) mv=%r(%s)"
+            % (fixed.get("view/show_grid"), type(fixed.get("view/show_grid")).__name__,
+               fixed.get("view/bg_brightness"), type(fixed.get("view/bg_brightness")).__name__,
+               fixed.get("editor/move_bone_vertices"),
+               type(fixed.get("editor/move_bone_vertices")).__name__))
+        if fixed.get("view/show_grid") is not False \
+                or abs(float(fixed.get("view/bg_brightness")) - 1.5) > 1e-9 \
+                or fixed.get("editor/move_bone_vertices") is not True:
+            anomaly("cfg-coerce", "字符串值没有被纠正：%r" % (fixed._data,))
+
+        # 损坏的文件 → 备份 + 默认值 + 错误说明
+        with io.open(path, "w", encoding="utf-8") as fh:
+            fh.write("{ this is not json")
+        broken = Config.load(path, force=True)
+        bak = os.path.join(tmpdir, "settings.json.bak")
+        log("[cfg] 损坏恢复: theme=%r error=%r bak=%s"
+            % (broken.get("theme"), bool(broken.error), os.path.exists(bak)))
+        if not broken.error or not os.path.exists(bak):
+            anomaly("cfg-corrupt", "损坏文件没有备份/没有报告错误")
+        if broken.get("theme") not in ("dark", "light"):
+            anomaly("cfg-corrupt-default", "损坏后没有回到默认值：%r"
+                    % (broken.get("theme"),))
+    finally:
+        # 还原真实设置，避免测试污染用户偏好
+        live._data = snapshot
+        live.save()
+
+    # 窗口层面：切主题后磁盘文件必须同步
+    seg = win._pages[5].theme_seg
+    start = TH.current_name()
+    other = "light" if start == "dark" else "dark"
+    try:
+        seg.buttons[other].click()
+        pump(200)
+        with io.open(win.config.path, encoding="utf-8") as fh:
+            on_disk = json.loads(fh.read())
+        log("[cfg] 窗口切换: current=%r memory=%r disk=%r"
+            % (TH.current_name(), win.config.get("theme"), on_disk.get("theme")))
+        if on_disk.get("theme") != other or win.config.get("theme") != other:
+            anomaly("cfg-live", "切换主题后设置文件没有同步：内存=%r 磁盘=%r"
+                    % (win.config.get("theme"), on_disk.get("theme")))
+    finally:
+        seg.buttons[start].click()
+        pump(200)
+        seg.buttons[start].click()
+    H.dump()

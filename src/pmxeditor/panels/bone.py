@@ -3,8 +3,8 @@ from __future__ import annotations
 
 # -*- coding: utf-8 -*-
 import math
-from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+from ..config import Config
 from ..doc import add_bone, duplicate_bone, move_bone, remove_bone
 from ..gl_names import bone_zh
 from ..pmx import (BF_AFTER_PHYSICS, BF_ENABLED, BF_FIXED_AXIS, BF_IK, BF_INHERIT_MOV, BF_INHERIT_ROT, BF_LOCAL_APPEND, BF_LOCAL_AXIS, BF_ROTATABLE, BF_TAIL_INDEX, BF_TRANSLATABLE, BF_VISIBLE, IKLink, shift_bone_vertices)
@@ -64,8 +64,8 @@ class BonePage(PageBase):
         order_row.addStretch(1)
         form.add_full(order_row)
         self.move_verts_sw = Switch(False)
-        self.move_verts_sw.setChecked(QSettings("PmxEditorModern", "editor").value(
-            "editor/move_bone_vertices", False, type=bool))
+        self.move_verts_sw.setChecked(
+            bool(Config.load().get("editor/move_bone_vertices", False)))
         self.move_verts_sw.toggled.connect(self._move_verts_toggled)
         self.move_verts_sw.setToolTip(
             "开启后修改位置会按蒙皮权重把位移写进顶点（PMXEditor 习惯）")
@@ -518,8 +518,7 @@ class BonePage(PageBase):
                   "bone", "bone.layer")
 
     def _move_verts_toggled(self, on):
-        QSettings("PmxEditorModern", "editor").setValue(
-            "editor/move_bone_vertices", bool(on))
+        Config.load().set("editor/move_bone_vertices", bool(on))
 
     def _pos_changed(self):
         if self.loading:

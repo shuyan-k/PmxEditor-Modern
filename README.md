@@ -238,17 +238,40 @@ powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source 
 
 ### 本地设置
 
-所有可记忆的状态都写在 `QSettings("PmxEditorModern", "editor")`，不落到模型文件里：
+所有可记忆的状态写在仓库根目录的 `settings.json`（不进版本库），启动时自动读取、改动即时写回，不落到模型文件里：
+
+```json
+{
+  "version": 1,
+  "theme": "dark",
+  "view": {
+    "bg_brightness": 1.0,
+    "model_brightness": 1.0,
+    "show_grid": true, "show_bones": true, "show_rigid": false,
+    "show_joints": false, "show_texture": true, "toon": true,
+    "outline": true, "wireframe": false, "show_shadow": true
+  },
+  "physics": { "gravity": 9.8, "iterations": 10, "ground": true },
+  "paths": { "last_dir": "", "last_vpd_dir": "" },
+  "window": { "geometry": "<base64>", "splitter": [339, 300] },
+  "editor": { "move_bone_vertices": false }
+}
+```
 
 | 键 | 含义 |
 | --- | --- |
-| `theme` | 深色 / 亮色主题 |
-| `geometry` / `splitter` | 窗口位置大小与左右分栏比例 |
-| `view/bg_brightness` / `view/model_brightness` | 视口背景与模型亮度（1.0 为默认） |
-| `editor/move_bone_vertices` | 骨骼页「移动时带动顶点」开关 |
-| `last_dir` / `last_vpd_dir` | 打开模型、导入导出 VPD 时记住的目录 |
+| `theme` | 深色 / 亮色主题，首帧即按它构建（不再"先深色再闪一下"） |
+| `view.*` | 视口显示开关与亮度（`bg_brightness` / `model_brightness`，1.0 为默认） |
+| `physics.*` | 重力、迭代次数、地面开关 |
+| `paths.*` | 打开模型、导入导出 VPD 时记住的目录 |
+| `window.*` | 窗口位置大小（base64）与左右分栏比例 |
+| `editor.move_bone_vertices` | 骨骼页「移动时带动顶点」开关 |
 
-想恢复出厂状态可以删掉这段注册表配置（`HKCU\Software\PmxEditorModern\editor`）。
+- 写文件是先写 `.tmp` 再 `os.replace` 的原子替换；文件损坏时会自动备份成 `settings.json.bak` 并回落到默认值（设置页「配置文件」卡片会显示错误）。
+- 想恢复出厂状态：关掉程序，删掉 `settings.json`。
+- 用环境变量 `PMXE_CONFIG=<路径>` 可以指定另一份配置（便携模式 / 多套环境）。
+- 设置为根目录写不进去时（只读安装位置）自动退到 `%APPDATA%/PmxEditorModern/settings.json`。
+- 旧版的注册表配置（`HKCU\Software\PmxEditorModern\editor`）在首次启动、且 `settings.json` 不存在时会被一次性搬迁过来；之后以文件为准，注册表不再读写。
 
 ## 测试与验证
 
@@ -275,15 +298,16 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | `tree2` / `empty` | 骨骼树右键菜单、空列表占位提示 |
 | `sync` | VPD 导入/导出全流程（需真实模型） |
 | `themesync` | 主题切换后视口/控件的颜色常量是否跟着变（深<->亮双向） |
-| `theme_persist` | 切换主题后 QSettings 存档、分段控件、视口底色是否一起更新（再切回） |
+| `theme_persist` | 切换主题后配置文件存档、分段控件、视口底色是否一起更新（再切回） |
 | `opt` | 网格 VBO 复用（三次重建 id 不变）、页面刷新保留滚动、贴图预热产出、关闭时释放 GL 资源 |
 | `optb` | 量化贴图预热收益（有/无预热的 `set_model` + 首帧耗时） |
 | `undo` | 快照快速深拷贝提速、快照与在线模型隔离、撤销后另存字节一致 |
 | `undo2` | `deepcopy` 各字段耗时分布 |
 | `rest` | 改骨骼位置/尾端/父级后 Pose 与蒙皮静止位置是否跟着重建、撤销是否复原 |
 | `vp` | 视口拾取、左键选择、中键/右键拖动、F/R 快捷键、姿态拖动、物理刚体拾取（拖动类交互直接投递 QMouseEvent，因为 `QTest.mouseMove` 走光标路径、在本环境到不了控件） |
-| `bright` | 设置页亮度滑杆传到视口（背景清屏色、模型漫反射倍率）、写入 QSettings、恢复默认、视口像素确实变化、背景提亮后网格与 HUD 翻深色 |
+| `bright` | 设置页亮度滑杆传到视口（背景清屏色、模型漫反射倍率）、写入配置文件、恢复默认、视口像素确实变化、背景提亮后网格与 HUD 翻深色 |
 | `mouse` | 左键拖动旋转/右键拖动平移/空白单击取消选择；「移动时带动顶点」开关持久化 |
+| `config` | 配置文件：不存在时新建、写入即落盘、重载、手工写成字符串时的类型纠正、损坏时备份并回落默认、主题切换同时写内存与磁盘 |
 | `skin` | SDEF 球面半径保持、QDEF 同矩阵等价刚体、NumPy 回退与原生一致（合成夹具） |
 | `frame` | 表示枠增删改与项目排序、IK 链增删、角度限制写入与往返读写 |
 | `morph_edit` | 形态偏移的目标/数值编辑、添加与删除、材质乘法/加法切换、往返读写 |
@@ -450,6 +474,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 
 ## 更新记录
 
+- **2026-10-25 设置改用配置文件**：亮色主题仍然存不住，根因是设置的生命周期散在 `QSettings` 与各处刷新里（写注册表时机、注册表被系统/清理工具重置、`_set_theme` 早退等），排查成本高且无法被版本库/用户直接审视。现在所有设置集中到仓库根目录的 `settings.json`（`src/pmxeditor/config.py`），启动时用 `Config.load()` 一次读入并驱动窗口构建，改动即时写回，写入走 `*.tmp` + `os.replace` 原子替换；文件损坏时自动备份 `settings.json.bak` 并回落默认值（设置页「配置文件」卡片显示路径与错误）。支持 `PMXE_CONFIG` 环境变量指定另一份配置，根目录不可写时退到 `%APPDATA%/PmxEditorModern/settings.json`；首次启动且文件不存在时，把旧注册表里的主题、目录、亮度、窗口几何一次性搬迁过来，之后不再读注册表。设置页新增「配置文件」卡片（打开所在文件夹 / 重新载入文件），`_set_theme`、`_set_brightness`、`_toggle_display`、`_apply_physics`、`closeEvent` 统一写 `Config`，`_reload_settings()` 重新载入后同步主题与显示开关。`.gitignore` 忽略三份配置文件。新增回归场景 `config`（新建/落盘/重载/类型纠正/损坏恢复/主题双写），`main_start()` 在场景前后快照并还原设置，避免测试污染真实偏好；`theme_persist`、`bright`、`mouse` 同步改读配置文件。真机双进程验证：点「亮色」后关闭，重启首帧即亮色（`current=light seg=light stored=light`），不再出现「先深色再闪一下」。
 - **2026-10-25 主题保存加固**：`_set_theme` 过去把「写 QSettings」放在刷新链路的最后，图标重建 / 视口底色刷新一旦抛异常（个别显卡与 GL 驱动上会遇到），主题就没落盘，表现为「下次启动主题又变回去了」。现在先 `setValue` + `sync()` 落盘，再做配色、图标、样式表与视口刷新，刷新步骤各自 `try/except` 不阻断；切到当前主题时也会同步一次存档与分段控件，避免状态漂移。`main()` 的启动恢复改成「目标主题 vs 当前主题」比较（亮色/深色同一条路径），**并且恢复动作放在 `show()` 之前**——存档为亮色时以前是窗口先可见再切主题，肉眼看到的就是「启动先是深色、随后闪一下变白」；`closeEvent` 写几何、分隔条与**当前生效主题**后 `sync()`，保证存档不会停留在上一个主题。新增回归场景 `theme_persist`：切换后存档、控件、视口底色三处必须一起变，再切回原主题。
 
 - **2026-10-25 对齐 PMXEditor 的五处小差异**：① 删除材质时可选择「并入上一个材质」——只把面计数归给上一个材质、`indices` 不动（`remove_material(..., merge=True)`），几何得以保留；② 变形层级范围收紧到 0–31；③ 骨骼列表支持上移/下移（`doc.move_bone` 交换列表项并重映射父骨、尾端骨、付与父、IK 目标与链接、顶点权重、形态骨骼偏移、刚体与表示枠引用）；④ 新建骨骼落在父骨尾端（尾端骨或 `tail_offset`，退化时朝上 1.0），不再写死 `+1.0`；⑤ 顶点页/材质页与骨骼顺序联动的引用都会跟着重映射。新增回归场景 `small_fixes`，`struct3`/`struct4`/`undo`/`skin`/`final`/`vp`/`view`/`menu` 均 0 异常。**尚未实现**：PMX 2.1 的「外部親」——需要在解析层增加外部親表并在求值器里解析跨模型父级，属于独立特性，留待后续。

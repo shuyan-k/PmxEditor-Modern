@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 # -*- coding: utf-8 -*-
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (QGridLayout, QHBoxLayout, QSlider, QSpinBox, QVBoxLayout, QWidget)
 from ..theme import mono_font
 from .. import theme
@@ -16,6 +17,7 @@ class SettingsPage(PageBase):
     brightnessChanged = pyqtSignal(float, float)
     physicsApply = pyqtSignal(dict)
     themeChanged = pyqtSignal(str)
+    configReloaded = pyqtSignal()
 
     def __init__(self, doc, parent=None):
         super().__init__(doc, "设置", "显示与物理", parent)
@@ -85,6 +87,24 @@ class SettingsPage(PageBase):
         sec.add(label("亮色主题适合明亮环境，选择会自动保存。", "Faint", True))
         bl.addWidget(card)
 
+        card, sec = self._card("配置文件", "所有偏好都存在这个 JSON 文件里")
+        self.config_path = label("—", "Faint", True)
+        self.config_path.setWordWrap(True)
+        sec.add(self.config_path)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        open_btn = text_button("打开所在文件夹", "Ghost", "open")
+        open_btn.clicked.connect(self._open_config_dir)
+        reload_btn = text_button("重新载入文件", "Ghost", "restore")
+        reload_btn.clicked.connect(self._reload_config)
+        row.addWidget(open_btn)
+        row.addWidget(reload_btn)
+        row.addStretch(1)
+        sec.add_layout(row)
+        sec.add(label("主题、亮度、显示开关、物理参数、上次目录与窗口位置都在这里；"
+                      "删掉文件即恢复默认。", "Faint", True))
+        bl.addWidget(card)
+
         card, sec = self._card("界面")
         notes = [
             "字体：Microsoft YaHei UI（中文）+ Consolas（数值）",
@@ -114,6 +134,20 @@ class SettingsPage(PageBase):
         bl.addWidget(card)
         bl.addStretch(1)
         self.root.addWidget(scroll, 1)
+
+    def sync_config(self, cfg):
+        self._config = cfg
+        extra = "（%s）" % cfg.error if cfg.error else ""
+        self.config_path.setText(str(cfg.path) + extra)
+
+    def _open_config_dir(self):
+        cfg = getattr(self, "_config", None)
+        if cfg is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(cfg.path.parent)))
+
+    def _reload_config(self):
+        self.configReloaded.emit()
 
     def _brightness_row(self, sec, text, lo, hi, default):
         row = QHBoxLayout()

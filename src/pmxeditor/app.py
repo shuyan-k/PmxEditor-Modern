@@ -11,7 +11,7 @@ import numpy as np
 from .native_backend import backend_label, unavailable_reason
 
 # Load the MSVC extension before Qt DLLs on Windows.
-from PyQt5.QtCore import QEvent, QSettings, QSize, Qt
+from PyQt5.QtCore import QByteArray, QEvent, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
                              QHBoxLayout, QLabel, QMainWindow, QMenuBar,
@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from . import theme
+from .config import Config
 from .doc import Document
 from .panels import (BonePage, FramePage, InfoPage, MaterialPage, MorphPage,
                      PhysicsPage, SettingsPage, VertexPage)
@@ -147,7 +148,9 @@ class MainWindow(QMainWindow):
         # 结构编辑后只刷新当前页，其余页标记为脏，切换过去时再刷新，
         # 避免每次编辑都重建 6 个页面（大模型里 321 项下拉重建很贵）。
         self._pages_dirty = set()
-        self.settings = QSettings("PmxEditorModern", "editor")
+        # 偏好写在 settings.json 里（见 config.py），不再用注册表：
+        # 改坏了可以直接打开文件改，删掉就是恢复出厂设置。
+        self.config = Config.load()
         self._pages = []
         self._current_page = 0
 
@@ -413,10 +416,8 @@ class MainWindow(QMainWindow):
         settings.physicsApply.connect(self._apply_physics)
         settings.themeChanged.connect(self._set_theme)
         settings.brightnessChanged.connect(self._set_brightness)
-        bg = float(self.settings.value("view/bg_brightness", 1.0))
-        mb = float(self.settings.value("view/model_brightness", 1.0))
-        self.viewport.set_brightness(bg, mb)
-        settings.sync_brightness(bg, mb)
+        settings.configReloaded.connect(self._reload_settings)
+        self._restore_view_settings()
 
         self.setAcceptDrops(True)
 
@@ -526,8 +527,48 @@ class MainWindow(QMainWindow):
     def _set_status(self, text: str):
         self.status_label.setText(text)
 
+    # ------------------------------------------------------------ 偏好
+    def _start_dir(self) -> str:
+        """上次打开/保存的目录；路径已不存在就退回当前工作目录。"""
+        path = str(self.config.get("paths/last_dir", "") or "")
+        return path if os.path.isdir(path) else os.getcwd()
+
+    def _vpd_dir(self) -> str:
+        path = str(self.config.get("paths/last_vpd_dir", "") or "")
+        return path if os.path.isdir(path) else self._start_dir()
+
+    def _restore_view_settings(self):
+        """把 settings.json 里的亮度/显示开关/物理参数恢复进视口与设置页。"""
+        page = self._pages[5]
+        page.sync_config(self.config)
+        bg = float(self.config.get("view/bg_brightness", 1.0))
+        mb = float(self.config.get("view/model_brightness", 1.0))
+        self.viewport.set_brightness(bg, mb)
+        page.sync_brightness(bg, mb)
+        values = {}
+        for key in ("show_grid", "show_bones", "show_rigid", "show_joints",
+                    "show_texture", "toon", "outline", "wireframe"):
+            values[key] = bool(self.config.get("view/" + key, True))
+        try:
+            self.viewport.set_display(**values)
+            for key, on in values.items():
+                act = self.display_actions.get(key)
+                if act is not None:
+                    act.blockSignals(True)
+                    act.setChecked(bool(on))
+                    act.blockSignals(False)
+            page.sync_display(self.viewport)
+        except Exception:
+            traceback.print_exc()
+        try:
+            page.gravity.setValue(float(self.config.get("physics/gravity", -9.8)))
+            page.iterations.setValue(int(self.config.get("physics/iterations", 10)))
+            page.ground.setChecked(bool(self.config.get("physics/ground", True)))
+        except Exception:
+            traceback.print_exc()
+
     def open_dialog(self):
-        start = self.settings.value("last_dir", os.getcwd())
+        start = self._start_dir()
         path, _ = QFileDialog.getOpenFileName(self, "打开 PMX 模型", start,
                                               "PMX 模型 (*.pmx);;所有文件 (*.*)")
         if path:
@@ -545,7 +586,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             self.doc.suppress = False
-        self.settings.setValue("last_dir", os.path.dirname(path))
+        self.config.set("paths/last_dir", os.path.dirname(path))
         self._apply_model()
         self._set_status("已打开 %s" % os.path.basename(path))
 
@@ -554,8 +595,7 @@ class MainWindow(QMainWindow):
         if not self.doc.model or self.viewport.pose is None:
             self._set_status("请先打开 PMX 模型")
             return
-        start = self.settings.value(
-            "last_vpd_dir", self.settings.value("last_dir", os.getcwd()))
+        start = self._vpd_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "导入 VPD 姿态", start,
             "VPD 姿态 (*.vpd);;所有文件 (*.*)")
@@ -596,7 +636,7 @@ class MainWindow(QMainWindow):
         self.viewport.mark_dirty()
         self.doc.mark_dirty()
         self.doc.edited.emit("pose")
-        self.settings.setValue("last_vpd_dir", os.path.dirname(path))
+        self.config.set("paths/last_vpd_dir", os.path.dirname(path))
         text = "已导入 VPD 姿态：%d/%d 根骨骼" % (match.matched, match.total)
         if match.missing:
             text += "，%d 根未匹配" % len(match.missing)
@@ -663,8 +703,7 @@ class MainWindow(QMainWindow):
         if not self.doc.model or self.viewport.pose is None:
             self._set_status("请先打开 PMX 模型")
             return
-        start = self.settings.value(
-            "last_vpd_dir", self.settings.value("last_dir", os.getcwd()))
+        start = self._vpd_dir()
         if self.doc.path:
             base = os.path.splitext(os.path.basename(self.doc.path))[0]
         else:
@@ -701,7 +740,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "VPD 导出失败", "无法写入 VPD：\n%s" % e)
             self._set_status("VPD 导出失败：%s" % e)
             return False
-        self.settings.setValue("last_vpd_dir", os.path.dirname(path))
+        self.config.set("paths/last_vpd_dir", os.path.dirname(path))
         text = "已导出 VPD：%d 根骨骼，%d 个形态" % (result.bones, result.morphs)
         if result.encoding != "cp932":
             text += "（含非 Shift-JIS 名称，已保存为 UTF-8）"
@@ -866,8 +905,8 @@ class MainWindow(QMainWindow):
     def save_as(self):
         if not self.doc.model:
             return
-        start = self.doc.path or os.path.join(self.settings.value("last_dir", os.getcwd()),
-                                              "%s.pmx" % (self.doc.model.name or "model"))
+        start = self.doc.path or os.path.join(
+            self._start_dir(), "%s.pmx" % (self.doc.model.name or "model"))
         path, _ = QFileDialog.getSaveFileName(self, "另存为 PMX", start,
                                               "PMX 模型 (*.pmx)")
         if not path:
@@ -877,7 +916,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "保存失败", str(e))
             return
-        self.settings.setValue("last_dir", os.path.dirname(path))
+        self.config.set("paths/last_dir", os.path.dirname(path))
         self._update_title()
         self._set_status("已保存 %s" % os.path.basename(path))
 
@@ -941,6 +980,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_display(self, key: str, on: bool):
         self.viewport.set_display(**{key: on})
+        self.config.set("view/" + key, bool(on))
         self._pages[5].sync_display(self.viewport)
 
     def _apply_display(self, values: dict):
@@ -952,10 +992,19 @@ class MainWindow(QMainWindow):
                 act.setChecked(bool(on))
                 act.blockSignals(False)
 
+    def _reload_settings(self):
+        """重新读磁盘上的 settings.json 并立即应用（手工改文件后免重启）。"""
+        cfg = Config.load(force=True)
+        self.config = cfg
+        want = "light" if str(cfg.get("theme", "dark")).lower() == "light" else "dark"
+        self._set_theme(want, announce=False)
+        self._restore_view_settings()
+        self._set_status("已重新载入设置：%s" % cfg.path)
+
     def _set_brightness(self, bg: float, model: float):
         self.viewport.set_brightness(bg, model)
-        self.settings.setValue("view/bg_brightness", float(bg))
-        self.settings.setValue("view/model_brightness", float(model))
+        self.config.update({"view/bg_brightness": float(bg),
+                            "view/model_brightness": float(model)})
         self._set_status("亮度：背景 %d%% · 模型 %d%%"
                          % (round(bg * 100), round(model * 100)))
 
@@ -964,6 +1013,7 @@ class MainWindow(QMainWindow):
             self._set_status("未载入模型，无法应用物理参数")
             return
         self.viewport.apply_physics_settings(**values)
+        self.config.update({"physics/" + key: values[key] for key in values})
         self._set_status("物理参数已应用")
 
     def _set_theme(self, name: str, announce: bool = True):
@@ -973,8 +1023,7 @@ class MainWindow(QMainWindow):
         # 先落盘再刷新界面：刷新链路（图标、视口底色）在个别显卡/GL 驱动上
         # 可能抛异常，若放到最后，主题就没存下来——表现为「主题自动保存失效」。
         try:
-            self.settings.setValue("theme", target)
-            self.settings.sync()
+            self.config.set("theme", target)
         except Exception:
             traceback.print_exc()
         if target == theme.current_name():
@@ -1039,14 +1088,19 @@ class MainWindow(QMainWindow):
             e.ignore()
             return
         try:
-            self.settings.setValue("geometry", self.saveGeometry())
-            self.settings.setValue("splitter", self.splitter.sizes())
-            # 以"屏幕上实际生效的主题"为准落盘：切换过程中的任何异常都不会
-            # 让存档停留在上一个主题，下次启动就不会反过来闪一下。
-            self.settings.setValue("theme", theme.current_name())
-            self.settings.sync()
+            self.config.update({
+                # 以"屏幕上实际生效的主题"为准落盘：切换过程中的任何异常都不会
+                # 让存档停留在上一个主题，下次启动就不会反过来闪一下。
+                "theme": theme.current_name(),
+                "window/geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
+                "window/splitter": [int(s) for s in self.splitter.sizes()],
+            })
         except Exception:
             pass
+        try:
+            self.config.save()
+        except Exception:
+            traceback.print_exc()
         self.viewport.physics.release()
         # 显式释放网格/叠加层缓冲与纹理，避免关窗后显存留在驱动侧
         self.viewport.release_gpu_resources()
@@ -1076,10 +1130,13 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        geo = self.settings.value("geometry")
-        if geo is not None:
-            self.restoreGeometry(geo)
-        sizes = self.settings.value("splitter")
+        geo = self.config.get("window/geometry", "")
+        if geo:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(geo.encode("ascii")))
+            except Exception:
+                pass
+        sizes = self.config.get("window/splitter", [])
         if sizes:
             try:
                 self.splitter.setSizes([int(s) for s in sizes])
@@ -1100,8 +1157,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")
-    qsettings = QSettings("PmxEditorModern", "editor")
-    saved_theme = qsettings.value("theme", "dark")
+    saved_theme = Config.load().get("theme", "dark")
     # 界面始终先按深色构建，再切到保存的主题：
     # 切换逻辑依赖深色原始样式作为基准，可保证往返后精确还原。
     theme.apply_theme("dark")
