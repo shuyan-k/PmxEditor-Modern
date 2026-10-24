@@ -9,8 +9,8 @@ from typing import List, Optional
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from .pmx import (BF_IK, BF_TAIL_INDEX, Bone, Joint, Material, Morph, PMXModel,
-                 RigidBody, load_pmx, save_pmx)
+from .pmx import (BF_IK, BF_TAIL_INDEX, Bone, DisplayFrame, Joint, Material,
+                 Morph, PMXModel, RigidBody, load_pmx, save_pmx)
 
 UNDO_LIMIT = 12
 POSE_UNDO_LIMIT = 12
@@ -402,6 +402,80 @@ def remove_morph(model: PMXModel, index: int) -> int:
             items.append((ty, ii))
         f.items = items
     return min(index, len(model.morphs) - 1)
+
+
+def add_frame(model: PMXModel, special: int = 0) -> int:
+    """新建表示枠；调用方负责把骨骼/形态挂进去。"""
+    f = DisplayFrame()
+    f.name = "新建表示枠"
+    f.name_en = "new_frame"
+    f.special = int(special) & 1
+    model.frames.append(f)
+    return len(model.frames) - 1
+
+
+def duplicate_frame(model: PMXModel, index: int) -> int:
+    if not (0 <= index < len(model.frames)):
+        return -1
+    src = model.frames[index]
+    f = copy.deepcopy(src)
+    f.name = src.name + "_副本"
+    f.name_en = (src.name_en or "frame") + "_copy"
+    f.special = 0
+    model.frames.append(f)
+    return len(model.frames) - 1
+
+
+def remove_frame(model: PMXModel, index: int) -> int:
+    if not (0 <= index < len(model.frames)):
+        return -1
+    del model.frames[index]
+    return min(index, len(model.frames) - 1)
+
+
+def move_frame(model: PMXModel, index: int, delta: int) -> int:
+    """在列表里上移/下移表示枠（delta = -1 / +1），返回新的索引。"""
+    n = len(model.frames)
+    if not (0 <= index < n):
+        return index
+    dst = index + delta
+    if not (0 <= dst < n):
+        return index
+    model.frames[index], model.frames[dst] = model.frames[dst], model.frames[index]
+    return dst
+
+
+def frame_add_item(model: PMXModel, index: int, kind: int, item: int) -> bool:
+    """把骨骼(0)/形态(1) 加进表示枠；重复项直接忽略（MMD 里一项只能挂一次）。"""
+    if not (0 <= index < len(model.frames)):
+        return False
+    f = model.frames[index]
+    entry = (int(kind), int(item))
+    if entry in f.items or int(item) < 0:
+        return False
+    f.items.append(entry)
+    return True
+
+
+def frame_remove_item(model: PMXModel, index: int, pos: int) -> bool:
+    if not (0 <= index < len(model.frames)):
+        return False
+    f = model.frames[index]
+    if not (0 <= pos < len(f.items)):
+        return False
+    del f.items[pos]
+    return True
+
+
+def frame_move_item(model: PMXModel, index: int, pos: int, delta: int) -> int:
+    if not (0 <= index < len(model.frames)):
+        return pos
+    items = model.frames[index].items
+    dst = pos + delta
+    if not (0 <= pos < len(items)) or not (0 <= dst < len(items)):
+        return pos
+    items[pos], items[dst] = items[dst], items[pos]
+    return dst
 
 
 def add_rigid(model: PMXModel, bone: int = -1) -> int:

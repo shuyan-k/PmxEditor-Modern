@@ -5080,3 +5080,130 @@ def scen_flagguard():
     pump(180)
     H.shot(WIN, "flagguard")
     H.dump()
+
+
+def scen_frame():
+    """表示枠与 IK 链的可编辑性（数据 + 面板两条路径）。"""
+    import math
+
+    win = WIN
+    doc = win.doc
+    m = doc.model
+    if not m:
+        anomaly("frame-nomodel", "没有模型")
+        dump()
+        return
+    win._select_page(6)
+    pump(120)
+    page = win._pages[6]
+    n0 = len(m.frames)
+    page._add()
+    pump(40)
+    n1 = len(m.frames)
+    if n1 != n0 + 1:
+        anomaly("frame-add", "表示枠数量 %d -> %d" % (n0, n1))
+        dump()
+        return
+    doc.select("frame", n1 - 1)
+    page.select("frame", n1 - 1)
+    page.name_edit.setText("测试枠")
+    page._name_changed()
+    pump(30)
+    if m.frames[n1 - 1].name != "测试枠":
+        anomaly("frame-name", "名字 = %r" % (m.frames[n1 - 1].name,))
+    page._add_bone_item()
+    page._add_bone_item()
+    pump(40)
+    items = list(m.frames[n1 - 1].items)
+    if len(items) != 2 or items[0][0] != 0:
+        anomaly("frame-items", "项目 = %r" % (items,))
+    else:
+        page._move_item(1)
+        pump(30)
+        swapped = list(m.frames[n1 - 1].items)
+        if swapped[0] != items[1] or swapped[1] != items[0]:
+            anomaly("frame-item-move", "顺序 = %r" % (swapped,))
+        page._remove_item()
+        pump(30)
+        if len(m.frames[n1 - 1].items) != 1:
+            anomaly("frame-item-remove", "剩余 %d" % len(m.frames[n1 - 1].items))
+    if m.morphs:
+        page._add_morph_item()
+        pump(30)
+        kinds = [it[0] for it in m.frames[n1 - 1].items]
+        if 1 not in kinds:
+            anomaly("frame-morph-item", "项目 = %r" % (kinds,))
+    if n1 - 1 > 0:
+        page._move_frame(-1)
+        pump(30)
+        if m.frames[n1 - 2].name != "测试枠":
+            anomaly("frame-move", "位置不对")
+    idx = [i for i, f in enumerate(m.frames) if f.name == "测试枠"]
+    if idx:
+        page.select("frame", idx[0])
+        page._remove()
+        pump(80)
+        if len(m.frames) != n0:
+            anomaly("frame-remove", "数量 %d != %d" % (len(m.frames), n0))
+    shot(win, "frame_page")
+
+    bp = win._pages[1]
+    win._select_page(1)
+    pump(60)
+    target = None
+    for i, b in enumerate(m.bones):
+        if b.ik is not None:
+            target = i
+            break
+    if target is None:
+        target = 0
+    bp.select("bone", target)
+    pump(40)
+    bp.ik_sw.setChecked(True)
+    pump(80)
+    b = m.bones[target]
+    if b.ik is None:
+        anomaly("ik-enable", "IK 没有建立")
+        dump()
+        return
+    k0 = len(b.ik.links)
+    if bp.ik_link_combo.count():
+        bp.ik_link_combo.setCurrentIndex(0)
+        bp._ik_link_add()
+        pump(80)
+        b = m.bones[target]
+        if len(b.ik.links) != k0 + 1:
+            anomaly("ik-link-add", "链接 %d -> %d" % (k0, len(b.ik.links)))
+        else:
+            bp.ik_links.setCurrentRow(len(b.ik.links) - 1)
+            pump(40)
+            bp.link_limit_sw.setChecked(True)
+            pump(60)
+            b = m.bones[target]
+            if not b.ik.links[-1].limited:
+                anomaly("ik-link-limit", "limited 未写入")
+            bp.link_lo.spins[0].setValue(-30.0)
+            bp.link_lo.spins[1].setValue(-10.0)
+            pump(80)
+            b = m.bones[target]
+            if abs(b.ik.links[-1].lo[0] - math.radians(-30.0)) > 1e-4:
+                anomaly("ik-link-range", "lo = %r" % (b.ik.links[-1].lo,))
+            bp._ik_link_del()
+            pump(80)
+            b = m.bones[target]
+            if len(b.ik.links) != k0:
+                anomaly("ik-link-del", "剩余 %d" % len(b.ik.links))
+    shot(win, "ik_chain")
+
+    # 往返读写
+    path = os.path.join(H.ROOT, "tests", "frame_rt.pmx")
+    from pmxeditor.pmx import load_pmx as _pmx_load, save_pmx as _pmx_save
+    _pmx_save(m, path)
+    back = _pmx_load(path)
+    if len(back.frames) != len(m.frames):
+        anomaly("frame-roundtrip", "枠 %d != %d" % (len(back.frames), len(m.frames)))
+    bi = back.bones[target].ik
+    if (bi is None) != (m.bones[target].ik is None):
+        anomaly("ik-roundtrip", "IK 状态不一致")
+    log("[frame] 表示枠 / IK 链编辑通过：frames=%d links=%d"
+        % (len(m.frames), len(m.bones[target].ik.links) if m.bones[target].ik else 0))

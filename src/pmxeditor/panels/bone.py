@@ -4,12 +4,12 @@ from __future__ import annotations
 # -*- coding: utf-8 -*-
 import math
 from PyQt5.QtCore import QSettings
-from PyQt5.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 from ..doc import add_bone, duplicate_bone, remove_bone
 from ..gl_names import bone_zh
-from ..pmx import (BF_AFTER_PHYSICS, BF_ENABLED, BF_FIXED_AXIS, BF_IK, BF_INHERIT_MOV, BF_INHERIT_ROT, BF_LOCAL_APPEND, BF_LOCAL_AXIS, BF_ROTATABLE, BF_TAIL_INDEX, BF_TRANSLATABLE, BF_VISIBLE, shift_bone_vertices)
+from ..pmx import (BF_AFTER_PHYSICS, BF_ENABLED, BF_FIXED_AXIS, BF_IK, BF_INHERIT_MOV, BF_INHERIT_ROT, BF_LOCAL_APPEND, BF_LOCAL_AXIS, BF_ROTATABLE, BF_TAIL_INDEX, BF_TRANSLATABLE, BF_VISIBLE, IKLink, shift_bone_vertices)
 from ..theme import ACCENT, DANGER, TEXT_FAINT
-from ..ui_widgets import (AxisSpin, BoneTree, Card, ConfirmDialog, Form, Segmented, Switch, SearchEdit, label, make_spin)
+from ..ui_widgets import (AxisSpin, BoneTree, Card, ConfirmDialog, Form, Segmented, Switch, SearchEdit, label, make_spin, text_button)
 from .base import _cycle, _fill_combo, _mode_spin, _bone_combo_items, PageBase
 
 # ================================================================= 骨骼
@@ -180,8 +180,40 @@ class BonePage(PageBase):
         form.add("循环次数", self.ik_loop)
         form.add("单次角度", self.ik_angle)
         sec.add(form)
-        self.ik_links = label("", "Faint", True)
+        self.ik_links = QListWidget()
+        self.ik_links.setObjectName("Entry")
+        self.ik_links.setFixedHeight(84)
+        self.ik_links.currentRowChanged.connect(lambda _r: self._sync_link_editor())
         sec.add(self.ik_links)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self.ik_link_combo = QComboBox()
+        self.ik_link_add = text_button("添加链接", "Ghost", tip="把选中的骨骼加进 IK 链")
+        self.ik_link_del = text_button("移除", "Ghost", tip="从 IK 链里移除选中骨骼")
+        self.ik_link_add.clicked.connect(self._ik_link_add)
+        self.ik_link_del.clicked.connect(self._ik_link_del)
+        row.addWidget(self.ik_link_combo, 1)
+        row.addWidget(self.ik_link_add)
+        row.addWidget(self.ik_link_del)
+        sec.add_layout(row)
+        lform = Form(64)
+        self.link_limit_sw = Switch(False)
+        lrow = QHBoxLayout()
+        lrow.setContentsMargins(0, 0, 0, 0)
+        lrow.addWidget(self.link_limit_sw)
+        lrow.addWidget(label("角度限制", "Muted"))
+        lrow.addStretch(1)
+        lform.add_full(lrow)
+        self.link_lo = AxisSpin(2, 1.0, -180.0, 180.0)
+        self.link_hi = AxisSpin(2, 1.0, -180.0, 180.0)
+        lform.add("最小", self.link_lo)
+        lform.add("最大", self.link_hi)
+        sec.add(lform)
+        self.link_limit_sw.toggled.connect(self._link_limit_changed)
+        self.link_lo.valueChanged.connect(lambda: self._link_range_changed(0))
+        self.link_hi.valueChanged.connect(lambda: self._link_range_changed(1))
+        dl.addWidget(card)
         self.ik_sw.toggled.connect(self._ik_toggled)
         self.ik_target.currentIndexChanged.connect(self._ik_target_changed)
         self.ik_loop.valueChanged.connect(self._ik_loop_changed)
@@ -301,22 +333,133 @@ class BonePage(PageBase):
         self.ik_loop.setEnabled(bool(b.ik))
         self.ik_angle.setValue(math.degrees(b.ik.angle) if b.ik else 30.0)
         self.ik_angle.setEnabled(bool(b.ik))
-        if b.ik and b.ik.links:
-            lines = []
-            for link in b.ik.links:
-                nm = (m.bones[link.bone].name if 0 <= link.bone < len(m.bones) else "?")
-                if link.limited:
-                    lines.append("%s · X[%.0f°, %.0f°] Y[%.0f°, %.0f°] Z[%.0f°, %.0f°]"
-                                 % (nm, math.degrees(link.lo[0]), math.degrees(link.hi[0]),
-                                    math.degrees(link.lo[1]), math.degrees(link.hi[1]),
-                                    math.degrees(link.lo[2]), math.degrees(link.hi[2])))
-                else:
-                    lines.append("%s · 无限制" % nm)
-            self.ik_links.setText("IK 链（%d）：\n" % len(b.ik.links) + "\n".join(
-                "· " + s for s in lines))
-        else:
-            self.ik_links.setText("IK 链：无")
+        self._fill_links(m, b)
         self.loading = prev
+        self._sync_link_editor()
+
+    # ------------------------------------------------------------ IK 链
+    def _link(self):
+        b = self._bone()
+        if not b or not b.ik:
+            return None
+        row = self.ik_links.currentRow()
+        if 0 <= row < len(b.ik.links):
+            return b.ik.links[row]
+        return None
+
+    def _fill_links(self, m, b):
+        links = list(b.ik.links) if b.ik else []
+        keep = self.ik_links.currentRow()
+        self.ik_links.blockSignals(True)
+        self.ik_links.clear()
+        for link in links:
+            nm = m.bones[link.bone].name if 0 <= link.bone < len(m.bones) else "?"
+            if link.limited:
+                rng = "  X[%.0f,%.0f] Y[%.0f,%.0f] Z[%.0f,%.0f]" % (
+                    math.degrees(link.lo[0]), math.degrees(link.hi[0]),
+                    math.degrees(link.lo[1]), math.degrees(link.hi[1]),
+                    math.degrees(link.lo[2]), math.degrees(link.hi[2]))
+            else:
+                rng = "  · 无限制"
+            self.ik_links.addItem("· %s%s" % (nm, rng))
+        if links:
+            self.ik_links.setCurrentRow(max(0, min(keep, len(links) - 1)))
+        self.ik_links.blockSignals(False)
+        used = {l.bone for l in links}
+        items = [(i, "%03d · %s" % (i, bb.name or "未命名"))
+                 for i, bb in enumerate(m.bones) if i not in used]
+        _fill_combo(self.ik_link_combo, items, self.ik_link_combo.currentData())
+
+    def _sync_link_editor(self):
+        link = self._link()
+        on = link is not None
+        self.link_limit_sw.setEnabled(on)
+        self.link_lo.set_enabled(on)
+        self.link_hi.set_enabled(on)
+        self.ik_link_del.setEnabled(on)
+        self.ik_link_add.setEnabled(self.ik_link_combo.count() > 0)
+        prev = self.loading
+        self.loading = True
+        try:
+            if link is None:
+                self.link_limit_sw.setChecked(False)
+                self.link_lo.set_value([0.0, 0.0, 0.0])
+                self.link_hi.set_value([0.0, 0.0, 0.0])
+            else:
+                self.link_limit_sw.setChecked(bool(link.limited))
+                self.link_lo.set_value([math.degrees(x) for x in link.lo])
+                self.link_hi.set_value([math.degrees(x) for x in link.hi])
+        finally:
+            self.loading = prev
+
+    def _ik_link_add(self):
+        if self.loading:
+            return
+        m = self.doc.model
+        b = self._bone()
+        if not m or not b or not self.ik_link_combo.count():
+            return
+        bone = int(self.ik_link_combo.currentData())
+        idx = self.idx
+
+        def fn(mm):
+            bb = mm.bones[idx]
+            if bb.ik is None:
+                from ..pmx import IK
+                bb.ik = IK(target=-1, links=[])
+                bb.flags |= BF_IK
+            bb.ik.links.append(IKLink(bone=bone))
+        self.edit("添加 IK 链接", fn, "bone")
+        self._fill()
+
+    def _ik_link_del(self):
+        if self.loading:
+            return
+        b = self._bone()
+        row = self.ik_links.currentRow()
+        if not b or not b.ik or row < 0:
+            return
+        idx = self.idx
+
+        def fn(mm):
+            bb = mm.bones[idx]
+            if bb.ik and 0 <= row < len(bb.ik.links):
+                del bb.ik.links[row]
+        self.edit("移除 IK 链接", fn, "bone")
+        self._fill()
+
+    def _link_limit_changed(self, on: bool):
+        link = self._link()
+        if self.loading or link is None or bool(link.limited) == bool(on):
+            return
+        row = self.ik_links.currentRow()
+        idx = self.idx
+
+        def fn(mm):
+            lk = mm.bones[idx].ik.links[row]
+            lk.limited = bool(on)
+        self.edit("修改 IK 角度限制", fn, "bone", "bone.iklimit")
+        self._fill()
+
+    def _link_range_changed(self, which: int):
+        link = self._link()
+        if self.loading or link is None:
+            return
+        vals = [math.radians(x) for x in
+                (self.link_lo.value() if which == 0 else self.link_hi.value())]
+        cur = link.lo if which == 0 else link.hi
+        if all(abs(float(c) - v) < 1e-6 for c, v in zip(cur, vals)):
+            return
+        row = self.ik_links.currentRow()
+        idx = self.idx
+
+        def fn(mm):
+            lk = mm.bones[idx].ik.links[row]
+            if which == 0:
+                lk.lo = list(vals)
+            else:
+                lk.hi = list(vals)
+        self.edit("修改 IK 角度范围", fn, "bone", "bone.ikrange")
 
     # ------------------------------------------------------------ 编辑
     def _name_changed(self):

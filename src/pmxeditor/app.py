@@ -19,8 +19,8 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
 
 from . import theme
 from .doc import Document
-from .panels import (BonePage, InfoPage, MaterialPage, MorphPage, PhysicsPage,
-                    SettingsPage)
+from .panels import (BonePage, FramePage, InfoPage, MaterialPage, MorphPage,
+                     PhysicsPage, SettingsPage)
 from .theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, TEXT_DIM,
                    build_qss, make_icon, mono_font, svg_assets, ui_font)
 from .ui_widgets import Switch, icon_button, label
@@ -37,8 +37,11 @@ PAGES = (
     ("morph", "morph", "形态"),
     ("physics", "physics", "物理"),
     ("settings", "settings", "设置"),
+    ("frame", "mesh", "表示枠"),
 )
-KIND_PAGE = {"bone": 1, "material": 2, "morph": 3, "rigid": 4, "joint": 4}
+# new pages go last so the existing indices stay stable
+RAIL_ORDER = (0, 1, 6, 2, 3, 4, 5)
+KIND_PAGE = {"bone": 1, "frame": 6, "material": 2, "morph": 3, "rigid": 4, "joint": 4}
 # 只改姿态的编辑（压姿态快照即可，不必克隆整模型）
 POSE_EDIT_LABELS = ("调整骨骼姿态", "移动骨骼", "旋转骨骼")
 
@@ -188,7 +191,9 @@ class MainWindow(QMainWindow):
         self.rail_group = QButtonGroup(self)
         self.rail_group.setExclusive(True)
         self.rail_buttons = []
-        for i, (key, icon, text) in enumerate(PAGES):
+        self._rail_of = {}
+        for slot, pi in enumerate(RAIL_ORDER):
+            key, icon, text = PAGES[pi]
             b = QPushButton()
             b.setObjectName("RailBtn")
             b.setCheckable(True)
@@ -197,9 +202,10 @@ class MainWindow(QMainWindow):
             b.setIconSize(QSize(21, 21))
             b.setFixedSize(42, 42)
             b.setToolTip(text)
-            b.clicked.connect(lambda _c, i=i: self._select_page(i))
+            b.clicked.connect(lambda _c, i=pi: self._select_page(i))
             self.rail_group.addButton(b)
             self.rail_buttons.append(b)
+            self._rail_of[pi] = slot
             rail_lay.addWidget(b)
         rail_lay.addStretch(1)
         body_lay.addWidget(rail)
@@ -222,7 +228,8 @@ class MainWindow(QMainWindow):
         self.inspector.setMinimumWidth(300)
         self._pages = [InfoPage(self.doc), BonePage(self.doc),
                        MaterialPage(self.doc), MorphPage(self.doc),
-                       PhysicsPage(self.doc), SettingsPage(self.doc)]
+                       PhysicsPage(self.doc), SettingsPage(self.doc),
+                       FramePage(self.doc)]
         for p in self._pages:
             self.inspector.addWidget(p)
         self.splitter.addWidget(self.inspector)
@@ -449,7 +456,7 @@ class MainWindow(QMainWindow):
         i = max(0, min(len(self._pages) - 1, i))
         self._current_page = i
         self.inspector.setCurrentIndex(i)
-        self.rail_buttons[i].setChecked(True)
+        self.rail_buttons[self._rail_of[i]].setChecked(True)
         if i in self._pages_dirty:
             self._pages_dirty.discard(i)
             self._refresh_one(i)
