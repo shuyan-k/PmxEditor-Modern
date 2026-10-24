@@ -4350,10 +4350,12 @@ def scen_ellipsoid():
     from pmxeditor import skinning as SK
 
     log("== SDEF ellipsoid ==")
+    log(" SDEF_AS_BDEF2=%s（回退对拍需要关掉降级开关）" % SK.SDEF_AS_BDEF2)
+    SK.SDEF_AS_BDEF2 = False
     nrm = _np.array([[0, 0, 1]], dtype=_np.float32)
     rest = _np.zeros((2, 3), dtype=_np.float32)
 
-    def run(r0, rot1_deg, base_pt):
+    def run(r0, rot1_deg, base_pt, center=None):
         base = _np.array([base_pt], dtype=_np.float32)
         world = _np.stack([_np.eye(4, dtype=_np.float32)] * 2)
         if rot1_deg:
@@ -4362,6 +4364,8 @@ def scen_ellipsoid():
                                   [ _np.sin(a),  _np.cos(a), 0, 0],
                                   [0, 0, 1, 0], [0, 0, 0, 1]], dtype=_np.float32)
         sd = _np.zeros((1, 9), dtype=_np.float32)
+        if center is not None:
+            sd[0, 0:3] = center
         sd[0, 3:6] = r0
         model = types.SimpleNamespace(
             v_pos=base, v_nrm=nrm,
@@ -4374,8 +4378,14 @@ def scen_ellipsoid():
         fake = types.SimpleNamespace(model=model, rest_pos=rest)
         back = SK.SkinDeformer._special_blend(fake, base, world,
                                               _np.zeros_like(base))
-        return (float(_np.linalg.norm(out[0])),
-                float(_np.linalg.norm(back[0] - out[0])))
+        radius = float(_np.linalg.norm(out[0]))
+        if center is not None:
+            # C 非零时，球心本身也被两根骨骼混到别处：半径要相对混合中心量，
+            # 否则量到的是世界原点、与 C=0 用例不可比。
+            c0 = _np.asarray(center, dtype=_np.float32)
+            cblend = 0.5 * (c0 + world[1][:3, :3] @ c0 + world[1][:3, 3])
+            radius = float(_np.linalg.norm(out[0] - cblend))
+        return (radius, float(_np.linalg.norm(back[0] - out[0])))
 
     r_rest, d_rest = run([0.5, 0.5, 0.5], 0.0, [1.5, 0.0, 0.0])
     log(" 静止（各向同性 r0=0.5）: 半径=%.4f (期望 1.5000 球面) 回退差=%.6f"
@@ -4405,6 +4415,21 @@ def scen_ellipsoid():
 
     if max(d_rest, d_iso, d_narrow, d_wide) > 1e-4:
         anomaly("sdef-ell-fallback", "Python 回退与原生椭球半径不一致")
+
+    # R0/R1 在 PMX 里存的是「点」：C 非零时半轴应是 |R-C|。把它写成
+    # C 平移后的同一组点，半径必须与 C=0 完全一致。
+    r_c0, d_c0 = run([0.5, 0.5, 0.5], 60.0, [1.5, 0.0, 0.0])
+    # 顶点也跟着 C 一起平移，保证 |v-C| 仍是 1.5，才能与 C=0 逐位对照。
+    r_shift, d_shift = run([2.5, 3.5, 4.5], 60.0, [3.5, 3.0, 4.0],
+                           center=[2.0, 3.0, 4.0])
+    log(" R0/R1 取 |R-C|（C 平移）: 半径=%.4f（对照 %.4f）回退差=%.6f"
+        % (r_shift, r_c0, d_shift))
+    if abs(r_shift - r_c0) > 1e-4:
+        anomaly("sdef-axes-point",
+                "R0/R1 应按 |R-C| 取半轴：C=0 时 %.4f、C 平移后 %.4f"
+                % (r_c0, r_shift))
+    if d_shift > 1e-4:
+        anomaly("sdef-axes-point-fb", "C 平移用例的回退与原生不一致")
     H.dump()
 
 
@@ -4420,6 +4445,7 @@ def scen_sdefr1():
     from pmxeditor import skinning as SK
 
     log("== SDEF R1 ==")
+    SK.SDEF_AS_BDEF2 = False
     nrm = _np.array([[0, 0, 1]], dtype=_np.float32)
     rest = _np.zeros((2, 3), dtype=_np.float32)
 
@@ -5150,3 +5176,93 @@ def scen_vmdsdef():
     if a_p99 > b_p99 * 1.5:
         anomaly("sdef-tear", "SDEF 明显加剧拉伸：%.2f vs %.2f" % (a_p99, b_p99))
     H.dump()
+
+
+def scen_knee():
+    """膝盖侧视对照：SDEF 半轴口径、膝带混合模式与到关节中心距离。
+
+    真机米娅帧 136：膝带 57 个顶点全是 SDEF。旧口径把 |R0| 当半轴（量级 6.9）
+    会把这一带整体外推，侧视出现横向硬棱；改为逐轴 |R0-C| 后与相邻 BDEF2 接上。
+    """
+    import numpy as np
+    from pmxeditor import skinning as SK
+    vp = WIN.viewport
+    m = WIN.doc.model
+    path = os.environ.get("VMD_TEST", "")
+    if not (path and WIN.load_vmd_path(path)):
+        log("vmd load failed")
+        return
+    frame = int(os.environ.get("KNEE_FRAME", "136"))
+    WIN.seek_action_frame(frame)
+    pump(200)
+    vp.pose.world_update()
+    world = vp.pose.world()
+    names = [b.name for b in m.bones]
+    side = os.environ.get("KNEE_SIDE", "左")
+    thigh = names.index(side + "足")
+    knee = names.index(side + "ひざ")
+    calf = int(m.bones[knee].tail_bone)
+    if not (0 <= calf < len(m.bones)):
+        calf = knee
+    log("== knee f%d %s ==" % (frame, names[knee]))
+    kp = world[knee][:3, 3].astype(np.float64)
+
+    band = (m.v_bones == thigh).any(axis=1) & (m.v_bones == knee).any(axis=1)
+    band &= (m.v_weights > 0.02).any(axis=1)
+    wt = np.asarray(m.v_wtype).ravel()
+    hist = np.bincount(wt[band].astype(np.int64), minlength=5)
+    log(" 膝带顶点 %d 个：BDEF1/2/4=%s SDEF=%d QDEF=%d；全模型 SDEF %d 个"
+        % (int(band.sum()), hist[:3].tolist(), int(hist[3]), int(hist[4]),
+           int((wt == 3).sum())))
+    sdef = np.asarray(m.v_sdef, np.float64).reshape(-1, 9)
+    idx = np.nonzero(band & (wt == 3))[0]
+    if idx.size:
+        cen = sdef[idx, 0:3]
+        new_axis = np.abs(sdef[idx, 3:6] - cen).max(axis=1)
+        old_axis = np.abs(sdef[idx, 3:6]).max(axis=1)
+        log("  膝带 SDEF 半轴（逐顶点最大轴）：新口径 |R0-C| 中位 %.3f，"
+            "旧口径 |R0| 中位 %.3f" % (float(np.median(new_axis)),
+                                      float(np.median(old_axis))))
+
+    base_pos = np.asarray(m.v_pos, np.float32)
+    base_nrm = np.asarray(m.v_nrm, np.float32)
+    d = vp.deformer
+    SK.SDEF_AS_BDEF2 = False
+    res = {}
+    for name, fallback in (("sdef", False), ("bdef2", True)):
+        SK.SDEF_AS_BDEF2 = fallback
+        pos, _ = d.deform(base_pos, base_nrm, world)
+        res[name] = np.asarray(pos, np.float64)
+        dist = np.linalg.norm(res[name][band] - kp, axis=1)
+        log("  %-6s 膝带：到关节中心 最大 %.3f 均值 %.3f"
+            % (name, float(dist.max()), float(dist.mean())))
+    SK.SDEF_AS_BDEF2 = False
+    delta = np.linalg.norm(res["bdef2"] - res["sdef"], axis=1)
+    log("  bdef2 vs sdef：全模型最大 %.3f，膝带最大 %.3f 均值 %.4f"
+        % (float(delta.max()), float(delta[band].max()), float(delta[band].mean())))
+    if float(delta[band].max()) > 0.3:
+        anomaly("knee-sdef-jump",
+                "SDEF 与 BDEF2 膝带差 %.3f，相邻混合模式不连续" % delta[band].max())
+
+    # 侧视：视线沿膝盖弯曲平面的法线
+    up = world[thigh][:3, 3].astype(np.float64) - kp
+    dn = world[calf][:3, 3].astype(np.float64) - kp
+    n = np.cross(up, dn)
+    ln = float(np.linalg.norm(n))
+    n = n / ln if ln > 1e-6 else np.array([0.0, 0.0, 1.0])
+    cam = vp.camera
+    cam.target = np.array(kp, np.float32)
+    cam.distance = 9.0
+    cam.yaw = float(np.arctan2(n[0], n[2]))
+    cam.pitch = float(np.arcsin(max(-0.9, min(0.9, n[1]))))
+    for name, fallback in (("sdef", False), ("bdef2", True)):
+        SK.SDEF_AS_BDEF2 = fallback
+        vp.mark_dirty()
+        vp.repaint()
+        pump(240)
+        shot(WIN, "knee_f%d_%s" % (frame, name))
+    SK.SDEF_AS_BDEF2 = False
+    vp.mark_dirty()
+    vp.repaint()
+    pump(120)
+    log("scen done")

@@ -181,6 +181,14 @@ def mat4_inverse(m) -> np.ndarray:
 SDEF_AS_BDEF2 = False  # 规避开关：为 True 时把 SDEF(3) 当 BDEF2(1) 处理
 
 
+def _sdef_fallback_table(wtype) -> np.ndarray:
+    """生效的权重类型表：SDEF_AS_BDEF2 打开时把 SDEF(3) 降级成 BDEF2(1)。"""
+    base = np.asarray(wtype, dtype=np.uint8).ravel()
+    if not SDEF_AS_BDEF2:
+        return base
+    return np.where(base == 3, 1, base)
+
+
 class Pose:
     def __init__(self, model):
         self.model = model
@@ -834,6 +842,9 @@ class SkinDeformer:
         nb = len(model.bones)
         self.model = model
         self.n = n
+        self._wtype_cache = None
+        self._wtype_cache_flag = None
+        self._wtype_cache_src = None
         self.rest_pos = (np.array([b.pos for b in model.bones], dtype=np.float32)
                          if nb else np.zeros((0, 3), dtype=np.float32))
         self.entries_bone = []
@@ -927,6 +938,17 @@ class SkinDeformer:
             return w[:rows]
         return w
 
+    def wtype_table(self) -> np.ndarray:
+        """生效的权重类型表：SDEF_AS_BDEF2 打开时把 SDEF(3) 降级成 BDEF2(1)。"""
+        flag = SDEF_AS_BDEF2
+        src = self.model.v_wtype
+        if (self._wtype_cache is None or self._wtype_cache_flag is not flag
+                or self._wtype_cache_src is not src):
+            self._wtype_cache = _sdef_fallback_table(src)
+            self._wtype_cache_flag = flag
+            self._wtype_cache_src = src
+        return self._wtype_cache
+
     def deform(self, base_pos, base_nrm, world) -> tuple:
         if self.n == 0:
             return base_pos, base_nrm
@@ -934,7 +956,7 @@ class SkinDeformer:
         if native_core is not None:
             return native_core.deform(
                 base_pos, base_nrm, self.model.v_bones, self.model.v_weights,
-                self.model.v_wtype, self.rest_pos, _f32(world), _sdef(self.model))
+                self.wtype_table(), self.rest_pos, _f32(world), _sdef(self.model))
         out = np.zeros_like(base_pos)
         nout = np.zeros_like(base_nrm)
         ev = self.entries_vi
@@ -987,7 +1009,7 @@ class SkinDeformer:
         仅对 weight_type >= 3 的少量顶点生效，逐顶点循环可接受。
         """
         model = self.model
-        wtype = np.asarray(model.v_wtype).ravel()
+        wtype = _sdef_fallback_table(model.v_wtype)
         # BDEF2/BDEF4 也走双四元数混合（DQS），与 native/pmx_core.cpp 一致：
         # 线性混合在「关节大角度弯曲 + 轴向自转」时会拧成糖纸。
         todo = np.nonzero((wtype <= 2) | (wtype == 3) | (wtype == 4))[0]
@@ -1109,24 +1131,25 @@ class SkinDeformer:
         if vertex_indices.size > self.n * 0.3:
             return self.deform(base_pos, base_nrm, world)
         world = self._trim_world(world)
+        wtype = self.wtype_table()
         if native_core is not None:
             return native_core.deform_subset(
                 base_pos, base_nrm, self.model.v_bones, self.model.v_weights,
-                self.model.v_wtype, self.rest_pos, world,
+                wtype, self.rest_pos, world,
                 np.ascontiguousarray(vertex_indices, dtype=np.int32),
                 prev_pos, prev_nrm, _sdef(self.model))
 
-        if (bool(np.any(self.model.v_wtype[vertex_indices] >= 3))
+        if (bool(np.any(wtype[vertex_indices] >= 3))
                 or np.isin(vertex_indices, self._dup_vertices).any()):
             # SDEF / QDEF 顶点在回退路径里统一走整次 deform，避免重复实现
             return self.deform(base_pos, base_nrm, world)
         weights = self.model.v_weights[vertex_indices].copy()
         bones = self.model.v_bones[vertex_indices].astype(np.int64, copy=True)
         weight_counts = np.where(
-            self.model.v_wtype[vertex_indices] == 0,
+            wtype[vertex_indices] == 0,
             1,
-            np.where((self.model.v_wtype[vertex_indices] == 1)
-                     | (self.model.v_wtype[vertex_indices] == 3), 2, 4),
+            np.where((wtype[vertex_indices] == 1) | (wtype[vertex_indices] == 3),
+                     2, 4),
         )
         active_slots = np.arange(4)[None, :] < weight_counts[:, None]
         bones[(bones < 0) | (bones >= len(self.offsets))] = 0
