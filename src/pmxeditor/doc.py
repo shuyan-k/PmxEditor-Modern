@@ -239,9 +239,60 @@ def add_bone(model: PMXModel, parent: int = -1) -> int:
     if 0 <= parent < len(model.bones):
         p = model.bones[parent]
         b.parent = parent
-        b.pos = [p.pos[0], p.pos[1] + max(0.5, p.pos[1] * 0.0 + 1.0), p.pos[2]]
+        tail = [p.pos[0], p.pos[1] + 1.0, p.pos[2]]
+        if (p.flags & BF_TAIL_INDEX) and 0 <= p.tail_bone < len(model.bones):
+            tail = list(model.bones[p.tail_bone].pos)
+        elif any(abs(v) > 1e-6 for v in p.tail_offset):
+            tail = [p.pos[i] + p.tail_offset[i] for i in range(3)]
+        if abs(tail[0] - p.pos[0]) < 1e-4 and abs(tail[1] - p.pos[1]) < 0.05 \
+                and abs(tail[2] - p.pos[2]) < 1e-4:
+            tail = [tail[0], p.pos[1] + 1.0, tail[2]]
+        b.pos = tail
     model.bones.append(b)
     return len(model.bones) - 1
+
+
+def move_bone(model: PMXModel, index: int, delta: int) -> int:
+    """把骨骼在列表里上移/下移 delta 位，并重映射所有骨骼索引。"""
+    n = len(model.bones)
+    if not (0 <= index < n):
+        return index
+    dst = index + int(delta)
+    if not (0 <= dst < n):
+        return index
+    perm = list(range(n))
+    perm[index], perm[dst] = perm[dst], perm[index]
+    model.bones[index], model.bones[dst] = model.bones[dst], model.bones[index]
+
+    def m(i: int) -> int:
+        return perm[i] if 0 <= i < n else i
+
+    for b in model.bones:
+        b.parent = m(b.parent)
+        if b.flags & BF_TAIL_INDEX and b.tail_bone >= 0:
+            b.tail_bone = m(b.tail_bone)
+        b.append_parent = m(b.append_parent)
+        if b.ik:
+            b.ik.target = m(b.ik.target)
+            for link in b.ik.links:
+                link.bone = m(link.bone)
+    if model.n_vertices:
+        bones = model.v_bones
+        flat = bones.ravel()
+        ok = (flat >= 0) & (flat < n)
+        table = np.asarray(perm, dtype=flat.dtype)
+        bones[:] = np.where(ok, table[np.clip(flat, 0, n - 1)], flat).reshape(bones.shape)
+    for mo in model.morphs:
+        if mo.type == 2:
+            for off in mo.offsets:
+                bi = int(off.get("bone", -1))
+                if 0 <= bi < n:
+                    off["bone"] = m(bi)
+    for rb in model.rigid:
+        rb.bone = m(rb.bone)
+    for f in model.frames:
+        f.items = [(ty, m(idx) if ty == 0 else idx) for ty, idx in f.items]
+    return dst
 
 
 def duplicate_bone(model: PMXModel, index: int) -> int:
@@ -330,9 +381,24 @@ def duplicate_material(model: PMXModel, index: int) -> int:
     return len(model.materials) - 1
 
 
-def remove_material(model: PMXModel, index: int) -> int:
+def remove_material(model: PMXModel, index: int, merge: bool = False) -> int:
+    """删除材质；merge=True 时把它的三角面并入上一个材质（保留几何）。"""
     if not (0 <= index < len(model.materials)):
         return -1
+    if merge and index > 0:
+        prev = model.materials[index - 1]
+        prev.face_count = int(prev.face_count) + int(model.materials[index].face_count)
+        del model.materials[index]
+        for mo in model.morphs:
+            if mo.type == 8:
+                for off in mo.offsets:
+                    mi = int(off.get("material", -1))
+                    if mi == index:
+                        off["material"] = index - 1
+                    elif mi > index:
+                        off["material"] = mi - 1
+                mo.offsets = [o for o in mo.offsets if o.get("material", -1) >= 0]
+        return index - 1
     start = sum(int(m.face_count) for m in model.materials[:index])
     count = int(model.materials[index].face_count)
     if count > 0:

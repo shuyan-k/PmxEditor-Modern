@@ -3,7 +3,7 @@ from __future__ import annotations
 
 # -*- coding: utf-8 -*-
 import os
-from PyQt5.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 from ..doc import add_material, duplicate_material, remove_material
 from ..gl_names import material_zh
 from ..pmx import (MF_DOUBLE_SIDED, MF_EDGE, MF_GROUND_SHADOW, MF_SELF_SHADOW, MF_SHADOW_MAP)
@@ -435,12 +435,27 @@ class MaterialPage(PageBase):
         if not m or self.idx < 0:
             return
         mt = m.materials[self.idx]
-        dlg = ConfirmDialog("删除材质", "确定删除「%s」？\n该材质对应的面也会被删除。"
-                            % mt.name, danger=True, parent=self)
-        if dlg.exec_() != dlg.Accepted:
+        box = QMessageBox(self)
+        box.setWindowTitle("删除材质")
+        box.setText("删除「%s」（%d 个三角面）" % (mt.name, int(mt.face_count)))
+        box.setInformativeText(
+            "「并入上一个材质」保留几何，只把这些面归给上一个材质；"
+            "「连同三角面删除」会真正删掉这些面。")
+        merge_btn = None
+        if self.idx > 0:
+            merge_btn = box.addButton("并入上一个材质", QMessageBox.AcceptRole)
+        face_btn = box.addButton("连同三角面删除", QMessageBox.DestructiveRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec_()
+        clicked = box.clickedButton()
+        if merge_btn is not None and clicked is merge_btn:
+            self.doc.push_undo("并入材质")
+            idx = remove_material(m, self.idx, merge=True)
+        elif clicked is face_btn:
+            self.doc.push_undo("删除材质")
+            idx = remove_material(m, self.idx)
+        else:
             return
-        self.doc.push_undo("删除材质")
-        idx = remove_material(m, self.idx)
         self.doc.mark_dirty()
         self.doc.edited.emit("structure")
         self.doc.select("material", idx)

@@ -5357,3 +5357,89 @@ def scen_vertex_edit():
         anomaly("vedit-roundtrip-w", "权重类型不一致")
     shot(win, "vertex_page")
     log("[vertex-edit] 顶点编辑通过：vertices=%d" % n)
+
+
+def scen_small_fixes():
+    """阶段 D：材质并入、骨骼上下移、新建骨骼落在父骨尾端、层级范围、顶点页引用重映射。"""
+    import numpy as np
+
+    win = WIN
+    doc = win.doc
+    m = doc.model
+    if not m:
+        anomaly("small-nomodel", "没有模型")
+        dump()
+        return
+    page_b = win._pages[1]
+    win._select_page(1)
+    pump(60)
+
+    # 层级范围
+    if page_b.layer_spin.minimum() != 0 or page_b.layer_spin.maximum() != 31:
+        anomaly("small-layer", "层级范围 %d..%d" % (page_b.layer_spin.minimum(), page_b.layer_spin.maximum()))
+
+    # 新建骨骼落在父骨尾端
+    n0 = len(m.bones)
+    doc.select("bone", 0)
+    page_b.refresh()
+    pump(40)
+    page_b._add()
+    pump(60)
+    if len(m.bones) != n0 + 1:
+        anomaly("small-add", "骨骼数 %d" % len(m.bones))
+    else:
+        parent = m.bones[0]
+        child = m.bones[-1]
+        if child.parent != 0:
+            anomaly("small-add-parent", "父骨 %r" % child.parent)
+        d = abs(child.pos[1] - (parent.pos[1] + parent.tail_offset[1]))
+        if d > 2.0:
+            anomaly("small-add-pos", "子骨 Y 偏差 %.3f" % d)
+
+    # 骨骼上移/下移：索引 1 与 2 交换，引用同步
+    n = len(m.bones)
+    if n >= 4:
+        name1, name2 = m.bones[1].name, m.bones[2].name
+        pchild = m.bones[3].parent
+        doc.select("bone", 2)
+        page_b.refresh()
+        pump(40)
+        page_b._move_bone(-1)
+        pump(60)
+        if m.bones[1].name != name2 or m.bones[2].name != name1:
+            anomaly("small-move", "顺序 %r/%r" % (m.bones[1].name, m.bones[2].name))
+        want = {1: 2, 2: 1}.get(pchild, pchild)
+        if m.bones[3].parent != want:
+            anomaly("small-move-ref", "父引用 %r -> %r（期望 %r）" % (pchild, m.bones[3].parent, want))
+        page_b._move_bone(1)
+        pump(60)
+        if m.bones[1].name != name1:
+            anomaly("small-move-back", "回位失败")
+
+    # 材质并入：几何不变、面数合并
+    if len(m.materials) >= 2:
+        before = len(m.indices)
+        total = sum(int(x.face_count) for x in m.materials)
+        i = len(m.materials) - 1
+        removed = int(m.materials[i].face_count)
+        prev_faces = int(m.materials[i - 1].face_count)
+        idx = doc.push_undo and None
+        doc.push_undo("并入材质")
+        new_i = __import__("pmxeditor.doc", fromlist=["remove_material"]).remove_material(m, i, merge=True)
+        doc.mark_dirty()
+        doc.edited.emit("structure")
+        pump(60)
+        if len(m.indices) != before:
+            anomaly("small-merge-indices", "%d -> %d" % (before, len(m.indices)))
+        if int(m.materials[new_i].face_count) != prev_faces + removed:
+            anomaly("small-merge-faces", "%d != %d" % (int(m.materials[new_i].face_count), prev_faces + removed))
+        if sum(int(x.face_count) for x in m.materials) != total:
+            anomaly("small-merge-total", "总面数变化")
+
+    # 顶点权重引用重映射（move_bone 后仍指向有效骨骼）
+    if m.n_vertices:
+        vb = np.asarray(m.v_bones)
+        ok = ((vb < 0) | (vb < len(m.bones))).all()
+        if not ok:
+            anomaly("small-vbones", "存在越界骨骼索引")
+    log("[small-fixes] 材质并入/骨骼上下移/新建骨骼/层级范围均通过")

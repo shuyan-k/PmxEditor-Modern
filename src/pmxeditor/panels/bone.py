@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
-from ..doc import add_bone, duplicate_bone, remove_bone
+from ..doc import add_bone, duplicate_bone, move_bone, remove_bone
 from ..gl_names import bone_zh
 from ..pmx import (BF_AFTER_PHYSICS, BF_ENABLED, BF_FIXED_AXIS, BF_IK, BF_INHERIT_MOV, BF_INHERIT_ROT, BF_LOCAL_APPEND, BF_LOCAL_AXIS, BF_ROTATABLE, BF_TAIL_INDEX, BF_TRANSLATABLE, BF_VISIBLE, IKLink, shift_bone_vertices)
 from ..theme import ACCENT, DANGER, TEXT_FAINT
@@ -45,13 +45,24 @@ class BonePage(PageBase):
         self.name_edit = QLineEdit()
         self.name_en_edit = QLineEdit()
         self.parent_combo = QComboBox()
-        self.layer_spin = _mode_spin(0)
+        self.layer_spin = _mode_spin(0, 0, 31)
         self.pos_spin = AxisSpin(4, 0.01)
         form.add("名称", self.name_edit)
         form.add("英文名", self.name_en_edit)
         form.add("父骨骼", self.parent_combo)
         form.add("变形层级", self.layer_spin)
         form.add("位置", self.pos_spin)
+        order_row = QHBoxLayout()
+        order_row.setContentsMargins(0, 0, 0, 0)
+        order_row.setSpacing(6)
+        self.up_btn = text_button("上移", "Ghost", tip="在骨骼列表里上移一位（会重映射所有引用）")
+        self.down_btn = text_button("下移", "Ghost", tip="在骨骼列表里下移一位（会重映射所有引用）")
+        self.up_btn.clicked.connect(lambda: self._move_bone(-1))
+        self.down_btn.clicked.connect(lambda: self._move_bone(1))
+        order_row.addWidget(self.up_btn)
+        order_row.addWidget(self.down_btn)
+        order_row.addStretch(1)
+        form.add_full(order_row)
         self.move_verts_sw = Switch(False)
         self.move_verts_sw.setChecked(QSettings("PmxEditorModern", "editor").value(
             "editor/move_bone_vertices", False, type=bool))
@@ -667,6 +678,20 @@ class BonePage(PageBase):
         self.edit("修改 IK 单次角度",
                   lambda m: setattr(m.bones[self.idx].ik, "angle", math.radians(float(v))),
                   "bone", "bone.ikangle")
+
+    def _move_bone(self, delta: int):
+        m = self.doc.model
+        if not m or not (0 <= self.idx < len(m.bones)):
+            return
+        old = self.idx
+        new = old + int(delta)
+        if not (0 <= new < len(m.bones)):
+            return
+        self.doc.push_undo("调整骨骼顺序")
+        move_bone(m, old, delta)
+        self.doc.mark_dirty()
+        self.doc.edited.emit("structure")
+        self.doc.select("bone", new)
 
     # ------------------------------------------------------------ 结构
     def _add(self):
