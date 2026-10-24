@@ -1,0 +1,46 @@
+# 便携运行时与构建产物
+build/
+!build/.gitkeep
+dist/
+*.build/
+*.dist/
+*.onefile-build/
+nuitka-crash-report.xml
+
+# 原生构建中间文件（保留源码与脚本）
+native/*.obj
+native/*.exp
+native/*.lib
+native/*.rsp
+native/*.pdb
+native/bullet_src/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# 测试产物
+tests/report.json
+tests/shots/
+tests/*.pmx
+tests/*.vpd
+tests/onefiletmp/
+tests/tmproot/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+# test/build artifacts
+tests/*.png
+tests/*.txt
+tests/*.json
+tests/*.err
+tests/*.log
+native/*.txt
+native/*.log
+_test/
