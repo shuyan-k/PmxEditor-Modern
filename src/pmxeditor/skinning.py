@@ -178,14 +178,15 @@ def mat4_inverse(m) -> np.ndarray:
 
 # ---------------------------------------------------------------- 姿态
 
-SDEF_AS_BDEF2 = False  # 规避开关：为 True 时把 SDEF(3) 当 BDEF2(1) 处理
-
-
 def _sdef_fallback_table(wtype) -> np.ndarray:
-    """生效的权重类型表：SDEF_AS_BDEF2 打开时把 SDEF(3) 降级成 BDEF2(1)。"""
+    """生效的权重类型表：SDEF(3) 一律按 BDEF2(1) 处理。
+
+    SDEF 的椭球插值在膝盖上并不比 BDEF2 好：半轴口径修正之后（半轴 = 逐轴
+    |R-C|），膝带顶点到关节中心仍有 0.66/0.54，而相邻的 BDEF2 带是 0.61/0.52，
+    侧视能看到一圈台阶；把整只腿按 BDEF2 混合反而更接近 PmxEditor 的观感。
+    所以蒙皮阶段统一降级，SDEF 数据只留在解析与保存里（编辑后要原样写回）。
+    """
     base = np.asarray(wtype, dtype=np.uint8).ravel()
-    if not SDEF_AS_BDEF2:
-        return base
     return np.where(base == 3, 1, base)
 
 
@@ -843,7 +844,6 @@ class SkinDeformer:
         self.model = model
         self.n = n
         self._wtype_cache = None
-        self._wtype_cache_flag = None
         self._wtype_cache_src = None
         self.rest_pos = (np.array([b.pos for b in model.bones], dtype=np.float32)
                          if nb else np.zeros((0, 3), dtype=np.float32))
@@ -939,13 +939,10 @@ class SkinDeformer:
         return w
 
     def wtype_table(self) -> np.ndarray:
-        """生效的权重类型表：SDEF_AS_BDEF2 打开时把 SDEF(3) 降级成 BDEF2(1)。"""
-        flag = SDEF_AS_BDEF2
+        """生效的权重类型表：SDEF(3) 固定按 BDEF2(1) 处理（见 _sdef_fallback_table）。"""
         src = self.model.v_wtype
-        if (self._wtype_cache is None or self._wtype_cache_flag is not flag
-                or self._wtype_cache_src is not src):
+        if self._wtype_cache is None or self._wtype_cache_src is not src:
             self._wtype_cache = _sdef_fallback_table(src)
-            self._wtype_cache_flag = flag
             self._wtype_cache_src = src
         return self._wtype_cache
 
@@ -1009,7 +1006,10 @@ class SkinDeformer:
         仅对 weight_type >= 3 的少量顶点生效，逐顶点循环可接受。
         """
         model = self.model
-        wtype = _sdef_fallback_table(model.v_wtype)
+        # 这里刻意用**原始**权重类型：运行时的降级在 wtype_table() 里做完了，
+        # 回退分支不会收到 type 3；保留原始表是为了让 skin/ellipsoid/sdefr1
+        # 三个场景能直接拿它和 native_core.deform 对拍 SDEF 的求值语义。
+        wtype = np.asarray(model.v_wtype, dtype=np.uint8).ravel()
         # BDEF2/BDEF4 也走双四元数混合（DQS），与 native/pmx_core.cpp 一致：
         # 线性混合在「关节大角度弯曲 + 轴向自转」时会拧成糖纸。
         todo = np.nonzero((wtype <= 2) | (wtype == 3) | (wtype == 4))[0]

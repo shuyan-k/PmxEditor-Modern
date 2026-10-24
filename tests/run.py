@@ -4350,8 +4350,6 @@ def scen_ellipsoid():
     from pmxeditor import skinning as SK
 
     log("== SDEF ellipsoid ==")
-    log(" SDEF_AS_BDEF2=%s（回退对拍需要关掉降级开关）" % SK.SDEF_AS_BDEF2)
-    SK.SDEF_AS_BDEF2 = False
     nrm = _np.array([[0, 0, 1]], dtype=_np.float32)
     rest = _np.zeros((2, 3), dtype=_np.float32)
 
@@ -4445,7 +4443,6 @@ def scen_sdefr1():
     from pmxeditor import skinning as SK
 
     log("== SDEF R1 ==")
-    SK.SDEF_AS_BDEF2 = False
     nrm = _np.array([[0, 0, 1]], dtype=_np.float32)
     rest = _np.zeros((2, 3), dtype=_np.float32)
 
