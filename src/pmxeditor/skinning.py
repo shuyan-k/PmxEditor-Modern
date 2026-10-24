@@ -1021,11 +1021,17 @@ class SkinDeformer:
                 # R0 是静止椭球半轴、R1 是形变后半轴：静止方向与当前方向
                 # 都用同一组半轴比较（R1 优先，全零回退 R0），未变形时比值
                 # 恒为 1，从而逐位还原静止姿态。
-                r0 = np.abs(np.asarray(sdef[vi, 3:6], dtype=np.float64))
-                r1 = np.abs(np.asarray(sdef[vi, 6:9], dtype=np.float64))
+                # R0/R1 在 PMX 里存的是「点」而不是半径向量（模型库里实测
+                # R0-C 与 R1-C 恒为 180° 反向、|R0| 是骨骼长度量级），
+                # 半轴取逐轴 |R - C|；两者都为零时保持球面半径。
+                r0 = np.abs(np.asarray(sdef[vi, 3:6], dtype=np.float64) - point_c)
+                r1 = np.abs(np.asarray(sdef[vi, 6:9], dtype=np.float64) - point_c)
                 rmax = float(r0.max()) if r0.size == 3 else 0.0
                 r1max = float(r1.max()) if r1.size == 3 else 0.0
-                if r1max > 1e-6:
+                # 是否给了 R1 要看原始值：R1 全零表示「没有 R1」，但 C 非零
+                # 时 |0-C| 不为零，不能用平移后的半轴来判定。
+                raw_r1 = np.asarray(sdef[vi, 6:9], dtype=np.float64)
+                if float(np.abs(raw_r1).max()) > 1e-6:
                     axes0, amax = r1, r1max
                 else:
                     axes0, amax = r0, rmax

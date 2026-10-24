@@ -198,21 +198,30 @@ void deform_vertices(
                     (base_pos[vi * 3 + 1] - center[1]) +
                 (base_pos[vi * 3 + 2] - center[2]) *
                     (base_pos[vi * 3 + 2] - center[2]));
-            // R0/R1 是逐顶点的椭球半轴（骨骼本地坐标系）。静止姿态必须还原
+            // R0/R1 在 PMX 文件里存的是「点」而不是半径向量：模型库里实测
+            // R0-C 与 R1-C 恒为 180° 反向、|R0| 达到骨骼长度量级（10+），
+            // 只有逐轴 |R-C| 才是可信的半轴（0.1~0.3）。静止姿态必须还原
             // 静止位置，所以半径取"静止距离 x 椭球伸缩比"：
             //   radius = |v - C| * ell(u_cur) / ell(u_rest)
-            // 其中 ell(u) = 1/sqrt(sum((u_i/a_i)^2))。R0 全零时保持球面半径。
-            const float* r0 = sd + 3;
-            const float* r1 = sd + 6;
-            const float rmax = std::max(std::fabs(r0[0]),
-                                        std::max(std::fabs(r0[1]), std::fabs(r0[2])));
-            const float r1max = std::max(std::fabs(r1[0]),
-                                         std::max(std::fabs(r1[1]), std::fabs(r1[2])));
+            // 其中 ell(u) = 1/sqrt(sum((u_i/a_i)^2))，a_i = |R-C|。全零时保持球面半径。
+            const float r0[3] = {std::fabs(sd[3] - center[0]),
+                                 std::fabs(sd[4] - center[1]),
+                                 std::fabs(sd[5] - center[2])};
+            const float r1[3] = {std::fabs(sd[6] - center[0]),
+                                 std::fabs(sd[7] - center[1]),
+                                 std::fabs(sd[8] - center[2])};
+            const float rmax = std::max(r0[0], std::max(r0[1], r0[2]));
+            const float r1max = std::max(r1[0], std::max(r1[1], r1[2]));
             // R1 是形变后的椭球半轴。静止姿态必须逐位还原，因此静止方向与
             // 当前方向都用同一组半轴比较（R1 优先，全零时回退 R0），未变形
             // 时比值恒为 1；R1 与 R0 相等时与原实现完全一致。
-            const float* axes = (r1max > 1e-6f) ? r1 : r0;
-            const float amax = (r1max > 1e-6f) ? r1max : rmax;
+            // 是否给了 R1 要看原始值：R1 全零表示"没有 R1"，但 C 非零时
+            // |0-C| 不为零，不能用平移后的半轴来判定。
+            const bool has_r1 = std::fabs(sd[6]) > 1e-6f ||
+                                std::fabs(sd[7]) > 1e-6f ||
+                                std::fabs(sd[8]) > 1e-6f;
+            const float* axes = has_r1 ? r1 : r0;
+            const float amax = has_r1 ? r1max : rmax;
             if (amax > 1e-6f && dir_len > 1e-6f) {
                 const float* W0 = world + b0 * 16;
                 const float d_rest[3] = {base_pos[vi * 3 + 0] - center[0],
