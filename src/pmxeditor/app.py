@@ -1041,6 +1041,9 @@ class MainWindow(QMainWindow):
         try:
             self.settings.setValue("geometry", self.saveGeometry())
             self.settings.setValue("splitter", self.splitter.sizes())
+            # 以"屏幕上实际生效的主题"为准落盘：切换过程中的任何异常都不会
+            # 让存档停留在上一个主题，下次启动就不会反过来闪一下。
+            self.settings.setValue("theme", theme.current_name())
             self.settings.sync()
         except Exception:
             pass
@@ -1107,10 +1110,12 @@ def main():
     app.setStyleSheet(build_qss())
     app.setFont(ui_font(9.0))
     win = MainWindow()
-    win.show()
+    # 恢复存档主题放在 show() 之前：窗口一旦可见再切主题会先渲染一帧深色
+    # 再刷成亮色，肉眼就是「启动深色、随后闪一下变白」。
     want = "light" if str(saved_theme).lower() == "light" else "dark"
     if want != theme.current_name():
         win._set_theme(want, announce=False)
+    win.show()
     if len(sys.argv) > 1 and sys.argv[1].lower().endswith(".pmx"):
         win.open_path(sys.argv[1])
     return app.exec_()
