@@ -274,6 +274,10 @@ class Pose:
         # IK 限位用：每根受限骨骼上一轮的欧拉角（保持分支连续）与钳制次数统计
         self._ik_euler: Dict[int, tuple] = {}
         self.ik_clamp_hits = 0
+        # 求解失败时是否允许把链上骨骼旋转清零后重试（见 solve_ik 注释）。
+        self.ik_reset_links = True
+        # 末帧残差超过该值（模型单位）的链视为 CCD 收敛到坏解，需要重解。
+        self.ik_retry_tolerance = 0.05
         self.world_cache: Optional[np.ndarray] = None
         self._world_dirty: Set[int] = set()
         self.last_morph_key = None
@@ -583,6 +587,80 @@ class Pose:
         self._invalidate_world(changed)
 
     # ------------------------------------------------------------ IK
+    def _ik_chains(self, only: Optional[Set[int]] = None):
+        """列出需要求解的 IK 链：(IK 骨索引, target, links)。"""
+        out = []
+        for i, b in enumerate(self.model.bones):
+            if only is not None and i not in only:
+                continue
+            if not (b.flags & 0x0020) or not b.ik:
+                continue
+            if not (0 <= b.ik.target < self.n):
+                continue
+            links = [l for l in b.ik.links if 0 <= l.bone < self.n]
+            if links:
+                out.append((i, b.ik.target, links))
+        return out
+
+    def _retry_stuck_chains(self, max_loops: int, only: Optional[Set[int]]) -> int:
+        """把没收敛的链从静止姿态重解一次。
+
+        MMD 的 IK 以 FK 旋转作为迭代初值，但初值偏离目标很远时 CCD 会收敛到
+        镜像解（实测米娅帧 136 双膝跨到身体另一侧）。这里只在**末端残差仍然
+        很大**时才把该链骨骼旋转清零重试，正常链保持原样，避免整体姿态被抹平。
+        """
+        if native_core is None:
+            return 0
+        ident = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        retried = 0
+        for i, target, links in self._ik_chains(only):
+            goal = self.world_subset([i])[0][:3, 3].copy()
+            eff = self.world_subset([target])[0][:3, 3].copy()
+            if float(np.linalg.norm(goal - eff)) <= self.ik_retry_tolerance:
+                continue
+            if all(
+                abs(float(self.rot[l.bone][0])) < 1e-6
+                and abs(float(self.rot[l.bone][1])) < 1e-6
+                and abs(float(self.rot[l.bone][2])) < 1e-6
+                for l in links
+            ):
+                continue  # 本来就是单位元，重解也只会得到同一个解
+            prev_rot = {l.bone: self.rot[l.bone].copy() for l in links}
+            prev_base = {l.bone: self.base_rot[l.bone].copy() for l in links}
+            dirty = set()
+            for l in links:
+                self.rot[l.bone] = ident
+                self.base_rot[l.bone] = ident
+                dirty.add(l.bone)
+            self._invalidate_world(dirty)
+            selected = np.zeros(self.n, dtype=np.uint8)
+            selected[i] = 1
+            changed = np.zeros(self.n, dtype=np.uint8)
+            native_core.solve_ik(
+                self._native_flags, self._native_append_parents,
+                self._native_append_ratios, self.parent, self.rest_off,
+                self._native_rest_positions, self._native_order,
+                self._native_ik_targets, self._native_ik_loops,
+                self._native_ik_angles, self._native_link_offsets,
+                self._native_link_bones, self._native_link_limited,
+                self._native_link_limits, selected, int(max_loops),
+                self.rot, self.trans, self.base_rot, changed)
+            hit = np.flatnonzero(changed)
+            if hit.size:
+                self._invalidate_world(hit)
+            new_eff = self.world_subset([target])[0][:3, 3].copy()
+            if (float(np.linalg.norm(goal - new_eff))
+                    >= float(np.linalg.norm(goal - eff)) - 1e-3):
+                # 从静止姿态重解并没有更接近目标 → 回滚，保留 MMD 的 FK 结果。
+                for bone, value in prev_rot.items():
+                    self.rot[bone] = value
+                for bone, value in prev_base.items():
+                    self.base_rot[bone] = value
+                self._invalidate_world(set(prev_rot))
+                continue
+            retried += 1
+        return retried
+
     def solve_ik(self, max_loops: int = 0, only: Optional[Set[int]] = None) -> int:
         """求解 IK 链；only=None 时遍历全部链，max_loops 限制单链迭代次数。"""
         if native_core is not None:
@@ -605,6 +683,8 @@ class Pose:
             dirty = np.flatnonzero(changed)
             if dirty.size:
                 self._invalidate_world(dirty)
+            if self.ik_reset_links:
+                solved += self._retry_stuck_chains(max_loops, only)
             if solved:
                 self.apply()
             return solved
@@ -632,6 +712,11 @@ class Pose:
                     break
                 moved = False
                 for link in reversed(links):
+                    if link.limited and all(
+                            abs(float(link.hi[k]) - float(link.lo[k])) < 1e-6
+                            for k in range(3)):
+                        # 三轴全锁死：这个链接不允许转动，直接跳过。
+                        continue
                     W = self.world_subset(chains)
                     pivot = W[link.bone][:3, 3].copy()
                     v1 = eff - pivot

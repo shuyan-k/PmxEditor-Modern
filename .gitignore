@@ -59,3 +59,5 @@ verify_native_report.json
 tests/action.vmd
 
 tests/*.npz
+_t*.py
+tests/*.vmd
