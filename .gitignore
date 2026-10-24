@@ -45,6 +45,8 @@ native/*.txt
 native/*.log
 _test/
 !tests/test_model.pmx
+!tests/tex_body.png
+!tests/sph.png
 
 *.log
 
