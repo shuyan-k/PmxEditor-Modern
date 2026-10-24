@@ -5444,3 +5444,38 @@ def scen_small_fixes():
             anomaly("small-vbones", "存在越界骨骼索引")
     log("[small-fixes] 材质并入/骨骼上下移/新建骨骼/层级范围均通过")
 
+
+
+def scen_theme_probe():
+    from pmxeditor import theme as TH
+    log("[theme-probe] current=%r seg=%r viewbg=%r stored=%r dark=%r"
+        % (TH.current_name(), WIN._pages[5].theme_seg.value(), TH.VIEW_BG_RGB,
+           WIN.settings.value("theme"), TH.DARK.get("VIEW_BG_RGB")))
+
+
+def scen_theme_persist():
+    from pmxeditor import theme as TH
+    seg = WIN._pages[5].theme_seg
+    start = TH.current_name()
+    other = "light" if start == "dark" else "dark"
+    before_bg = TH.VIEW_BG_RGB
+    seg.buttons[other].click()
+    pump(240)
+    log("[theme] 切到", other, "current=", TH.current_name(),
+        "seg=", seg.value(), "stored=", WIN.settings.value("theme"),
+        "viewbg=", TH.VIEW_BG_RGB)
+    if TH.current_name() != other:
+        anomaly("theme-apply", "当前主题未切换：%r" % (TH.current_name(),))
+    if str(WIN.settings.value("theme")) != other:
+        anomaly("theme-store", "存档未更新：%r" % (WIN.settings.value("theme"),))
+    if seg.value() != other:
+        anomaly("theme-seg", "分段控件未同步：%r" % (seg.value(),))
+    if TH.VIEW_BG_RGB == before_bg:
+        anomaly("theme-viewport", "视口底色未变")
+    seg.buttons[start].click()
+    pump(240)
+    log("[theme] 切回", start, "stored=", WIN.settings.value("theme"))
+    if TH.current_name() != start or str(WIN.settings.value("theme")) != start:
+        anomaly("theme-back", "切回失败：%r / %r"
+                % (TH.current_name(), WIN.settings.value("theme")))
+    log("[theme] done")

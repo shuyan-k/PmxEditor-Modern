@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 
 import numpy as np
 
@@ -967,16 +968,31 @@ class MainWindow(QMainWindow):
 
     def _set_theme(self, name: str, announce: bool = True):
         """即时切换配色：重建样式表、内联样式、图标与视口底色。"""
-        if name == theme.current_name():
+        target = ("light" if str(name).lower() in ("light", "亮色", "浅色")
+                  else "dark")
+        # 先落盘再刷新界面：刷新链路（图标、视口底色）在个别显卡/GL 驱动上
+        # 可能抛异常，若放到最后，主题就没存下来——表现为「主题自动保存失效」。
+        try:
+            self.settings.setValue("theme", target)
+            self.settings.sync()
+        except Exception:
+            traceback.print_exc()
+        if target == theme.current_name():
+            self._pages[5].theme_seg.set_value(target)
             return
-        theme.apply_theme(name)
+        theme.apply_theme(target)
         theme.sync_modules()
-        theme.remap_stylesheets()
-        theme.svg_assets()
-        theme.refresh_icons()
-        QApplication.instance().setStyleSheet(theme.build_qss())
-        self.viewport.refresh_theme()
-        self.settings.setValue("theme", theme.current_name())
+        try:
+            theme.remap_stylesheets()
+            theme.svg_assets()
+            theme.refresh_icons()
+            QApplication.instance().setStyleSheet(theme.build_qss())
+        except Exception:
+            traceback.print_exc()
+        try:
+            self.viewport.refresh_theme()
+        except Exception:
+            traceback.print_exc()
         self._pages[5].theme_seg.set_value(theme.current_name())
         self.centralWidget().update()
         if announce:
@@ -1025,6 +1041,7 @@ class MainWindow(QMainWindow):
         try:
             self.settings.setValue("geometry", self.saveGeometry())
             self.settings.setValue("splitter", self.splitter.sizes())
+            self.settings.sync()
         except Exception:
             pass
         self.viewport.physics.release()
@@ -1091,8 +1108,9 @@ def main():
     app.setFont(ui_font(9.0))
     win = MainWindow()
     win.show()
-    if str(saved_theme).lower() == "light":
-        win._set_theme("light", announce=False)
+    want = "light" if str(saved_theme).lower() == "light" else "dark"
+    if want != theme.current_name():
+        win._set_theme(want, announce=False)
     if len(sys.argv) > 1 and sys.argv[1].lower().endswith(".pmx"):
         win.open_path(sys.argv[1])
     return app.exec_()
