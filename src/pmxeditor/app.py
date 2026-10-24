@@ -39,8 +39,8 @@ PAGES = (
     ("morph", "morph", "形态"),
     ("physics", "physics", "物理"),
     ("settings", "settings", "设置"),
-    ("frame", "mesh", "表示枠"),
-    ("vertex", "mesh", "顶点"),
+    ("frame", "frame", "表示枠"),
+    ("vertex", "vertex", "顶点"),
 )
 # new pages go last so the existing indices stay stable
 RAIL_ORDER = (0, 1, 6, 7, 2, 3, 4, 5)
@@ -189,23 +189,23 @@ class MainWindow(QMainWindow):
         # 左侧导航
         rail = QWidget()
         rail.setObjectName("Rail")
-        rail.setFixedWidth(56)
+        rail.setFixedWidth(118)
         rail_lay = QVBoxLayout(rail)
-        rail_lay.setContentsMargins(7, 10, 7, 10)
-        rail_lay.setSpacing(6)
+        rail_lay.setContentsMargins(8, 10, 8, 10)
+        rail_lay.setSpacing(3)
         self.rail_group = QButtonGroup(self)
         self.rail_group.setExclusive(True)
         self.rail_buttons = []
         self._rail_of = {}
         for slot, pi in enumerate(RAIL_ORDER):
             key, icon, text = PAGES[pi]
-            b = QPushButton()
+            b = QPushButton(text)
             b.setObjectName("RailBtn")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
-            b.setIcon(theme.register_icon(b, icon, TEXT_DIM, 21))
-            b.setIconSize(QSize(21, 21))
-            b.setFixedSize(42, 42)
+            b.setIcon(theme.register_icon(b, icon, TEXT_DIM, 18))
+            b.setIconSize(QSize(18, 18))
+            b.setFixedHeight(34)
             b.setToolTip(text)
             b.clicked.connect(lambda _c, i=pi: self._select_page(i))
             self.rail_group.addButton(b)

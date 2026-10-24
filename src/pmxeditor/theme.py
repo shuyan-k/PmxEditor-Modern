@@ -341,9 +341,11 @@ QMenu::separator {{
 #RailBtn {{
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 7px;
     color: {TEXT_DIM};
-    padding: 0px;
+    padding: 0px 8px 0px 9px;
+    text-align: left;
+    font-size: 9pt;
 }}
 #RailBtn:hover {{
     background: #1b2029;
@@ -352,6 +354,7 @@ QMenu::separator {{
 #RailBtn:checked {{
     background: #1c2735;
     color: {ACCENT};
+    font-weight: 600;
 }}
 #Panel {{
     background: {PANEL};
@@ -835,6 +838,18 @@ def make_icon(kind: str, color: str = "", size: int = 20) -> QIcon:
     elif kind == "reset":
         p.drawArc(QRectF(s * .22, s * .22, s * .56, s * .56), 40 * 16, 300 * 16)
         p.drawPolyline(QPolygonF([QPointF(s * .74, s * .12), QPointF(s * .7, s * .3), QPointF(s * .54, s * .24)]))
+    elif kind == "frame":
+        p.drawRoundedRect(QRectF(s * .16, s * .2, s * .68, s * .6), 2, 2)
+        for i in range(3):
+            v = s * (.34 + i * .16)
+            p.drawLine(QPointF(s * .28, v), QPointF(s * .56, v))
+            p.drawLine(QPointF(s * .62, v), QPointF(s * .72, v))
+    elif kind == "vertex":
+        tri = QPolygonF([QPointF(s * .5, s * .2), QPointF(s * .82, s * .7), QPointF(s * .18, s * .7)])
+        p.drawPolygon(tri)
+        p.setBrush(QColor(color))
+        for pt in tri:
+            p.drawEllipse(pt, s * .085, s * .085)
     elif kind == "mesh":
         p.drawPolygon(QPolygonF([QPointF(s * .16, s * .66), QPointF(s * .38, s * .3),
                                  QPointF(s * .62, s * .58), QPointF(s * .84, s * .3)]))
