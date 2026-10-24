@@ -1,4 +1,4 @@
-# 便携运行时与构建产物
+﻿# 便携运行时与构建产物
 build/
 !build/.gitkeep
 dist/
@@ -8,6 +8,8 @@ dist/
 nuitka-crash-report.xml
 
 # 原生构建中间文件（保留源码与脚本）
+native/obj/
+native/sources.rsp
 native/*.obj
 native/*.exp
 native/*.lib
@@ -53,3 +55,5 @@ _test/
 # 主题图标由 theme.svg_assets() 在启动时生成，不入库
 assets/*.svg
 verify_native_report.json
+
+tests/action.vmd

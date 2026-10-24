@@ -4805,3 +4805,202 @@ def scen_hover():
     if vp._hover:
         anomaly("hover-clear", "移出骨骼后悬停状态未清除")
     H.dump()
+
+
+# ---------------------------------------------------------------- 场景：VMD 动作
+def _vmd_bytes(bone_keys, morph_keys, model_name="TestModel"):
+    import struct
+    magic = b"Vocaloid Motion Data 0002"
+    out = bytearray(magic + b"\x00" * (30 - len(magic)))   # 头部固定 30 字节
+    out += model_name.encode("cp932")[:20].ljust(20, b"\x00")
+    out += struct.pack("<I", len(bone_keys))
+    for name, frame, pos, quat in bone_keys:
+        out += name.encode("cp932")[:15].ljust(15, b"\x00")
+        out += struct.pack("<I", frame)
+        out += struct.pack("<3f", *pos)
+        out += struct.pack("<4f", *quat)
+        out += b"\x00" * 64
+    out += struct.pack("<I", len(morph_keys))
+    for name, frame, weight in morph_keys:
+        out += name.encode("cp932")[:15].ljust(15, b"\x00")
+        out += struct.pack("<I", frame)
+        out += struct.pack("<f", weight)
+    out += struct.pack("<I", 0)      # 相机
+    out += struct.pack("<I", 0)      # 光照
+    out += struct.pack("<I", 0)      # 阴影
+    out += struct.pack("<I", 0)      # IK
+    return bytes(out)
+
+
+def scen_vmd():
+    """VMD 载入、帧采样、播放与关闭。"""
+    import math
+    vp = WIN.viewport
+    model = vp.model
+    if model is None:
+        anomaly("vmd-model", "没有模型，无法测试 VMD")
+        H.dump()
+        return
+    names = [b.name for b in model.bones]
+    target = "センター" if "センター" in names else names[0]
+    ti = names.index(target)
+    half = math.sqrt(0.5)
+    quat = (0.0, 0.0, half, half)          # 绕 Z 轴 90 度
+    bone_keys = [
+        (target, 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        (target, 10, (0.0, 1.0, 0.0), quat),
+    ]
+    morph_name = model.morphs[0].name if model.morphs else "smile"
+    morph_keys = [(morph_name, 0, 0.0), (morph_name, 10, 1.0)]
+    path = os.path.join(os.getcwd(), "tests", "action.vmd")
+    with open(path, "wb") as handle:
+        handle.write(_vmd_bytes(bone_keys, morph_keys, "TestModel"))
+    log("动作夹具 %s（%d 字节）" % (path, os.path.getsize(path)))
+
+    ok = WIN.load_vmd_path(path)
+    log("载入动作: ok=%r 时间轴可见=%r 最大帧=%d 状态=%r"
+        % (ok, WIN.timeline.isVisible(), WIN.timeline.slider.maximum(), STATUS.text))
+    if not ok:
+        anomaly("vmd-load", "载入自造的 VMD 失败")
+    if WIN.timeline.slider.maximum() != 10:
+        anomaly("vmd-range", "时间轴最大帧应为 10，实际 %d" % WIN.timeline.slider.maximum())
+
+    def sample(frame):
+        WIN._on_timeline_frame(frame)
+        return (float(vp.pose.base_trans[ti][0]), float(vp.pose.base_trans[ti][1]),
+                float(vp.pose.base_trans[ti][2]), float(vp.pose.base_rot[ti][2]))
+
+    x0, y0, z0, q0 = sample(0)
+    x5, y5, z5, q5 = sample(5)
+    xa, ya, za, qa = sample(10)
+    log("帧 0 : trans=(%.3f, %.3f, %.3f) quat.z=%.3f" % (x0, y0, z0, q0))
+    log("帧 5 : trans=(%.3f, %.3f, %.3f) quat.z=%.3f" % (x5, y5, z5, q5))
+    log("帧 10: trans=(%.3f, %.3f, %.3f) quat.z=%.3f" % (xa, ya, za, qa))
+    if abs(ya - 1.0) > 1e-4:
+        anomaly("vmd-sample", "第 10 帧的位移增量应为 (0,1,0)，实际 y=%.4f" % ya)
+    if abs(y5 - 0.5) > 0.02:
+        anomaly("vmd-interp", "第 5 帧应线性插值到 y≈0.5，实际 %.4f" % y5)
+    if abs(abs(qa) - half) > 1e-3 and abs(abs(qa) - 1.0) > 1e-3:
+        anomaly("vmd-quat", "第 10 帧四元数分量异常：z=%.4f" % qa)
+
+    weights = vp.morph_weights
+    want = [i for i, mo in enumerate(model.morphs) if mo.name == morph_name]
+    if want and abs(float(weights.get(want[0], 0.0)) - 1.0) > 1e-3:
+        anomaly("vmd-morph", "第 10 帧形态权重应为 1.0，实际 %r" % weights.get(want[0]))
+    log("第 10 帧形态权重 %r（%s）" % (weights.get(want[0]) if want else None, morph_name))
+
+    # 播放：勾上播放按钮后帧号应自动前进
+    before = WIN._action_frame
+    WIN.timeline.btn_play.setChecked(True)
+    pump(360)
+    after = WIN._action_frame
+    WIN.timeline.btn_play.setChecked(False)
+    log("播放: 帧 %d → %d（定时器 %r）" % (before, after, WIN._action_timer.isActive()))
+    if after == before:
+        anomaly("vmd-play", "播放 360ms 后帧号没有前进")
+    if WIN._action_timer.isActive():
+        anomaly("vmd-play-stop", "暂停后播放定时器仍在运行")
+
+    # 拖到末帧后关闭，姿态应回到初始
+    WIN._on_timeline_frame(10)
+    WIN.timeline.set_frame(10, 10)
+    pump(150)
+    shot(WIN, "vmd_timeline")
+    closed = WIN.close_vmd()
+    log("关闭动作: %r 时间轴可见=%r 定时器=%r"
+        % (closed, WIN.timeline.isVisible(), WIN._action_timer.isActive()))
+    if WIN.timeline.isVisible():
+        anomaly("vmd-close", "关闭动作后时间轴仍可见")
+    if WIN.action is not None:
+        anomaly("vmd-close-action", "关闭动作后 WIN.action 仍存在")
+    shot(WIN, "vmd_closed")
+    H.dump()
+
+
+def scen_vmdreal():
+    """用真实 VMD 动作验证解析与播放（路径取 VMD_TEST 环境变量）。"""
+    default = (r"D:\Project\MMD\03_动作库\摇摇乐 A279-006_by_A279-006_"
+               r"f4635fd03f79792ab68dd769f91084d4\残虹摇摇乐.vmd")
+    path = os.environ.get("VMD_TEST", default)
+    if not os.path.isfile(path):
+        anomaly("vmdreal-missing", "动作文件不存在：%s" % path)
+        H.dump()
+        return
+    vp = WIN.viewport
+    model = vp.model
+    names = {b.name for b in model.bones}
+    ok = WIN.load_vmd_path(path)
+    log("载入 %s（%.1f KB）→ ok=%r 最大帧=%d 状态=%r"
+        % (os.path.basename(path), os.path.getsize(path) / 1024.0, ok,
+           WIN.timeline.slider.maximum(), STATUS.text))
+    if not ok:
+        anomaly("vmdreal-load", "真实 VMD 载入失败")
+        H.dump()
+        return
+    tracks = WIN.action.bones
+    matched = [n for n in tracks if n in names]
+    log("骨骼轨道 %d 条，其中 %d 条能在当前模型里找到；形态轨道 %d 条"
+        % (len(tracks), len(matched), len(WIN.action.morphs)))
+    if not matched:
+        anomaly("vmdreal-match", "动作里没有任何骨骼名能匹配当前模型")
+    top = WIN.timeline.slider.maximum()
+    for frame in (0, top // 3, top // 2, top):
+        WIN._on_timeline_frame(frame)
+        pump(60)
+        y = float(vp.pose.base_trans[0][1])
+        log("帧 %d/%d：センター y=%.3f 形态权重数=%d"
+            % (frame, top, y, len(vp.morph_weights)))
+    base = {i: vp.pose.base_rot[i].copy() for i in range(len(model.bones))}
+    WIN._on_timeline_frame(0)
+    pump(40)
+    moved = sum(1 for i in range(len(model.bones))
+                if float(abs(base[i] - vp.pose.base_rot[i]).max()) > 1e-4)
+    log("回到第 0 帧后与末帧姿态不同的骨骼数 = %d" % moved)
+    WIN._on_timeline_frame(max(1, top // 2))
+    pump(120)
+    shot(WIN, "vmd_real")
+    WIN.close_vmd()
+    H.dump()
+
+
+def scen_vmdprobe():
+    """诊断：同一帧在「跑 IK」与「不跑 IK」下的姿态差异（看裙摆是否由 IK 引发）。"""
+    path = (r"D:\Project\MMD\03_动作库\摇摇乐 A279-006_by_A279-006_"
+            r"f4635fd03f79792ab68dd769f91084d4\残虹摇摇乐.vmd")
+    vp = WIN.viewport
+    WIN.load_vmd_path(path)
+    vp.pose.solve_ik()
+    WIN._on_timeline_frame(145)
+    pump(80)
+    a = vp.pose.base_rot.copy()
+    shot(WIN, "vmd_ik_on")
+    orig = vp.pose.solve_ik
+    vp.pose.solve_ik = lambda *args, **kwargs: 0
+    WIN._on_timeline_frame(145)
+    pump(80)
+    b = vp.pose.base_rot.copy()
+    shot(WIN, "vmd_ik_off")
+    vp.pose.solve_ik = orig
+    diff = abs(a - b).max()
+    log("IK 开/关的 base_rot 最大差 = %.4f；不同的骨骼数 = %d"
+        % (float(diff), int((abs(a - b).max(axis=1) > 1e-4).sum())))
+    H.dump()
+
+
+def scen_vmdphys():
+    """VMD 帧 + 物理演算：确认裙摆等物理骨骼在演算下是否正常。"""
+    path = (r"D:\Project\MMD\03_动作库\摇摇乐 A279-006_by_A279-006_"
+            r"f4635fd03f79792ab68dd769f91084d4\残虹摇摇乐.vmd")
+    vp = WIN.viewport
+    WIN.load_vmd_path(path)
+    WIN.seek_action_frame(145)
+    pump(120)
+    shot(WIN, "vmd_phys_off")
+    WIN.set_mode("physics")
+    vp.set_physics(True)
+    for _ in range(40):
+        vp._on_tick()
+        pump(16)
+    shot(WIN, "vmd_phys_on")
+    log("physics ready=%s enabled=%s" % (vp.physics._ready, vp.physics.enabled))
+    H.dump()

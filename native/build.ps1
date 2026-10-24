@@ -67,10 +67,13 @@ $sources += '"bullet_wrap.cpp"'
 $rsp = Join-Path $here "sources.rsp"
 $sources | Set-Content -Path $rsp -Encoding ascii
 
+# 目标文件统一放进 native\obj\，避免上百个 .obj 散落在源码目录里。
+$objdir = Join-Path $here "obj"
+if (-not (Test-Path $objdir)) { New-Item -ItemType Directory -Path $objdir | Out-Null }
 Push-Location $here
 try {
-    & cl.exe /nologo /LD /MP /O2 /EHsc /MD /std:c++14 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DNDEBUG `
-        /I"bullet_src\src" /I"." "@$rsp" /Fe:bullet_phys.dll /link /OPT:REF /OPT:ICF
+    & cl.exe /nologo /LD /MP /O2 /EHsc /MD /std:c++14 /utf-8 /Foobj\ /Fdobj\ /D_CRT_SECURE_NO_WARNINGS /DNDEBUG `
+        /I"bullet_src\src" /I"." "@$rsp" /Fe:bullet_phys.dll /link /OPT:REF /OPT:ICF /IMPLIB:obj\bullet_phys.lib /PDB:obj\bullet_phys.pdb
     if ($LASTEXITCODE -ne 0) { throw "cl.exe failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
