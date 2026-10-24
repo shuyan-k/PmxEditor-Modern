@@ -3858,17 +3858,20 @@ def scen_mouse():
     if doc.sel_kind != "":
         anomaly("click-blank", "左键单击空白没有取消选择")
 
-    # 4) 「移动时带动顶点」开关持久化（settings.json）
+    # 4) 「移动时带动顶点」不再持久化（与原版 PmxEditor 对齐：原版移动骨骼不搬顶点）
     from pmxeditor.config import Config
+    cfg = Config.load()
+    cfg.set("editor/move_bone_vertices", False)
     bp = WIN._pages[1]
-    prev = bool(Config.load().get("editor/move_bone_vertices", False))
+    prev = bp.move_verts_sw.isChecked()
     bp.move_verts_sw.setChecked(True)
     pump(60)
     got = bool(Config.load().get("editor/move_bone_vertices", False))
     bp2 = pn.BonePage(doc)
-    log("开关持久化: 写入=%s 新实例=%s" % (got, bp2.move_verts_sw.isChecked()))
-    if not got or not bp2.move_verts_sw.isChecked():
-        anomaly("move-verts-persist", "开关状态没有持久化")
+    log("开关不持久化: 写入=%s 新实例=%s" % (got, bp2.move_verts_sw.isChecked()))
+    if got or bp2.move_verts_sw.isChecked():
+        anomaly("move-verts-persist",
+                "开关不应写入 settings.json，新实例也应默认关闭")
     bp2.deleteLater()
     bp.move_verts_sw.setChecked(bool(prev))
     H.dump()

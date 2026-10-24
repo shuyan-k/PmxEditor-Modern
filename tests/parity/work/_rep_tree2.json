@@ -1,0 +1,12 @@
+{
+ "log": [
+  "[boot] APP STARTED tree2 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[tree2] rows=2",
+  "[tree2] expanded0=True",
+  "[tree2] after dbl emit: expanded0=True",
+  "[tree2] after 2nd: expanded0=True",
+  "[tree2] after real dclick: expanded0=True",
+  "[tree2] menus 0 -> 1 last={'title': '', 'items': [{'text': '全部展开', 'enabled': True, 'check': False}, {'text': '全部折叠', 'enabled': True, 'check': False}]}"
+ ],
+ "anomalies": []
+}

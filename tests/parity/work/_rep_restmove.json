@@ -1,0 +1,10 @@
+{
+ "log": [
+  "[boot] APP STARTED restmove dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] 进入骨骼页后 show_bones = True",
+  "[boot] 开关关闭: 顶点最大位移=0.00000 bone z=0.302",
+  "[boot] 开关打开: 顶点最大位移=0.29997 受影响=23026 像素差=0.26%",
+  "[boot] 撤销后: 顶点最大位移=0.000000 bone z=0.002"
+ ],
+ "anomalies": []
+}

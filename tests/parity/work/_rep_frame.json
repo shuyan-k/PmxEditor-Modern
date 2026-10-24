@@ -1,0 +1,8 @@
+{
+ "log": [
+  "[boot] APP STARTED frame dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] DIALOG(ConfirmDialog) {\"kind\": \"ConfirmDialog\", \"window\": \"删除表示枠\", \"text\": \"\", \"extra\": \"\"}",
+  "[boot] [frame] 表示枠 / IK 链编辑通过：frames=9 links=2"
+ ],
+ "anomalies": []
+}

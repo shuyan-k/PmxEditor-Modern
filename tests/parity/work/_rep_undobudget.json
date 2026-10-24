@@ -1,0 +1,10 @@
+{
+ "log": [
+  "[boot] APP STARTED undobudget dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] 14 次模型编辑后 模型条目=12 姿态条目=0",
+  "[boot] 再加 5 条姿态后 模型条目=12 姿态条目=5",
+  "[boot] 再 3 次模型编辑后 模型条目=12 姿态条目=5",
+  "[boot] 连续撤销 17 次后剩余=0"
+ ],
+ "anomalies": []
+}

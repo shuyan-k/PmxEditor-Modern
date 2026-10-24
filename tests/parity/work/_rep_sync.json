@@ -1,0 +1,18 @@
+{
+ "log": [
+  "[boot] APP STARTED sync dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[sync] model: 116036 verts / 168 bones / 21 mats / 22 morphs / 82 rigid / 74 joints",
+  "[sync] VPD menu items: ['导入 VPD 姿态…', '导出 VPD 姿态…']",
+  "[sync] vpd written: 5 bones -> D:\\Project\\PmxEditor_Modern\\tests\\sync_pose.vpd",
+  "[sync] import ok=True 21 ms status='已导入 VPD 姿态：5/5 根骨骼' physics=False dirty=True undo 0->1",
+  "[sync] bones changed: 11 [0, 1, 2, 3, 4, 21, 22, 23]",
+  "[sync] undo restores pose: maxdiff=0.00000000 undo=0 redo=1",
+  "[sync] redo re-applies: changed=11",
+  "[sync] export ok=True 3 ms exists=True status='已导出 VPD：11 根骨骼，0 个形态' dirty True->True",
+  "[sync] export file: 11 bones 0 morphs enc=cp932",
+  "[sync]   roundtrip maxdiff(操作中心)=0.00000001",
+  "[sync] DIALOG(information) {\"kind\": \"information\", \"window\": \"KARU式Rabbit Hole MIKU.ver 1.6.pmx — PMX 编辑器\", \"text\": \"\", \"extra\": \"('当前姿态与初始姿态相同，没有可导出的骨骼或形态变化。',)\"}",
+  "[sync] zero-change export ok=False exists=False status='VPD 导出已取消：姿态无变化'"
+ ],
+ "anomalies": []
+}

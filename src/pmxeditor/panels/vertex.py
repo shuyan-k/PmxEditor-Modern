@@ -255,17 +255,38 @@ class VertexPage(PageBase):
               + [float(x) for x in self.r1_spin.value()])
 
         def fn(mm):
-            mm.v_pos[i] = pos
-            mm.v_nrm[i] = nrm
-            mm.v_uv[i, 0] = uv[0]
-            if mm.v_uv.shape[1] > 1:
-                mm.v_uv[i, 1] = uv[1]
-            mm.v_edge[i] = edge
-            mm.v_wtype[i] = wt
-            mm.v_bones[i] = bones
-            mm.v_weights[i] = weights
+            # 只写回真的被改过的分量。数值框位数有限（位置/法线 4 位、UV 与描边
+            # 5 位），整行写回会把没动过的分量按位数四舍五入，产生原版 PmxEditor
+            # 没有的末位漂移（例如未改动的 Y 从 16.8058395 变成 16.8058）。
+            def differs(cur, new, nd):
+                return abs(round(float(cur), nd) - float(new)) > 1e-9
+
+            cur = [float(x) for x in mm.v_pos[i]]
+            for k in range(3):
+                if differs(cur[k], pos[k], 4):
+                    mm.v_pos[i, k] = pos[k]
+            cur = [float(x) for x in mm.v_nrm[i]]
+            for k in range(3):
+                if differs(cur[k], nrm[k], 4):
+                    mm.v_nrm[i, k] = nrm[k]
+            cur = [float(x) for x in mm.v_uv[i]]
+            for k in range(min(2, mm.v_uv.shape[1])):
+                if differs(cur[k], uv[k], 5):
+                    mm.v_uv[i, k] = uv[k]
+            if differs(mm.v_edge[i], edge, 5):
+                mm.v_edge[i] = edge
+            cur_w = [float(x) for x in mm.v_weights[i]]
+            changed_w = any(differs(cur_w[k], weights[k], 4) for k in range(4))
+            cur_b = [int(x) for x in mm.v_bones[i]]
+            if int(mm.v_wtype[i]) != wt or cur_b != list(bones) or changed_w:
+                mm.v_wtype[i] = wt
+                mm.v_bones[i] = bones
+                mm.v_weights[i] = weights
             if mm.v_sdef is not None and len(mm.v_sdef) > i:
-                mm.v_sdef[i] = sd
+                cur_s = [float(x) for x in mm.v_sdef[i]]
+                for k in range(min(len(sd), len(cur_s))):
+                    if differs(cur_s[k], sd[k], 4):
+                        mm.v_sdef[i, k] = sd[k]
         self.edit("修改顶点 %d" % i, fn, "vertex")
         self.doc.select("vertex", i)
         self._fill()

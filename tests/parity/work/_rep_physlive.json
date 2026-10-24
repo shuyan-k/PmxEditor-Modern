@@ -1,0 +1,10 @@
+{
+ "log": [
+  "[boot] APP STARTED physlive dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot]  刚体 82 个（动态首个=15 运动学首个=0）",
+  "[boot]  质量 0.753 -> 1.506 世界重建=False 状态='已应用物理参数（热更新）'",
+  "[boot]  运动学刚体 idx=0 热更新返回=False",
+  "[boot]  撤销后质量=0.753 世界重建=False"
+ ],
+ "anomalies": []
+}

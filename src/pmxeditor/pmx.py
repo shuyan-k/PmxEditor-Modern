@@ -734,6 +734,37 @@ def _size_for(count: int, signed: bool, preferred: int) -> int:
         return 2
     return 4
 
+
+def _crlf(text: str) -> str:
+    """把换行统一成 CRLF。
+
+    原版 PmxEditor 写注释时用 CRLF，读入时按原文保留；此前保存会把 CR 丢掉，
+    导致同一操作在原版/新版下产出的 PMX 文本段不一致。
+    """
+    if not text:
+        return text
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+
+
+def set_add_uv(model: PMXModel, count: int) -> None:
+    """设置附加 UV 数（0–4），并按需补齐/截断顶点附加 UV 数据。
+
+    PMX 每个顶点在 UV 之后固定跟 ``add_uv * 4`` 个浮点；把数量从 0 调大时必须
+    为零值补齐，否则写文件会越界或写出垃圾。
+    """
+    count = max(0, min(4, int(count)))
+    n = model.n_vertices
+    cur = model.v_add
+    if cur.ndim != 2 or cur.shape[0] != n:
+        cur = np.zeros((n, 0), np.float32)
+    keep = min(model.add_uv, count) * 4
+    new = np.zeros((n, count * 4), np.float32)
+    if keep and cur.shape[1]:
+        new[:, :keep] = cur[:, :min(keep, cur.shape[1])]
+    model.v_add = new
+    model.add_uv = count
+
+
 def save_pmx(model: PMXModel, path: str):
     version = 2.1 if (model.soft_bodies or any(m.type >= 9 for m in model.morphs)) else 2.0
     nv = model.n_vertices
@@ -751,8 +782,8 @@ def save_pmx(model: PMXModel, path: str):
     w.buf += bytes([model.encoding, model.add_uv, vsz, tsz, msz, bsz, mosz, rsz])
     w.text(model.name)
     w.text(model.name_en)
-    w.text(model.comment)
-    w.text(model.comment_en)
+    w.text(_crlf(model.comment))
+    w.text(_crlf(model.comment_en))
 
     # 顶点
     w.i32(nv)
@@ -1046,4 +1077,10 @@ def validate_model(m: PMXModel) -> List[str]:
     for i, j in enumerate(m.joints):
         if j.rigid_a >= len(m.rigid) or j.rigid_b >= len(m.rigid):
             issues.append("关节 %d「%s」关联刚体越界 (%d, %d)" % (i, j.name, j.rigid_a, j.rigid_b))
+    if not 0 <= int(m.add_uv) <= 4:
+        issues.append("附加 UV 数 %d 超出 0–4" % int(m.add_uv))
+    elif getattr(m, "v_add", None) is not None and m.v_add.ndim == 2 \
+            and m.v_add.shape[0] == m.n_vertices and m.v_add.shape[1] != m.add_uv * 4:
+        issues.append("附加 UV 数 %d 与顶点附加 UV 数据宽度 %d 不一致"
+                      % (int(m.add_uv), m.v_add.shape[1]))
     return issues

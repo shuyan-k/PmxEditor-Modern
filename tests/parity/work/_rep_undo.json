@@ -1,0 +1,9 @@
+{
+ "log": [
+  "[boot] APP STARTED undo dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot]  deepcopy(model) 通用 13.6 ms -> 快速 11.4 ms（1.2x） 11 11 24",
+  "[boot]  撤销后字节 8437650 / 8437650 一致=True",
+  "[boot]  结束 morphs=22 materials=21"
+ ],
+ "anomalies": []
+}

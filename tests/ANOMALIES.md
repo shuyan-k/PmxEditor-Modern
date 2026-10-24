@@ -193,3 +193,97 @@ python _test\\go.py final dark _test\\test_model.pmx     # 菜单/主题/保存/
 - 控制台是 GBK，跑脚本要 `PYTHONUTF8=1`，结果读 `_test/report.json`（键为 `log` / `anomalies`）。
 - `_test/run.py` 里 VPD 场景用内建 `open(..., encoding="cp932")`，不要用未导入的 `io.open`。
 - 打包 exe 用 `--windows-console-mode=disable`，PowerShell 里直接 `&` 不会等待，需 `Start-Process -Wait` 才能拿退出码。
+
+---
+
+# 附：与原版 PmxEditor 的同操作一致性比对（parity）发现
+
+测试方式、坐标、脚本与证据见 `tests/parity/REPORT.md`。基准模型 `KARU式Rabbit Hole MIKU.ver 1.6.pmx`，两侧各用真实 GUI 操作同一件事后另存，再用 `tests/parity/pmxsem.py` 逐字段比对（19 项操作）。
+
+**状态：已修复**（`src/pmxeditor/panels/bone.py`：「移动时带动顶点」改为构造即关、不再从 `settings.json` 读回、不再持久化，触发时状态栏提示）。修复后同一 GUI 脚本复跑，`B1_orig.pmx` 与 `B1_mod.pmx` 字段级 0 差异。
+
+## 差异-1 移动骨骼会连带搬动 14,602 个顶点（原版不动）
+
+**现象**：骨骼页把骨骼5「上半身」位置 X 由 0 改为 1.0 → 新版 `v_pos` 有 **14,602 个顶点**被按权重位移（顶点 554 权重 0.125，X 0.1879→0.3131），最大位移 0.859；原版 PmxEditor 保存后顶点数组完全不变。撤销可回滚。
+
+**证据**：`tests/parity/work/B1_orig.pmx` vs `B1_mod.pmx`；代码 `src/pmxeditor/panels/bone.py:66 self.move_verts_sw = Switch(False)` → `:520 _move_verts_toggled` → `:541 self.edit("移动骨骼并带动顶点" if move else "移动骨骼", apply, ...)`（该开关的持久化默认值为开）。
+
+**建议**：默认关闭，或与原版对齐；至少首次触发时提示「将同时移动 N 个顶点」。
+
+**状态：已修复**（`src/pmxeditor/doc.py`：`remove_material` 非 merge 分支修正 `face_count` 切片单位 + 新增 `compact_vertices()` 清理孤立顶点并重映射索引与形态偏移；删除对话框默认按钮改为「连同三角面删除」）。修复后顶点 116,036→102,081、面 614,757→538,605、文件 7,573,725 B，与原版逐字段一致。
+
+## 差异-2 删除材质不会删除其几何（原版会）
+
+**现象**：删除材质 #20「metal」（76,152 面）后——原版连带删除其独占顶点：顶点 116,036→102,081、面 614,757→538,605（文件 7,573,725 B）；新版保留全部几何，把这 76,152 面并入上一材质，`materials[19].face_count` 5,520→81,672（文件 8,437,554 B）。
+
+**证据**：`tests/parity/work/S2_orig.pmx` vs `S2_mod.pmx`；代码 `src/pmxeditor/doc.py:385`（`merge=True` 时把面并入上一材质）、调用点 `src/pmxeditor/panels/material.py:439`。
+
+**建议**：提供「删除材质并删除其面/顶点」（默认，对齐原版）与「仅删材质、面并入相邻材质」两种模式。
+
+**状态：已修复**（`src/pmxeditor/pmx.py` 新增 `_crlf()`，`save_pmx` 写 `comment`/`comment_en` 前规范化）。修复后与原版保存结果 0 差异。
+
+## 差异-3 PMX 注释换行被写成 LF（原版为 CRLF）
+
+**现象**：三行注释保存后是 `\n`，原版是 `\r\n`。
+
+**证据**：`src/pmxeditor/panels/info.py:119 v = self.comment.toPlainText()`（QPlainTextEdit 输出 `\n`）→ `src/pmxeditor/pmx.py:416 m.comment = r.text()`。
+
+**建议**：写入前 `v.replace("\r\n", "\n").replace("\n", "\r\n")`。
+
+**状态：已修复**（`src/pmxeditor/ui_widgets.py` 新增 `ColorSpins` 浮点 RGBA 数值框，材质页加入漫反射/高光色/环境色/描边四行并与颜色按钮双向同步；`_fill_fields` 用 PMX 原值回填）。精确输入 0.5 后与原版 0 差异；经 `QColorDialog` 取色的老路径仍是 8 位（`0.501961`），属预期。
+
+## 差异-4 颜色只有 8 位精度（0.5 存成 0.501961）
+
+**现象**：材质漫反射 R / 透明度 A 想设 0.5，新版落盘 0.501961（128/255）；原版可存任意浮点 0.5。
+
+**证据**：`src/pmxeditor/panels/material.py:57 self.diffuse = ColorButton([1,1,1,1])`、`src/pmxeditor/ui_widgets.py:185 ColorButton`（`QColor.fromRgbF`，8 位通道）、`material.py:66 / _color()`。
+
+**建议**：给 diffuse/specular/ambient/edge_color 补 4 个浮点数值框（至少透明度可输入浮点）。
+
+**状态：已修复**（`src/pmxeditor/panels/vertex.py:_apply` 改为按分量判定改动，只写真正被改过的分量）。修复后与原版 0 差异。
+
+## 差异-5 顶点编辑后该顶点出现 ≤4.0e-5 漂移
+
+编辑顶点0 位置 X=0.5 后，该顶点 Y 16.80584→16.805799、Z −0.422984→−0.423、法线 3e-06→0、权重 0.53826→0.5383；原版只有 X 变。疑为 `src/pmxeditor/panels/vertex.py:_apply` 的 float32 重算/权重归一化。
+
+**状态：部分修复**（`src/pmxeditor/doc.py`：只有 `tail_bone == 被删索引` 时才清 `BF_TAIL_INDEX`/归零 `tail_offset`）。与 `S1_orig` 的差异由 15 处降到 2 处；剩下的是**有意保留**：子骨骼父级挂到被删骨骼的真正父级（87）而原版挂索引前一位（99），语义更正确。
+
+## 差异-6 删骨骼时连带规范化 tail 标记位
+
+`src/pmxeditor/doc.py:318-322` 对 `BF_TAIL_INDEX` 且重映射后 <0 的骨骼清位（源模型里已有 9 个 `tail_bone=-1` 但置位的骨骼，flags 271→270、283→282、267→266）。方向更规范，但属于未请求的连带修改。
+
+## 差异-7 新建骨骼默认值与原版不同
+
+原版：`新規ボーン1` / 英文名空 / 父骨骼 −1 / 位置 (0,0,0) / flags 26。
+新版：`新建骨骼` / `new_bone` / 父骨骼 = 当前选中骨骼 / 位置 = 父位置+(0,1,0) / flags 30。
+
+## 能力差异
+
+> 以上修复已用同一套 GUI 脚本（`tests/parity/side_mod.py`）复跑复核，明细见 `tests/parity/REPORT.md` 第九节。
+
+
+- ~~信息页「文字编码」「追加UV数」新版只读（原版可改编码；追加UV 原版可设但 PMX 2.0 不落盘）。~~
+  **状态：已修复**。`src/pmxeditor/panels/info.py` 把这两项改成下拉，`src/pmxeditor/pmx.py` 新增 `set_add_uv()` 并在 `validate_model` 里校验 0–4 与 `v_add` 宽度。复核：E4 两侧均 8,435,389 B、`pmxsem` 0 差异；E5 新版 `add_uv=2`、`v_add (116036, 8)`、12,150,802 B（+n×32），0→2→4→0 往返回到 8,437,650 B 且与纯另存逐字节相同。原版追加 UV 在 PMX 2.0 下仍不落盘，故 E5 记为「新版更正确」的有意差异。
+- 材质页「新建材质」原版 + 号灰化不可用，新版可新建（materials 22）。
+
+## 差异-8 开启「轴固定」时原版会把轴向量归一化为骨骼朝向（parity B7）
+
+两侧开「轴固定」后 `bones[5].flags` 都 27→1051（置 `BF_FIXED_AXIS`），但原版在同一动作里把 `axis` 从 (1,0,0) 改成 (1, 0.998421, −0.056169)（骨骼朝向），新版保持 (1,0,0)。
+
+**证据**：`tests/parity/work/B7_orig.pmx` vs `work/B7_mod.pmx`（`pmxsem` 2 处差异，仅 `axis[1]/axis[2]`）；新版 `src/pmxeditor/panels/bone.py:_axis_flag_changed` 只改标志位。
+
+**影响**：低危——只有轴固定骨骼的冗余轴向数据不同，不影响物理与姿态。
+
+**状态：未修复**（有意保留：需要先推断原版归一化算法，当前无明确规格）。
+
+## 全量回归时发现的既有问题（非本轮引入）
+
+用 `tests/parity/regress.py` 跑 `tests/run.py` 的 40 个功能场景时发现三类既有问题，均已用 `git stash push -- src` 在 HEAD 上复现确认：
+
+1. `sel` 场景 **进程崩溃 rc=0xC0000005**（访问冲突），HEAD 同样崩溃 —— 建议单独立项排查（该场景覆盖选中/高亮路径）。
+2. `vp` 场景 2 条异常：`pose-move`（左键拖动骨骼后没有位移）、`phys-pose`（物理演算中拖动骨骼姿态未变）—— HEAD 同样出现，属拖动模拟与实际鼠标路径的差异，非产品缺陷。
+3. `sel6` 场景脚本自身 `AttributeError: 'Document' object has no attribute 'sel'` —— 测试脚本引用了不存在的属性，需修脚本。
+
+另：`inventory` 的 2 条 `text-clipped` 是超长模型路径的 `Faint` 标签，属既有告警。
+
+`mouse` 场景原本断言「移动时带动顶点」开关写入 `settings.json`；该持久化在本轮按 parity 结论移除（原版移动骨骼不搬顶点），场景断言已同步改为「开关不再持久化、新实例默认关闭」。

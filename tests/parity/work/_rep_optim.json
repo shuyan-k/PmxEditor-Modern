@@ -1,0 +1,15 @@
+{
+ "log": [
+  "[boot] APP STARTED optim dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] morphs=22",
+  "[boot] group_morph=-1 flip_morph=-1 add_uv=-1",
+  "[boot] 模型没有组形态，跳过展开用例",
+  "[boot] 合成翻转 w=0.25 -> [(0, 0.75)]（期望 #0=0.75）",
+  "[boot] 嵌套组 #23 -> [(0, 0.5)]（期望 #0=0.5）",
+  "[boot] 自引用组形态未死循环，结果=[]（应为空）",
+  "[boot] 物理不可用，跳过热更新用例",
+  "[boot] 重叠点 (480,120) 候选=[('bone', 105, 2.1), ('bone', 106, 1.1)]",
+  "[boot] Alt 循环: [('bone', 105), ('bone', 106), ('bone', 105)]"
+ ],
+ "anomalies": []
+}

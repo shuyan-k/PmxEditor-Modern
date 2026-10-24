@@ -8,7 +8,7 @@ from ..doc import add_material, duplicate_material, remove_material
 from ..gl_names import material_zh
 from ..pmx import (MF_DOUBLE_SIDED, MF_EDGE, MF_GROUND_SHADOW, MF_SELF_SHADOW, MF_SHADOW_MAP)
 from ..theme import ACCENT, DANGER, TEXT_FAINT
-from ..ui_widgets import (Card, ColorButton, ConfirmDialog, EntryList, Form, Segmented, Switch, SearchEdit, label, make_spin)
+from ..ui_widgets import (Card, ColorButton, ColorSpins, ConfirmDialog, EntryList, Form, Segmented, Switch, SearchEdit, label, make_spin)
 from .base import _fill_combo, PageBase
 
 # ================================================================= 材质
@@ -62,10 +62,22 @@ class MaterialPage(PageBase):
         form.add("高光色", self.specular)
         form.add("高光强度", self.spec_coef)
         form.add("环境色", self.ambient)
+        # 取色按钮只有 8 位精度，另给一行可以直接键入 0.5 这类值的精确输入
+        self.diffuse_spins = ColorSpins([1, 1, 1, 1])
+        self.specular_spins = ColorSpins([0, 0, 0], alpha=False)
+        self.ambient_spins = ColorSpins([0.5, 0.5, 0.5], alpha=False)
+        form.add("漫反射 RGBA", self.diffuse_spins)
+        form.add("高光色 RGB", self.specular_spins)
+        form.add("环境色 RGB", self.ambient_spins)
         sec.add(form)
         self.diffuse.colorChanged.connect(lambda c: self._color("diffuse", c))
         self.specular.colorChanged.connect(lambda c: self._color("specular", c))
         self.ambient.colorChanged.connect(lambda c: self._color("ambient", c))
+        for btn, spins, field in ((self.diffuse, self.diffuse_spins, "diffuse"),
+                                  (self.specular, self.specular_spins, "specular"),
+                                  (self.ambient, self.ambient_spins, "ambient")):
+            btn.colorChanged.connect(spins.set_color)
+            spins.colorChanged.connect(lambda c, f=field: self._color(f, c))
         self.spec_coef.valueChanged.connect(self._spec_coef_changed)
         dl.addWidget(card)
 
@@ -117,7 +129,9 @@ class MaterialPage(PageBase):
         self.edge_color = ColorButton([0, 0, 0, 1])
         self.edge_size = make_spin(4, 0.0, 100.0, 0.1)
         form = Form(64)
+        self.edge_color_spins = ColorSpins([0, 0, 0, 1])
         form.add("描边颜色", self.edge_color)
+        form.add("描边 RGBA", self.edge_color_spins)
         form.add("描边大小", self.edge_size)
         sec.add(form)
         grid = QGridLayout()
@@ -139,6 +153,8 @@ class MaterialPage(PageBase):
             grid.addWidget(cb, i // 2, i % 2)
         sec.add_layout(grid)
         self.edge_color.colorChanged.connect(self._edge_color_changed)
+        self.edge_color.colorChanged.connect(self.edge_color_spins.set_color)
+        self.edge_color_spins.colorChanged.connect(self._edge_color_changed)
         self.edge_size.valueChanged.connect(self._edge_size_changed)
         dl.addWidget(card)
 
@@ -170,7 +186,7 @@ class MaterialPage(PageBase):
             entries.append({
                 "name": mt.name or "未命名材质",
                 "hint": zh if zh and zh != mt.name else "",
-                "right": "%d 面" % mt.face_count,
+                "right": "%d 面" % (int(mt.face_count) // 3),
                 "color": "#%02x%02x%02x" % (r, g, b),
                 "index": i,
                 "dim": mt.diffuse[3] < 0.5,
@@ -254,10 +270,15 @@ class MaterialPage(PageBase):
         self.zh_badge.setStyleSheet("color:%s;" % (ACCENT if zh and zh != mt.name else TEXT_FAINT))
         self.name_edit.setText(mt.name)
         self.name_en_edit.setText(mt.name_en)
-        self.face_label.setText("%d" % mt.face_count)
+        # PMX 的面数按面顶点（索引）计，显示与核对都换算成三角面
+        self.face_label.setText("%d" % (int(mt.face_count) // 3))
         self.diffuse.set_color(mt.diffuse)
         self.specular.set_color(list(mt.specular) + [1.0])
         self.ambient.set_color(list(mt.ambient) + [1.0])
+        # 数值行保留 PMX 里的原值，避免被 8 位取色量化（0.5 不该变成 0.498）
+        self.diffuse_spins.set_color(mt.diffuse)
+        self.specular_spins.set_color(list(mt.specular) + [1.0])
+        self.ambient_spins.set_color(list(mt.ambient) + [1.0])
         self.spec_coef.setValue(float(mt.specular_coef))
         items = self._texture_items(m)
         _fill_combo(self.tex_combo, items, mt.texture, empty=(-1, "（无贴图）"))
@@ -270,6 +291,7 @@ class MaterialPage(PageBase):
         else:
             _fill_combo(self.toon_combo, items, mt.toon, empty=(-1, "（无 Toon）"))
         self.edge_color.set_color(mt.edge_color)
+        self.edge_color_spins.set_color(mt.edge_color)
         self.edge_size.setValue(float(mt.edge_size))
         self.flags["double"].setChecked(bool(mt.draw_flags & MF_DOUBLE_SIDED))
         self.flags["ground"].setChecked(bool(mt.draw_flags & MF_GROUND_SHADOW))
@@ -437,7 +459,7 @@ class MaterialPage(PageBase):
         mt = m.materials[self.idx]
         box = QMessageBox(self)
         box.setWindowTitle("删除材质")
-        box.setText("删除「%s」（%d 个三角面）" % (mt.name, int(mt.face_count)))
+        box.setText("删除「%s」（%d 个三角面）" % (mt.name, int(mt.face_count) // 3))
         box.setInformativeText(
             "「并入上一个材质」保留几何，只把这些面归给上一个材质；"
             "「连同三角面删除」会真正删掉这些面。")
@@ -446,6 +468,8 @@ class MaterialPage(PageBase):
             merge_btn = box.addButton("并入上一个材质", QMessageBox.AcceptRole)
         face_btn = box.addButton("连同三角面删除", QMessageBox.DestructiveRole)
         box.addButton("取消", QMessageBox.RejectRole)
+        # 默认动作对齐原版 PmxEditor：直接回车＝连同三角面删除（并压缩孤立顶点）
+        box.setDefaultButton(face_btn)
         box.exec_()
         clicked = box.clickedButton()
         if merge_btn is not None and clicked is merge_btn:

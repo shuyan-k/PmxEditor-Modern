@@ -1,0 +1,32 @@
+{
+ "V1": {
+  "status": "ok",
+  "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\V1_orig.pmx",
+  "note": "ok 0.0s",
+  "detail": "None"
+ },
+ "M1": {
+  "status": "ok",
+  "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\M1_orig.pmx",
+  "note": "ok 0.0s",
+  "detail": "None"
+ },
+ "B2": {
+  "status": "ok",
+  "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\B2_orig.pmx",
+  "note": "ok 0.0s",
+  "detail": "None"
+ },
+ "P1": {
+  "status": "ok",
+  "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\P1_orig.pmx",
+  "note": "ok 0.0s",
+  "detail": "None"
+ },
+ "J1": {
+  "status": "ok",
+  "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\J1_orig.pmx",
+  "note": "ok 0.0s",
+  "detail": "None"
+ }
+}

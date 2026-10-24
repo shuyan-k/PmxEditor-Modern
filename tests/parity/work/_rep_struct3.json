@@ -1,0 +1,11 @@
+{
+ "log": [
+  "[boot] APP STARTED struct3 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] bones=168 rigid=82 joints=74",
+  "[boot]  追加骨骼: 25.4 ms deformer重建=False pose重建=True physics重建=False bones=169",
+  "[boot]  撤销追加: 34.1 ms deformer重建=True physics重建=False bones=168",
+  "[boot]  删除骨骼: 47.0 ms deformer重建=True pose重建=True physics重建=False bones=167",
+  "[boot]  复原 bones=168"
+ ],
+ "anomalies": []
+}

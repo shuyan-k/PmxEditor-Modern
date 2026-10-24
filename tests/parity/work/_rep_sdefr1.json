@@ -1,0 +1,12 @@
+{
+ "log": [
+  "[boot] APP STARTED sdefr1 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] == SDEF R1 ==",
+  "[boot]  R0 各向同性、R1=0（回退 R0）: 半径=1.5000 回退差=0.000000",
+  "[boot]  R1=[1,2,0.5] 生效: 半径=1.6641 (期望 1.6642) 回退差=0.000000",
+  "[boot]  R0=[1,2,0.5]、R1=0（旧数据）: 半径=1.6641 回退差=0.000000",
+  "[boot]  R1==R0: 半径=1.6641 回退差=0.000000",
+  "[boot]  静止姿态（R1=[1,2,0.5]）: 半径=1.5000 (期望 1.5000) 回退差=0.000000"
+ ],
+ "anomalies": []
+}

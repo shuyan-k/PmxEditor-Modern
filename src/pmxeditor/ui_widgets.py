@@ -241,6 +241,51 @@ class ColorButton(QPushButton):
                    Qt.AlignLeft | Qt.AlignVCenter, txt)
         p.end()
 
+class ColorSpins(QWidget):
+    """RGBA 精确数值输入，与 ColorButton 双向同步。
+
+    取色对话框走 QColor，分量只有 8 位精度（0.5 会变成 127/255）；原版 PmxEditor
+    的材质色可以直接键入 0.5 这样的浮点值，这里补上等价的精确入口。
+    """
+
+    colorChanged = pyqtSignal(list)
+
+    def __init__(self, color=None, decimals: int = 3, alpha: bool = True, parent=None):
+        super().__init__(parent)
+        vals = [float(v) for v in list(color or [1.0, 1.0, 1.0, 1.0])][:4]
+        while len(vals) < 4:
+            vals.append(1.0)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(3)
+        self.spins = []
+        names = ("R", "G", "B", "A") if alpha else ("R", "G", "B")
+        for i, nm in enumerate(names):
+            tag = label(nm, "")
+            tag.setStyleSheet("color:%s; font-size:8pt;" % TEXT_FAINT)
+            tag.setAlignment(Qt.AlignCenter)
+            tag.setFixedWidth(10)
+            sp = make_spin(decimals, 0.0, 1.0, 0.01)
+            sp.setMinimumWidth(50)
+            sp.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            sp.setValue(vals[i])
+            sp.valueChanged.connect(lambda _v: self.colorChanged.emit(self.color()))
+            lay.addWidget(tag)
+            lay.addWidget(sp, 1)
+            self.spins.append(sp)
+
+    def color(self):
+        return [float(s.value()) for s in self.spins]
+
+    def set_color(self, c):
+        vals = [float(v) for v in list(c)[:4]]
+        while len(vals) < 4:
+            vals.append(1.0)
+        for sp, v in zip(self.spins, vals):
+            sp.blockSignals(True)
+            sp.setValue(v)
+            sp.blockSignals(False)
+
 class Switch(QAbstractButton):
     """现代开关，带滑动动画。"""
 

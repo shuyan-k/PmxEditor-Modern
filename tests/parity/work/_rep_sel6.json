@@ -1,0 +1,12 @@
+{
+ "log": [
+  "[boot] APP STARTED sel6 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx"
+ ],
+ "anomalies": [
+  {
+   "step": "boot",
+   "kind": "scenario-crash",
+   "detail": "Traceback (most recent call last):\n  File \"D:\\Project\\PmxEditor_Modern\\tests\\run.py\", line 405, in main_start\n    globals()[\"scen_\" + mode]()\n  File \"D:\\Project\\PmxEditor_Modern\\tests\\run.py\", line 1205, in scen_sel6\n    log(\"select calls=%d sel=%r status=%r\" % (st[\"n\"], WIN.doc.sel, WIN.status_label.text()))\nAttributeError: 'Document' object has no attribute 'sel'\n"
+  }
+ ]
+}

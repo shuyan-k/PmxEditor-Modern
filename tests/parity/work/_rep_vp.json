@@ -1,0 +1,52 @@
+{
+ "log": [
+  "[boot] APP STARTED vp dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] 视口尺寸=907x862 相机 dist=38.417 yaw=3.142 pitch=0.160 target=[ 0.         11.079446    0.41986156]",
+  "[boot] 拾取命中: {'bone': 210, 'joint': 10, 'rigid': 13}",
+  "[boot]    bone 首个=(398, 40, 104) 末个=(470, 814, 18)",
+  "[boot]    joint 首个=(398, 166, 0) 末个=(308, 418, 55)",
+  "[boot]    rigid 首个=(470, 220, 54) 末个=(326, 436, 71)",
+  "[boot] --- 单击骨骼 (本地坐标 416,418 期望 index=37)",
+  "[boot]     doc.sel=('bone', 37) vp.selection_kind='bone' 页=1 status='「左足D」不可移动 · 左键拖动位移 / 右键拖动旋转'",
+  "[boot]     vp._hover=''",
+  "[boot] --- 单击空白处 (10,10)",
+  "[boot]     doc.sel=('', -1)",
+  "[boot] --- 滚轮向下 3 格",
+  "[boot]     distance 38.4174 → 56.3741",
+  "[boot] --- 中键拖动 (旋转)",
+  "[boot]     yaw 3.1416 → 2.7816  pitch 0.1600 → 0.2640",
+  "[boot] --- Shift+中键拖动 (平移)",
+  "[boot]     target [0.0, 11.079445838928223, 0.4198615550994873] → [3.575, 13.43, 2.444]",
+  "[boot] --- 按键 F",
+  "[boot]     dist=38.417 target=[0.0, 11.079, 0.42]",
+  "[boot] === 姿态编辑（物理关闭）",
+  "[boot] --- 右键拖动骨骼旋转 index=104 本地(398,40)",
+  "[boot]     undo 0 → 1 status='姿态已更新'",
+  "[boot]     旋转变化的骨骼 = [104]",
+  "[boot] --- 左键拖动骨骼位移 index=104",
+  "[boot]     status='「兔耳_1_2.L」不可移动 · 左键拖动位移 / 右键拖动旋转'",
+  "[boot]     位移变化的骨骼 = []，旋转变化的骨骼 = []",
+  "[boot] --- 仅单击骨骼（不拖动）",
+  "[boot]     undo 1 → 1 status='「兔耳_1_2.L」不可移动 · 左键拖动位移 / 右键拖动旋转'",
+  "[boot] --- 按键 R 重置姿态",
+  "[boot]     status='姿态已重置'",
+  "[boot] === 物理演算开关",
+  "[boot]     物理模式刚体拾取: 12 处",
+  "[boot] --- 物理模式左键拖动刚体 index=54",
+  "[boot]     status='物理演算已开启 · 可同时摆姿（左键位移 / 右键旋转）'",
+  "[boot] --- 物理演算中左键拖动非物理骨骼 index=10",
+  "[boot]     位移变化=0.0000 physics=True status='「両目」不可移动 · 左键拖动位移 / 右键拖动旋转'"
+ ],
+ "anomalies": [
+  {
+   "step": "boot",
+   "kind": "pose-move",
+   "detail": "左键拖动骨骼后没有骨骼位移变化"
+  },
+  {
+   "step": "boot",
+   "kind": "phys-pose",
+   "detail": "物理演算中拖动骨骼没有改变姿态（0.000000）"
+  }
+ ]
+}

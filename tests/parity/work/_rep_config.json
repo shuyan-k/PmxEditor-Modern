@@ -1,0 +1,12 @@
+{
+ "log": [
+  "[boot] APP STARTED config dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] [cfg] 新建: D:\\Project\\PmxEditor_Modern\\pmxe_cfg_test\\settings.json 存在= True",
+  "[boot] [cfg] 写入后 theme='light' bg=1.25 grid=False",
+  "[boot] [cfg] 重载: theme='light' bg=1.25 grid=False gravity=-12.5",
+  "[boot] [cfg] 类型纠正: grid=False(bool) bg=1.5(float) mv=True(bool)",
+  "[boot] [cfg] 损坏恢复: theme='dark' error=True bak=True",
+  "[boot] [cfg] 窗口切换: current='light' memory='light' disk='light'"
+ ],
+ "anomalies": []
+}

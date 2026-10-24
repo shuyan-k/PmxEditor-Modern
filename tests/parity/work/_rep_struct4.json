@@ -1,0 +1,11 @@
+{
+ "log": [
+  "[boot] APP STARTED struct4 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot]  编辑后 24.8 ms 脏页=[1, 2, 3, 4, 5, 6, 7] 当前页=0",
+  "[boot]  切到骨骼页：脏页=[2, 3, 4, 5, 6, 7] 树顶层行数=3 骨骼数=169",
+  "[boot]  切到材质页：列表行数=21 材质数=21",
+  "[boot]  切到物理页：刚体行数=82 模型刚体=82",
+  "[boot]  撤销后 bones=168（原 168）"
+ ],
+ "anomalies": []
+}

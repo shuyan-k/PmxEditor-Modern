@@ -1,0 +1,11 @@
+{
+ "log": [
+  "[boot] APP STARTED click_rigid dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] kind='rigid' idx=0 rows=82 current=0",
+  "[boot] row1 rect=PyQt5.QtCore.QRect(0, 46, 486, 46)",
+  "[boot] clicking row1 ...",
+  "[boot] after click sel=('rigid',1) status='已打开 KARU式Rabbit Hole MIKU.ver 1.6.pmx' row=1",
+  "[boot] 2nd click sel=('rigid',1) status='已打开 KARU式Rabbit Hole MIKU.ver 1.6.pmx'"
+ ],
+ "anomalies": []
+}

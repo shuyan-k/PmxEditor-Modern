@@ -314,10 +314,19 @@ def remove_bone(model: PMXModel, index: int) -> int:
     parent = model.bones[index].parent
     del model.bones[index]
     for b in model.bones:
-        b.parent = _remap(b.parent, index)
+        if b.parent == index:
+            # 被删骨骼的子级改挂到它的父级：原版 PmxEditor 会把这类父索引
+            # 直接减一（挂到列表里前一根骨骼），语义上不如挂到真正的父级。
+            b.parent = parent
+        else:
+            b.parent = _remap(b.parent, index)
         if b.flags & BF_TAIL_INDEX:
+            target = b.tail_bone
             b.tail_bone = _remap(b.tail_bone, index)
-            if b.tail_bone < 0:
+            if target == index:
+                # 尾端指向的正好是被删骨骼：退回坐标偏移并清位。
+                # 指向别的骨骼（或本来就是 -1 但置位）时不碰标志位，
+                # 原版 PmxEditor 也不会改写这些骨骼的 flags。
                 b.flags &= ~BF_TAIL_INDEX
                 b.tail_offset = [0.0, 0.0, 0.0]
         b.append_parent = _remap(b.append_parent, index)
@@ -381,6 +390,52 @@ def duplicate_material(model: PMXModel, index: int) -> int:
     return len(model.materials) - 1
 
 
+def compact_vertices(model: PMXModel) -> int:
+    """删除没有被任何三角面引用的顶点，并重映射索引与顶点形态偏移。
+
+    原版 PmxEditor 删除材质（"连同三角面删除"）时会把只属于这些面的顶点一起
+    去掉；此前本实现只裁剪索引，模型里会留下孤立顶点。返回删除的顶点数。
+    """
+    n = model.n_vertices
+    if n == 0 or model.indices.size == 0:
+        return 0
+    idx = np.asarray(model.indices).reshape(-1).astype(np.int64)
+    used = np.zeros(n, dtype=bool)
+    ok = idx[(idx >= 0) & (idx < n)]
+    used[ok] = True
+    if bool(used.all()):
+        return 0
+    keep = np.nonzero(used)[0]
+    remap = np.full(n, -1, dtype=np.int64)
+    remap[keep] = np.arange(keep.size, dtype=np.int64)
+    safe = np.where((idx >= 0) & (idx < n), idx, 0)
+    model.v_pos = model.v_pos[keep]
+    model.v_nrm = model.v_nrm[keep]
+    model.v_uv = model.v_uv[keep]
+    if getattr(model, "v_add", None) is not None and len(model.v_add):
+        model.v_add = model.v_add[keep]
+    model.v_edge = model.v_edge[keep]
+    model.v_wtype = model.v_wtype[keep]
+    model.v_bones = model.v_bones[keep]
+    model.v_weights = model.v_weights[keep]
+    if getattr(model, "v_sdef", None) is not None and len(model.v_sdef):
+        model.v_sdef = model.v_sdef[keep]
+    model.indices = remap[safe].astype(model.indices.dtype)
+    for mo in model.morphs:
+        # 顶点形态（1）与 UV 系形态（3..7）都按顶点索引寻址
+        if int(mo.type) != 1 and not (3 <= int(mo.type) <= 7):
+            continue
+        out = []
+        for off in mo.offsets:
+            v = int(off.get("vertex", -1))
+            nv = int(remap[v]) if 0 <= v < n else -1
+            if nv >= 0:
+                off["vertex"] = nv
+                out.append(off)
+        mo.offsets = out
+    return int(n - keep.size)
+
+
 def remove_material(model: PMXModel, index: int, merge: bool = False) -> int:
     """删除材质；merge=True 时把它的三角面并入上一个材质（保留几何）。"""
     if not (0 <= index < len(model.materials)):
@@ -399,13 +454,18 @@ def remove_material(model: PMXModel, index: int, merge: bool = False) -> int:
                         off["material"] = mi - 1
                 mo.offsets = [o for o in mo.offsets if o.get("material", -1) >= 0]
         return index - 1
+    # PMX 里材质的 face_count 存的是"面顶点数"（每个三角面 3 个索引），
+    # 与 indices 的长度同单位；此前按三角面乘 3 计算，切片会越界而什么都没删。
     start = sum(int(m.face_count) for m in model.materials[:index])
     count = int(model.materials[index].face_count)
     if count > 0:
-        a = start * 3
-        b = (start + count) * 3
+        a = start
+        b = min(start + count, model.indices.size)
         model.indices = np.concatenate([model.indices[:a], model.indices[b:]])
     del model.materials[index]
+    if count > 0:
+        # 原版 PmxEditor 删材质会把只被这些面引用的顶点一并删掉，这里对齐
+        compact_vertices(model)
     for mo in model.morphs:
         if mo.type == 8:
             for off in mo.offsets:

@@ -1,0 +1,17 @@
+{
+ "log": [
+  "[boot] APP STARTED rest dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] tail-offset bone idx=0 flags=0xe",
+  "[boot] bone 0 name=操作中心 pos=[0.0, 0.0157, 0.0] tail=[0.0, 0.0, 0.0]",
+  "[boot] 位置写入后 model.pos=[0.0, 0.5157, 0.0]",
+  "[boot] 位置编辑: pose.rest_off delta=0.5000 deformer.rest_pos delta=0.5000 pix=0.07%",
+  "[boot] 尾端写入后 model.tail=[0.0, -0.5, 0.0] row=0",
+  "[boot] 尾端编辑: tail_offsets delta=0.5000",
+  "[boot] 父级编辑: bone 2 1 -> pose.parent=0",
+  "[boot] 三次撤销后 rest_pos 相对初始 0.00000",
+  "[boot] 权重骨骼 idx=8 verts=18604 pos=[-0.0, 17.263, 0.002]",
+  "[boot] 权重骨骼位移: pix=0.08% pos=[-0.0, 17.263, 0.302]",
+  "[boot] 撤销后 pix vs 位移前 = 0.05%"
+ ],
+ "anomalies": []
+}

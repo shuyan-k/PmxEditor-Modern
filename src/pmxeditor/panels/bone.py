@@ -64,11 +64,12 @@ class BonePage(PageBase):
         order_row.addStretch(1)
         form.add_full(order_row)
         self.move_verts_sw = Switch(False)
-        self.move_verts_sw.setChecked(
-            bool(Config.load().get("editor/move_bone_vertices", False)))
+        # 默认关闭：原版 PmxEditor 改骨骼位置时不会改动任何顶点，只有显式打开
+        # 这个开关才会按权重搬动顶点（那是本实现额外的便利功能）。
         self.move_verts_sw.toggled.connect(self._move_verts_toggled)
         self.move_verts_sw.setToolTip(
-            "开启后修改位置会按蒙皮权重把位移写进顶点（PMXEditor 习惯）")
+            "开启后修改位置会按蒙皮权重把位移写进顶点（原版 PmxEditor 不会这样，"
+            "默认关闭以保持保存结果一致）")
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.move_verts_sw)
@@ -518,7 +519,12 @@ class BonePage(PageBase):
                   "bone", "bone.layer")
 
     def _move_verts_toggled(self, on):
-        Config.load().set("editor/move_bone_vertices", bool(on))
+        # 不写进设置：这个开关只影响本次会话，避免下次启动时静默把顶点改动带进
+        # 保存结果（与原版 PmxEditor 的差异就来自这里）。
+        if on:
+            self.set_hint("已开启「移动时带动顶点」：保存结果会与原版 PmxEditor 不同")
+        else:
+            self.set_hint("")
 
     def _pos_changed(self):
         if self.loading:
@@ -637,7 +643,8 @@ class BonePage(PageBase):
             if on:
                 from ..pmx import IK
                 _set_flag(b, BF_IK, True)
-                b.ik = IK(target=-1, links=[])
+                # 与原版 PmxEditor 一致：新建 IK 用 loop=0 / angle=1.0（弧度）作为初值
+                b.ik = IK(target=-1, loop=0, angle=1.0, links=[])
             else:
                 _set_flag(b, BF_IK, False)
                 b.ik = None
