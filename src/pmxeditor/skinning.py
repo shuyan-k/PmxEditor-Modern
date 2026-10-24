@@ -178,6 +178,9 @@ def mat4_inverse(m) -> np.ndarray:
 
 # ---------------------------------------------------------------- 姿态
 
+SDEF_AS_BDEF2 = False  # 规避开关：为 True 时把 SDEF(3) 当 BDEF2(1) 处理
+
+
 class Pose:
     def __init__(self, model):
         self.model = model
