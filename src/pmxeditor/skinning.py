@@ -711,7 +711,7 @@ class Pose:
                 if np.linalg.norm(goal - eff) < 1e-3:
                     break
                 moved = False
-                for link in reversed(links):
+                for link in links:
                     if link.limited and all(
                             abs(float(link.hi[k]) - float(link.lo[k])) < 1e-6
                             for k in range(3)):
