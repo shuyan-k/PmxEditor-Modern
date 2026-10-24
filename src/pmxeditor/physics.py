@@ -18,6 +18,7 @@ import numpy as np
 
 from . import paths
 from .native_backend import core as native_core
+from .pmx import BF_AFTER_PHYSICS
 from .skinning import (Pose, euler_to_quat, mat4_inverse, mat_to_quat, quat_to_mat,
                       translation, transform_to_mat4)
 
@@ -317,9 +318,16 @@ class MMDPhysics:
                 self._override_rotations, self._override_translations,
                 self._override_mask)
             pose.clear_overrides()
+            after = np.fromiter(
+                (bool(b.flags & BF_AFTER_PHYSICS) for b in pose.model.bones),
+                dtype=bool, count=nb)
             for bone in np.flatnonzero(self._override_mask):
-                pose.ov_rot[int(bone)] = self._override_rotations[bone]
-                pose.ov_trans[int(bone)] = self._override_translations[bone]
+                bone = int(bone)
+                if after[bone]:
+                    # 「物理后变形」：物理算完再套用手工姿态，刚体不覆盖骨骼
+                    continue
+                pose.ov_rot[bone] = self._override_rotations[bone]
+                pose.ov_trans[bone] = self._override_translations[bone]
         else:
             posbuf = (ctypes.c_float * 3)()
             quatbuf = (ctypes.c_float * 4)()
@@ -359,7 +367,7 @@ class MMDPhysics:
                 p = pose.parent[bone]
                 Wp = Wcur[p] if p >= 0 else ident
                 hit = by_bone.get(bone)
-                if hit:
+                if hit and not (pose.model.bones[bone].flags & BF_AFTER_PHYSICS):
                     i = hit[-1]
                     body_m = transform_to_mat4(
                         self._body_positions[i], self._body_rotations[i])

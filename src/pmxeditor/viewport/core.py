@@ -14,7 +14,8 @@ from PyQt5.QtGui import (QColor, QFont, QFontMetrics, QImage, QImageReader, QOpe
 from PyQt5.QtWidgets import QOpenGLWidget, QSizePolicy
 from .. import gl_names
 from ..physics import MMDPhysics
-from ..pmx import MF_DOUBLE_SIDED, MF_EDGE, SHAPE_NAMES
+from ..pmx import (BF_ENABLED, BF_ROTATABLE, BF_TRANSLATABLE, BF_VISIBLE,
+                   MF_DOUBLE_SIDED, MF_EDGE, SHAPE_NAMES)
 from ..skinning import (Pose, SkinDeformer, apply_vertex_morphs, active_ik_indices, material_morph_colors, resolve_morph_weights, transform_to_mat4)
 from ..theme import (ACCENT, BONE_RGB, GRID_MAJOR_RGB, GRID_MINOR_RGB, GRID_X_RGB, GRID_Z_RGB, GROUP_COLORS, RIGID_STATIC_RGB, TEX_MISS_BG, TEX_MISS_CELL, TEXT, TEXT_DIM, TEXT_FAINT, VIEW_BG_RGB, mono_font, ui_font)
 from .camera import OrbitCamera
@@ -1865,6 +1866,9 @@ class Viewport(QOpenGLWidget):
             return
         changed_bones = set()
         for mode, bone, dx, dy in pending:
+            if self.bone_drag_block(bone, mode):
+                # 拖动途中标志被改（或撤销恢复到旧标志）：丢弃这条增量
+                continue
             changed_bones.add(bone)
             if mode == "rotate":
                 self.pose.rotate_world(bone, (0.0, 1.0, 0.0), dx * 0.012)
@@ -1890,6 +1894,26 @@ class Viewport(QOpenGLWidget):
         self._pose_dirty = True
         self.update()
 
+    def _bone_flags(self, index: int) -> int:
+        m = self.model
+        if not m or not (0 <= index < len(m.bones)):
+            return 0
+        return int(m.bones[index].flags)
+
+    def bone_drag_block(self, index: int, mode: str) -> str:
+        """返回阻止拖动骨骼的原因（空串表示可拖动）。
+
+        对应 PMX 骨骼标志：可操作（否则视口里不能选）、可移动、可旋转。
+        """
+        flags = self._bone_flags(index)
+        if not (flags & BF_ENABLED):
+            return "不可操作"
+        if mode == "move" and not (flags & BF_TRANSLATABLE):
+            return "不可移动"
+        if mode == "rotate" and not (flags & BF_ROTATABLE):
+            return "不可旋转"
+        return ""
+
     def _begin_bone_drag(self, index: int, mode: str):
         """按下骨骼：先选中，再按左键/右键进入位移/旋转拖动。"""
         old_kind = self.selection_kind
@@ -1900,8 +1924,20 @@ class Viewport(QOpenGLWidget):
         # 撤销记录推迟到真正拖动时：单击不拖动不该压入撤销栈
         self._edit_pushed = False
         self._pose_moved = False
-        self._drag_bone = index
+        self._dragging = None
         self._armed_bone = index
+        blocked = self.bone_drag_block(index, mode)
+        if blocked:
+            # 选中仍然生效（方便看是哪个骨骼被挡住），只是不进入拖动
+            self._drag_bone = -1
+            name = ""
+            if self.model and 0 <= index < len(self.model.bones):
+                name = self.model.bones[index].name or ""
+            self.statusChanged.emit(
+                "「%s」%s · 左键拖动位移 / 右键拖动旋转" % (name or "骨骼", blocked))
+            self.setCursor(Qt.ArrowCursor)
+            return
+        self._drag_bone = index
         self._dragging = mode
         self._last_mouse = self._press_pos
         self.setCursor(Qt.SizeAllCursor if mode == "move" else Qt.CrossCursor)
@@ -2116,7 +2152,9 @@ class Viewport(QOpenGLWidget):
             return others
         out = bones
         for i, b in enumerate(m.bones):
-            if not (b.flags & 0x0008):
+            # 骨骼标志：不可见 / 不可操作的骨骼不参与视口拾取
+            # （不可操作的骨骼仍可在骨骼列表里选中查看，但视口里点不到）
+            if not (b.flags & BF_VISIBLE) or not (b.flags & BF_ENABLED):
                 continue
             head = world[i][:3, 3]
             if b.flags & 0x0001 and 0 <= b.tail_bone < len(m.bones):

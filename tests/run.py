@@ -4874,3 +4874,209 @@ def scen_hover():
         anomaly("hover-clear", "移出骨骼后悬停状态未清除")
     H.dump()
 
+
+def scen_flagguard():
+    """骨骼标志：可操作/可移动/可旋转在视口里必须真的挡住；物理后变形不被刚体覆盖。"""
+    from PyQt5.QtCore import QEvent, QPointF, Qt
+    from PyQt5.QtGui import QMouseEvent
+    from pmxeditor import skinning as _sk
+    from pmxeditor.physics import MMDPhysics
+    from pmxeditor.pmx import (BF_AFTER_PHYSICS, BF_ENABLED, BF_ROTATABLE,
+                               BF_TRANSLATABLE, BF_VISIBLE)
+    np = __import__("numpy")
+
+    path = sys.argv[3] if len(sys.argv) > 3 else os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "test_model.pmx")
+    WIN.open_path(path)
+    pump(320)
+    doc, vp = WIN.doc, WIN.viewport
+    m = doc.model
+    if m is None:
+        anomaly("flag-model", "模型没有载入")
+        H.dump()
+        return
+
+    def set_flag(index, flag, on):
+        def fn(model):
+            b = model.bones[index]
+            b.flags = (b.flags | flag) if on else (b.flags & ~flag)
+        doc.edit("修改骨骼标志", fn, "bone")
+        pump(80)
+
+    def screen_of(index):
+        w = vp.pose.world()
+        return vp.camera.project(w[index][:3, 3], vp.width(), vp.height())
+
+    def send(kind, x, y, btn, buttons):
+        ev = QMouseEvent(kind, QPointF(x, y), QPointF(x, y), QPointF(x, y),
+                         btn, buttons, Qt.NoModifier)
+        if kind == QEvent.MouseButtonPress:
+            vp.mousePressEvent(ev)
+        elif kind == QEvent.MouseMove:
+            vp.mouseMoveEvent(ev)
+        else:
+            vp.mouseReleaseEvent(ev)
+
+    idx = -1
+    for i, b in enumerate(m.bones):
+        need = BF_ROTATABLE | BF_TRANSLATABLE | BF_ENABLED
+        if b.ik is None and (b.flags & need) == need:
+            idx = i
+            break
+    if idx < 0:
+        anomaly("flag-bone", "找不到可用的测试骨骼")
+        H.dump()
+        return
+    log("测试骨骼 #%d %s flags=0x%04x" % (idx, m.bones[idx].name, m.bones[idx].flags))
+
+    if not screen_of(idx):
+        anomaly("flag-screen", "骨骼不在视口内")
+        H.dump()
+        return
+    px, py = 0, 0
+    cam0 = (vp.camera.yaw, vp.camera.pitch, vp.camera.target.copy(),
+            vp.camera.distance)
+
+    def at():
+        """按下前重算屏幕坐标：空白处拖动会转视角，坐标会失效。"""
+        q = screen_of(idx) or (0, 0)
+        return int(q[0]), int(q[1])
+
+    def restore_cam():
+        vp.camera.yaw, vp.camera.pitch = cam0[0], cam0[1]
+        vp.camera.target = cam0[2].copy()
+        vp.camera.distance = cam0[3]
+        vp.update()
+        pump(40)
+
+    # 1) 可操作的骨骼能被拾取
+    px, py = at()
+    kind, hit = vp.pick(px, py)
+    log("可操作=开: pick=%s/%d" % (kind, hit))
+    if not (kind == "bone" and hit == idx):
+        anomaly("flag-pick-on", "可操作骨骼没被拾取到（%s/%d）" % (kind, hit))
+
+    # 2) 关掉可操作 -> 视口里点不到
+    set_flag(idx, BF_ENABLED, False)
+    px, py = at()
+    kind, hit = vp.pick(px, py)
+    log("可操作=关: pick=%s/%d" % (kind, hit))
+    if kind == "bone" and hit == idx:
+        anomaly("flag-operable", "不可操作的骨骼仍能在视口里拾取")
+    # 关掉可操作的骨骼也不能被拖动
+    trans0 = vp.pose.base_trans.copy()
+    send(QEvent.MouseButtonPress, px, py, Qt.LeftButton, Qt.LeftButton)
+    send(QEvent.MouseMove, px + 40, py + 20, Qt.NoButton, Qt.LeftButton)
+    send(QEvent.MouseButtonRelease, px + 40, py + 20, Qt.LeftButton, Qt.NoButton)
+    pump(80)
+    if np.any(vp.pose.base_trans != trans0):
+        anomaly("flag-operable-move", "不可操作的骨骼仍被拖动了")
+    restore_cam()
+    set_flag(idx, BF_ENABLED, True)
+
+    # 3) 可移动=开时左键拖动确实位移（对照组）
+    restore_cam()
+    px, py = at()
+    trans0 = vp.pose.base_trans[idx].copy()
+    send(QEvent.MouseButtonPress, px, py, Qt.LeftButton, Qt.LeftButton)
+    send(QEvent.MouseMove, px + 40, py + 10, Qt.NoButton, Qt.LeftButton)
+    send(QEvent.MouseButtonRelease, px + 40, py + 10, Qt.LeftButton, Qt.NoButton)
+    pump(120)
+    moved = float(np.abs(vp.pose.base_trans[idx] - trans0).sum())
+    log("可移动=开: 位移量=%.5f" % moved)
+    if moved < 1e-5:
+        anomaly("flag-move-on", "可移动骨骼左键拖动没有位移（%.6f）" % moved)
+
+    # 4) 关掉可移动 -> 左键拖动不动
+    restore_cam()
+    set_flag(idx, BF_TRANSLATABLE, False)
+    px, py = at()
+    trans1 = vp.pose.base_trans.copy()
+    send(QEvent.MouseButtonPress, px, py, Qt.LeftButton, Qt.LeftButton)
+    send(QEvent.MouseMove, px + 40, py + 10, Qt.NoButton, Qt.LeftButton)
+    send(QEvent.MouseButtonRelease, px + 40, py + 10, Qt.LeftButton, Qt.NoButton)
+    pump(80)
+    if np.any(vp.pose.base_trans != trans1):
+        anomaly("flag-translatable", "不可移动的骨骼仍被左键拖动了")
+    set_flag(idx, BF_TRANSLATABLE, True)
+
+    # 5) 可旋转=开时右键拖动确实旋转（对照组）
+    restore_cam()
+    px, py = at()
+    rot0 = vp.pose.base_rot[idx].copy()
+    send(QEvent.MouseButtonPress, px, py, Qt.RightButton, Qt.RightButton)
+    send(QEvent.MouseMove, px + 40, py + 20, Qt.NoButton, Qt.RightButton)
+    send(QEvent.MouseButtonRelease, px + 40, py + 20, Qt.RightButton, Qt.NoButton)
+    pump(120)
+    turned = float(np.abs(vp.pose.base_rot[idx] - rot0).sum())
+    log("可旋转=开: 旋转量=%.5f" % turned)
+    if turned < 1e-5:
+        anomaly("flag-rotate-on", "可旋转骨骼右键拖动没有旋转（%.6f）" % turned)
+
+    # 6) 关掉可旋转 -> 右键拖动不转
+    set_flag(idx, BF_ROTATABLE, False)
+    px, py = at()
+    rot1 = vp.pose.base_rot.copy()
+    send(QEvent.MouseButtonPress, px, py, Qt.RightButton, Qt.RightButton)
+    send(QEvent.MouseMove, px + 40, py + 20, Qt.NoButton, Qt.RightButton)
+    send(QEvent.MouseButtonRelease, px + 40, py + 20, Qt.RightButton, Qt.NoButton)
+    pump(80)
+    if np.any(vp.pose.base_rot != rot1):
+        anomaly("flag-rotatable", "不可旋转的骨骼仍被右键拖转了")
+    set_flag(idx, BF_ROTATABLE, True)
+
+    # 7) 显示=False 的骨骼也不该被拾取
+    restore_cam()
+    set_flag(idx, BF_VISIBLE, False)
+    px, py = at()
+    kind, hit = vp.pick(px, py)
+    log("显示=关: pick=%s/%d" % (kind, hit))
+    if kind == "bone" and hit == idx:
+        anomaly("flag-visible", "隐藏的骨骼仍能被拾取")
+    set_flag(idx, BF_VISIBLE, True)
+
+    # 8) 物理后变形：刚体不再覆盖该骨骼，取消后恢复覆盖
+    phys = MMDPhysics()
+    if not phys.build(m):
+        log("物理不可用（%s），跳过物理后变形检查" % phys.error)
+        H.dump()
+        return
+    phys.enabled = True
+    driven = []
+    for bi, bone in enumerate(phys.bone_of_body):
+        if bone >= 0 and phys.modes[bi] != 0 and bone not in driven:
+            driven.append(bone)
+    log("刚体驱动的骨骼 %d 根: %s" % (len(driven), driven[:6]))
+    if not driven:
+        log("没有动态刚体绑定的骨骼，跳过物理后变形检查")
+        phys.release()
+        H.dump()
+        return
+
+    def overridden(bone_index):
+        pose = _sk.Pose(m)
+        pose.apply({}, m.morphs)
+        for _ in range(4):
+            phys.step(pose, 1.0 / 60.0, {}, m.morphs)
+            pose.apply({}, m.morphs)
+        return bone_index in pose.ov_rot
+
+    target = driven[0]
+    had = overridden(target)
+    log("骨骼 #%d 默认被刚体覆盖=%r" % (target, had))
+    set_flag(target, BF_AFTER_PHYSICS, True)
+    after = overridden(target)
+    log("骨骼 #%d 物理后变形=开 被刚体覆盖=%r" % (target, after))
+    if had and after:
+        anomaly("flag-after-physics", "物理后变形的骨骼仍被刚体覆盖")
+    set_flag(target, BF_AFTER_PHYSICS, False)
+    back = overridden(target)
+    log("骨骼 #%d 物理后变形=关 被刚体覆盖=%r" % (target, back))
+    if had and not back:
+        anomaly("flag-after-physics-off", "取消物理后变形后刚体没有恢复覆盖")
+    phys.release()
+
+    WIN._select_page(1)
+    pump(180)
+    H.shot(WIN, "flagguard")
+    H.dump()

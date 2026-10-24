@@ -168,11 +168,11 @@ PmxEditor_Modern/
 
 ### `physics.py` — Bullet
 
-用 ctypes 加载 `native/bullet_phys.dll`（C 包装层 `bw_*`）。刚体语义与 MMD 对齐：`跟随骨骼` 为运动学体、`物理演算` 由 Bullet 求解并回写、关节用 `btGeneric6DofSpringConstraint` 保留三轴限位与弹簧、限位 `min > max` 视为自由轴。PMX 2.1 软体只读写不演算。
+用 ctypes 加载 `native/bullet_phys.dll`（C 包装层 `bw_*`）。刚体语义与 MMD 对齐：`跟随骨骼` 为运动学体、`物理演算` 由 Bullet 求解并回写、关节用 `btGeneric6DofSpringConstraint` 保留三轴限位与弹簧、限位 `min > max` 视为自由轴。PMX 2.1 软体只读写不演算。被标记「物理后变形」(`BF_AFTER_PHYSICS`) 的骨骼不接收刚体覆盖：原生与 NumPy 两条覆盖路径都会跳过它，演算结束后该骨骼保持手工姿态。
 
 ### `viewport/` — 渲染与交互
 
-自绘 `QOpenGLWidget`：网格按材质批次上传，绘制顺序为 地面/阴影 → 不透明 → 透明（`MF_DOUBLE_SIDED` 关闭背面剔除）→ 描边 → 叠加层 → HUD。贴图缓存键是 `(贴图路径, 是否球面)`，**编辑材质不会清空缓存**（只有 `initializeGL` 建立新上下文时才清一次）。相机为轨道相机，拾取用屏幕距离启发式（骨骼/刚体/关节，按屏幕距离与深度排序，Alt+单击循环重叠目标），HUD 空闲时显示"空闲"而不是残留 FPS。
+自绘 `QOpenGLWidget`：网格按材质批次上传，绘制顺序为 地面/阴影 → 不透明 → 透明（`MF_DOUBLE_SIDED` 关闭背面剔除）→ 描边 → 叠加层 → HUD。贴图缓存键是 `(贴图路径, 是否球面)`，**编辑材质不会清空缓存**（只有 `initializeGL` 建立新上下文时才清一次）。相机为轨道相机，拾取用屏幕距离启发式（骨骼/刚体/关节，按屏幕距离与深度排序，Alt+单击循环重叠目标），HUD 空闲时显示"空闲"而不是残留 FPS。骨骼页的六个开关在视口里都有实际效果：`BF_VISIBLE` 关掉的骨骼不绘制也不参与拾取；`BF_ENABLED`（可操作）关掉后拾取直接跳过（列表仍可选中，拖动时状态栏提示“不可移动/不可旋转”）；`BF_TRANSLATABLE` 只门控左键位移、`BF_ROTATABLE` 只门控右键旋转（拖动途中改开关立即失效）；`BF_AFTER_PHYSICS`（物理后变形）让刚体不覆盖该骨骼的手工姿态；`BF_LOCAL_APPEND` 走付与链。
 
 ### `panels/` / `ui_widgets.py` / `theme.py` — 界面层
 
@@ -292,6 +292,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | `optim` | 组/翻转形态递归展开、附加 UV 不被当成容器、物理参数热更新、Alt 循环拾取 |
 | `undobudget` | 模型快照与姿态条目各 12 步预算、互不挤占 |
 | `restmove` | 进入骨骼页是否自动显示骨架；「移动时带动顶点」开/关时顶点位移与撤销还原 |
+| `flagguard` | 骨骼页六个开关：不可操作=不可拾取/不可拖动、可移动管左键位移、可旋转管右键旋转、显示=关不拾取、物理后变形=刚体不覆盖手工姿态（合成模型 + Bullet 夹具） |
 | `poseundo` | 姿态拖动压的是轻量条目（0.04 ms vs 整模型 27 ms）、撤销不换模型对象、`R` 重置可撤销、与模型编辑按顺序混排 |
 | `struct` | 结构编辑走分项重建：不重传网格、不动相机、不重预热贴图 |
 | `struct2` | 同一结构编辑「分项 vs 全量」耗时对比 |
@@ -329,7 +330,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 3. `.\build\python\python.exe tests\go.py verify_p0 dark tests\test_model.pmx`：颜色按钮与物理页选择不崩溃。
 4. `.\build\python\python.exe tests\go.py walk dark tests\test_model.pmx`：异常应只剩已知噪声（spinbox 内部行编辑、滚动箭头、已选中的分段、被 patch 的菜单、harness 自身遍历表头的崩溃），条数随点击顺序在 20~36 之间浮动。
 5. 加载真实模型：顶点/骨骼/刚体/关节数量与参考一致，贴图、描边、线框、灰模正常。
-6. 姿态编辑：左键拖动位移、右键拖动旋转、IK 控制器拖动、付与、`R` 重置；撤销后姿态逐点还原。
+6. 姿态编辑：左键拖动位移、右键拖动旋转、IK 控制器拖动、付与、`R` 重置；撤销后姿态逐点还原。骨骼页关掉“可操作/可移动/可旋转/显示”后对应操作确实失效（`go.py flagguard`）。
 7. 物理演算：开关切换无报错，关闭后姿态恢复；开启时仍能拖动骨骼（被刚体驱动的骨骼会被物理覆盖）。
 8. 撤销/重做：结构编辑与字段编辑各一次。
 9. 保存后重新打开：计数全等，顶点/UV 最大差为 0。
@@ -443,6 +444,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 
 ## 更新记录
 
+- **2026-10-25 骨骼页六个开关在视口里真正生效**：此前只有“显示”被画笔与拾取读取，“可操作/可移动/可旋转/物理后变形”在视口里都是空转（用户报告：未开“可移动”的骨骼照样能拖）。`viewport/core.py` 的 `_pick_candidates()` 改为同时要求 `BF_VISIBLE` 与 `BF_ENABLED`；新增 `bone_drag_block(index, mode)`（“不可操作/不可移动/不可旋转”）并由 `_begin_bone_drag()` 与 `_flush_pose_updates()` 双重把关，被挡时状态栏提示、光标保持箭头；`physics.py` 的两条覆盖路径都跳过 `BF_AFTER_PHYSICS` 的骨骼（“物理后变形”= 物理算完再用手工姿态）。新增 `go.py flagguard` 覆盖六个开关（含 Bullet 夹具验证物理后变形）；没有引入 `Pose.refresh_flags()` 之类的死代码——`pose_state()` 已包含 `b.flags`，改标志会重建 Pose。
 - **2026-10-25 合并三视图、物理改为开关、位移/旋转解耦**：删掉「浏览 / 姿态 / 物理」三选一——`Viewport` 去掉 `mode` 字段与 `set_mode()`，只保留 `set_physics(bool)`；工具栏在原 Segmented 的位置放一个 `Switch`（「物理演算」），「视图」菜单同一开关（快捷键 `P`），两者按 `physics.enabled` 双向同步。姿态编辑不再受模式门控：左键拖动骨骼 = 位移、右键拖动骨骼 = 旋转（空白处仍是左拖动视角 / 右拖平移 / 中键旋转 / Shift+中键平移），双击骨骼给出「左键位移 · 右键旋转」提示；IK 控制器被拖动时解算仍会带动整条链。物理与姿态可以同时生效，受刚体驱动的骨骼每步被 `ov_*` 覆盖，其余骨骼保持手摆结果；为让「一边演算一边摆姿」看得见，开启演算时自动打开骨骼/刚体/关节叠加。`_pick_candidates()` 改为骨骼优先、刚体/关节仅在光标附近没有骨骼线段时兜底（`show_rigid`/`show_joints` 打开才参与）；`Viewport` 删除 `self.mode = "browse"` 与 set_model/clear_model 里的模式复位。撤销标签拆成「移动骨骼」「旋转骨骼」，`app.POSE_EDIT_LABELS` 保证它们仍走轻量姿态条目（不克隆整模型）；VPD 导入前若在演算则先停演算，`_reload_structure()` 按 `physics.enabled` 恢复。HUD 徽标改为「摆姿 / 物理演算」，`F/R/P` 快捷键与设置页快捷键表同步。
 - **2026-10-25 仓库清理与 README 复核**：删掉 `build/` 下的 Nuitka 中间件与旧构建日志（保留 `build/python` 便携运行时）、`dist/` 里三份过期发行包（r4/r5/r6 共约 1.2 GB，均已落后于当前源码）、`tests/` 的临时诊断产物（`_probe_out*.txt`、`blender*.log/npz`、`out.pmx`、`report.json`、`sync_*.vpd`、`shots/` 截图）与各处 `__pycache__`，合计约 1.38 GB；`native/obj/`（Bullet 导入库）与 `src/pmxeditor/_pmx_core*.pyd` 保留，以免下次构建退化。README 同步：功能表的发布行不再声称仓库内有与源码一致的 exe（`dist/` 改为构建时生成）、SDEF 段落改写为「蒙皮一律按 BDEF2、求值器只作对拍基线」并按现状补充 `_sdef_fallback_table()`、删除「视图 → SDEF 降级」与 `SDEF_AS_BDEF2` 的残留描述、目录树去掉 `dist/`、路线图里过时的「SDEF 半轴插值」换成权重绘制。
 - **2026-10-25 移除 VMD 播放、SDEF 改按 BDEF2**：动作播放属于动画软件的职责，模型编辑器只保留静态姿态（VPD 导入导出）。删掉 `vmd.py`、`timeline.py`、底部时间轴控件、`Viewport.apply_bone_tracks()`、文件菜单的「载入动作/关闭动作」、`tools/compare_blender.py`/`blender_dump.py` 与 8 个 VMD 场景（`vmd`/`vmdreal`/`vmdprobe`/`vmdphys`/`vmdcheck`/`vmdbad`/`vmdsdef`/`knee`），`tests/run.py` 因此少约 430 行。同时把 SDEF 从「可选降级」改成「一律按 BDEF2」（`skinning._sdef_fallback_table()` 固定把 type 3 映射成 1），视图菜单里的降级开关与 QSettings `view/sdef_as_bdef2` 一并删除：半轴口径修正后 SDEF 膝带仍比 BDEF2 外推 0.05~0.16，侧视有台阶，而 PmxEditor 的膝盖观感就是 BDEF2。`.pmx` 里 SDEF 的 C/R0/R1 仍原样解析与回写，`skin`/`ellipsoid`/`sdefr1` 三个场景继续直接调用 `native_core.deform` 对拍两条求值路径。
