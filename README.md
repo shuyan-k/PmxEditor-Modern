@@ -462,4 +462,8 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 
 ## 许可
 
-本仓库尚未附带 LICENSE 文件，默认保留所有权利；如需开源分发，请先补充许可证声明。PMX 格式与 MMD 相关名称归各自权利人所有。
+本项目以 **GNU General Public License v3.0** 发布，全文见 [LICENSE](LICENSE)。
+
+你可以自由使用、修改与再分发；分发衍生作品时须同样以 GPL-3.0 授权并提供完整源码。
+
+PMX 格式、MikuMikuDance 及相关名称归各自权利人所有；本仓库不包含 MMD 本体或其素材。
