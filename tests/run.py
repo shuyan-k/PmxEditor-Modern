@@ -5443,3 +5443,4 @@ def scen_small_fixes():
         if not ok:
             anomaly("small-vbones", "存在越界骨骼索引")
     log("[small-fixes] 材质并入/骨骼上下移/新建骨骼/层级范围均通过")
+

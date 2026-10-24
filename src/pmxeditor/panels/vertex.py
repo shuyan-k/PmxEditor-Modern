@@ -27,7 +27,9 @@ class VertexPage(PageBase):
         self.add_tool("search", "跳转到顶点索引", self._jump)
         self.add_tool("mesh", "刷新诊断", self._refresh_stats)
 
-        card, sec = self._card("定位", "共 0 个顶点")
+        card, sec = self._card("定位")
+        self.detail_hint = label("未载入模型", "Faint", True)
+        sec.add(self.detail_hint)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
@@ -49,7 +51,7 @@ class VertexPage(PageBase):
         card, sec = self._card("属性")
         self.pos_spin = AxisSpin(4, 0.01)
         self.nrm_spin = AxisSpin(4, 0.01)
-        self.uv_spin = AxisSpin(5, 0.001)
+        self.uv_spin = UVSpin()
         self.edge_spin = make_spin(5, 0.0, 1000.0, 0.01)
         form = Form(58)
         form.add("位置", self.pos_spin)
@@ -133,8 +135,9 @@ class VertexPage(PageBase):
         self.index_spin.blockSignals(True)
         self.index_spin.setRange(0, max(0, n - 1))
         self.index_spin.blockSignals(False)
-        if n and self.idx >= n:
-            self.idx = n - 1
+        if n and (self.idx >= n or self.idx < 0):
+            self.idx = max(0, min(self.idx, n - 1)) if self.idx >= 0 else 0
+        self.detail_hint.setText("共 %d 个顶点" % n if n else "未载入模型")
         self.pos_hint.setText("未载入模型" if not n else "")
         self._fill()
         self._refresh_stats()
@@ -293,6 +296,39 @@ class VertexPage(PageBase):
             self.stats_label.setText(" · ".join(parts))
         except Exception as exc:  # pragma: no cover - 诊断失败不该拖垮页面
             self.stats_label.setText("诊断失败：%s" % exc)
+
+
+class UVSpin(QWidget):
+    """UV 两个分量。"""
+
+    AXIS_COLORS = ("#e07a7a", "#7fc98a")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.spins = []
+        for i, ax in enumerate("UV"):
+            tag = label(ax, "")
+            tag.setFixedWidth(12)
+            tag.setStyleSheet("color:%s; font-size:8pt; font-weight:600;"
+                              % self.AXIS_COLORS[i])
+            sp = make_spin(5, -99999.0, 99999.0, 0.001)
+            sp.setMinimumWidth(52)
+            lay.addWidget(tag)
+            lay.addWidget(sp, 1)
+            self.spins.append(sp)
+
+    def value(self):
+        return [float(x.value()) for x in self.spins]
+
+    def set_value(self, vals):
+        vals = list(vals) + [0.0] * (2 - len(vals))
+        for sp, v in zip(self.spins, vals[:2]):
+            sp.blockSignals(True)
+            sp.setValue(float(v))
+            sp.blockSignals(False)
 
 
 class QFormRow(QWidget):
