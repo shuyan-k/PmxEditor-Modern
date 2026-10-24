@@ -21,7 +21,7 @@
 | 物理 | Bullet 刚体/关节构建与实时步进，骨骼跟随与动态刚体，姿态覆盖与重置 | PMX 2.1 软体只读写不演算；重力与迭代次数可热更新，其余参数需重建物理世界 |
 | 视口 | 贴图/灰模、线框、卡通光照、描边、地面网格、骨骼/刚体/关节叠加、背景/模型亮度、拾取与 HUD | 整帧性能取决于 GPU、驱动与显示开关 |
 | 编辑历史 | 模型编辑撤销/重做（12 步，0.9 s 内同键合并）；姿态拖动/`R` 重置/VPD 导入用轻量姿态条目，不占整模型快照 | 模型快照与姿态条目各有 12 步预算，互不挤占；不是无限历史 |
-| 发布 | Nuitka 单文件发行包，内置 `--verify-backend` 数值对拍；当前 `dist/release-r6`（28.9 MB）与本仓库源码一致，已在剥离 PATH 的隔离环境用真实模型验收 | 跨驱动（另一块 GPU）复测仍待完成 |
+| 发布 | Nuitka 单文件发行包，内置 `--verify-backend` 数值对拍；构建命令见「打包与发布」，产物不入库（`dist/` 由构建生成，仓库不保留 exe） | 跨驱动（另一块 GPU）复测仍待完成 |
 
 ### 视口鼠标约定
 
@@ -98,7 +98,6 @@ PmxEditor_Modern/
 ├─ tools/                   # 命令行工具（数值对拍、VPD 校验、性能基准、便携 Python）
 ├─ tests/                   # GUI 自动化测试（真实点击驱动）+ 测试模型
 ├─ build/python/            # 便携 CPython 3.10（编译与回归统一使用）
-├─ dist/                    # 发行包输出目录
 ├─ requirements.txt
 ├─ run.bat
 └─ .gitignore
@@ -162,7 +161,7 @@ PmxEditor_Modern/
 
 ### `skinning.py` — 姿态、付与、IK、蒙皮
 
-`Pose` 保存 `base_rot/base_trans`（编辑源）与 `rot/trans`（生效值）、`eval_order`、`world_cache` 与 `_dirty`。付与继承区分 `BF_INHERIT_ROT` / `BF_INHERIT_MOV` / `BF_LOCAL_APPEND`，按 `eval_order` 求值；IK 为 CCD 实现（逐链刷新末端、世界增量左乘），并以 FK 旋转作为迭代初值；若某条链解完末端残差仍超过 `ik_retry_tolerance`（0.05 模型单位），会把这条链的骨骼旋转清零后单独重解一次，只有残差变小才采用，避免从 VMD 的大角度初值收敛到镜像解（实测米娅帧 136 双膝跨到身体另一侧，修复后右膝 x=-2.78/左膝 x=+2.40，与 MMD 同侧）；蒙皮支持 BDEF1/2/4 与 SDEF/QDEF：SDEF 在骨骼 0/1 的混合中心点之间做球面插值（顶点到 C 点的距离保持静止半径），QDEF 用双四元数混合避免关节塌陷；两者在原生 `_pmx_core` 与 NumPy 回退路径里语义一致。SDEF 的 R0/R1 都参与椭球各向异性（半径 = 静止距离 x 椭球伸缩比，静止方向与当前方向用同一组半轴度量，因此静止姿态严格回到球面半径；半轴取逐轴 `|R − C|`——PMX 里 R0/R1 存的是"点"，模型库实测 `R0−C` 与 `R1−C` 恒为 180° 反向、`|R0|` 是骨骼长度量级，直接当半径会把膝带顶点整体外推 0.15；原始 R1 全零时回退 R0，R1==R0 时与只用 R0 的实现逐位一致）。`SDEF_AS_BDEF2`（视图菜单「SDEF 降级为 BDEF2」，QSettings `view/sdef_as_bdef2`）由 `wtype_table()` 在两条路径上统一生效，作为兜底。
+`Pose` 保存 `base_rot/base_trans`（编辑源）与 `rot/trans`（生效值）、`eval_order`、`world_cache` 与 `_dirty`。付与继承区分 `BF_INHERIT_ROT` / `BF_INHERIT_MOV` / `BF_LOCAL_APPEND`，按 `eval_order` 求值；IK 为 CCD 实现（逐链刷新末端、世界增量左乘），并以 FK 旋转作为迭代初值；若某条链解完末端残差仍超过 `ik_retry_tolerance`（0.05 模型单位），会把这条链的骨骼旋转清零后单独重解一次，只有残差变小才采用，避免从大角度初值收敛到镜像解（实测米娅帧 136 双膝跨到身体另一侧，修复后右膝 x=-2.78/左膝 x=+2.40，与 MMD 同侧）；蒙皮支持 BDEF1/2/4，**SDEF/QDEF 顶点在蒙皮阶段一律按 BDEF2 处理**（`_sdef_fallback_table()` 把 type 3 映射成 1）：真机膝带实测 SDEF 到关节中心 0.661/0.540、相邻 BDEF2 0.610/0.517，SDEF 会把膝盖顶出 0.05~0.16、侧视有台阶，而 PmxEditor 的膝盖观感就是 BDEF2。SDEF 求值器仍完整保留在原生 `_pmx_core` 与 NumPy 回退两条路径上（语义一致），只作对拍基线——`go.py skin/ellipsoid/sdefr1` 直接调 `native_core.deform` 比对两条路径。它的半轴按逐轴 `|R − C|` 计算：PMX 里 R0/R1 存的是"点"，模型库实测 `R0−C` 与 `R1−C` 恒为 180° 反向、`|R0|` 是骨骼长度量级，直接当半径会把膝带顶点整体外推 0.15；原始 R1 全零时回退 R0，R1==R0 时与只用 R0 的实现逐位一致。`.pmx` 里的 C/R0/R1 原样解析与回写。
 
 ### `physics.py` — Bullet
 
@@ -376,7 +375,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 ```powershell
 .\build\python\python.exe -m nuitka --standalone --onefile --enable-plugin=pyqt5 `
   --windows-console-mode=disable --msvc=latest --assume-yes-for-downloads `
-  --output-dir=dist\release-r6 --output-filename=PmxEditor_Modern.exe `
+  --output-dir=dist\release --output-filename=PmxEditor_Modern.exe `
   --include-data-dir=assets=assets `
   --include-data-files=native/bullet_phys.dll=native/bullet_phys.dll `
   --include-data-files=src/pmxeditor/_pmx_core.cp310-win_amd64.pyd=pmxeditor/_pmx_core.cp310-win_amd64.pyd `
@@ -392,10 +391,10 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 - 数据文件映射按包内布局写：`assets` 与 `native` 落在发行根目录，`_pmx_core*.pyd` 落在 `pmxeditor/` 内（`paths.py` 的 `_locate()` 会自动找到它们）。
 - 通过 PowerShell 传参时带空格的参数必须整体加引号（`'--company-name="PmxEditor Modern"'`），否则 Nuitka 报 `specify only one positional argument`。
 - **onefile 每次启动都会把运行时解压到 `%TEMP%`**。若解压目录不可用（策略受限、残留被强杀进程占用的 `onefile_*`、路径异常），exe 会立即退出且不显示窗口，退出码 2。排查顺序：清理 `%TEMP%\onefile_*` → 把 `TEMP`/`TMP` 指向普通可写目录 → 用 `--onefile-tempdir-spec` 固定解压目录重建；冒烟脚本结束时按进程名清理子进程，否则解压目录会被长期占用。
-- 当前 `dist/release-r6/PmxEditor_Modern.exe`（28,888,576 B）由本仓库源码构建，验收方式：
-  - 隔离环境（`PATH` 只留 `C:\Windows\System32` 等系统目录、私有 `TEMP`）启动 → 窗口正常、`已打开 米娅.pmx`、贴图与骨骼叠加正常、stderr 为空；
-  - `PmxEditor_Modern.exe --verify-backend --runs 1 --out dist\be_r6.json 米娅.pmx` → 退出码 0、`ok=true`、25 项检查全过、包内 `pmxeditor\_pmx_core.pyd` 被正确加载。
-- `dist/release-20261023-r4` 是**目录重构之前**的旧构建，仅作历史保留。
+- 构建产物不入库：`dist/` 是构建时生成的输出目录（已在 `.gitignore` 里），仓库不保留 exe。发布前用上面的命令重新生成，再按下列方式验收：
+  - 隔离环境（`PATH` 只留 `C:\Windows\System32` 等系统目录、私有 `TEMP`）启动 → 窗口正常、模型与贴图正常、骨骼叠加正常、stderr 为空；
+  - `PmxEditor_Modern.exe --verify-backend --runs 1 --out dist\be.json 模型.pmx` → 退出码 0、`ok=true`、26 项检查全过、包内 `pmxeditor\_pmx_core.pyd` 被正确加载。
+- 上一次完整构建验收针对 `448af3c`（移除 VMD 与 SDEF 降级开关之前）；当前源码改动后需重新构建并复测。
 
 发布前检查：exe 复制到无关目录可独立启动、状态栏显示 `C++ / Bullet`、模型/贴图/物理库正常、VPD 导入导出回读一致、界面无缺字错位、记录对应源码版本。
 
@@ -435,15 +434,16 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 **长期**
 
 1. 显示框编辑、顶点/权重/UV 编辑。
-2. SDEF 半轴在 R0 与 R1 之间按弯曲量插值、软体模拟。
+2. 顶点权重绘制与左右对称权重镜像。
 3. 跨模型 VPD 批量验收与骨骼映射表。
 4. 视需要把渲染几何准备迁到原生层（当前实测不需要）。
 
 ## 更新记录
 
+- **2026-10-25 仓库清理与 README 复核**：删掉 `build/` 下的 Nuitka 中间件与旧构建日志（保留 `build/python` 便携运行时）、`dist/` 里三份过期发行包（r4/r5/r6 共约 1.2 GB，均已落后于当前源码）、`tests/` 的临时诊断产物（`_probe_out*.txt`、`blender*.log/npz`、`out.pmx`、`report.json`、`sync_*.vpd`、`shots/` 截图）与各处 `__pycache__`，合计约 1.38 GB；`native/obj/`（Bullet 导入库）与 `src/pmxeditor/_pmx_core*.pyd` 保留，以免下次构建退化。README 同步：功能表的发布行不再声称仓库内有与源码一致的 exe（`dist/` 改为构建时生成）、SDEF 段落改写为「蒙皮一律按 BDEF2、求值器只作对拍基线」并按现状补充 `_sdef_fallback_table()`、删除「视图 → SDEF 降级」与 `SDEF_AS_BDEF2` 的残留描述、目录树去掉 `dist/`、路线图里过时的「SDEF 半轴插值」换成权重绘制。
 - **2026-10-25 移除 VMD 播放、SDEF 改按 BDEF2**：动作播放属于动画软件的职责，模型编辑器只保留静态姿态（VPD 导入导出）。删掉 `vmd.py`、`timeline.py`、底部时间轴控件、`Viewport.apply_bone_tracks()`、文件菜单的「载入动作/关闭动作」、`tools/compare_blender.py`/`blender_dump.py` 与 8 个 VMD 场景（`vmd`/`vmdreal`/`vmdprobe`/`vmdphys`/`vmdcheck`/`vmdbad`/`vmdsdef`/`knee`），`tests/run.py` 因此少约 430 行。同时把 SDEF 从「可选降级」改成「一律按 BDEF2」（`skinning._sdef_fallback_table()` 固定把 type 3 映射成 1），视图菜单里的降级开关与 QSettings `view/sdef_as_bdef2` 一并删除：半轴口径修正后 SDEF 膝带仍比 BDEF2 外推 0.05~0.16，侧视有台阶，而 PmxEditor 的膝盖观感就是 BDEF2。`.pmx` 里 SDEF 的 C/R0/R1 仍原样解析与回写，`skin`/`ellipsoid`/`sdefr1` 三个场景继续直接调用 `native_core.deform` 对拍两条求值路径。
-- **2026-10-25 SDEF 半轴口径修正（膝盖突起）**：PMX 里 SDEF 的 `C/R0/R1` 存的都是"点"——模型库实测 `R0−C` 与 `R1−C` 恒为 180° 反向、`|R0|` 是骨骼长度量级（米娅 6.9、阿涵 14.6），只有逐轴 `|R−C|`（0.1~0.3）才是可信半轴。`native/pmx_core.cpp` 与 `skinning._special_blend()` 改为 `a_i = |R_i − C|`，并用**原始** R1 是否全零决定回退（C 非零时 `|0−C|` 不为零，不能看平移后的半轴）。效果：真机米娅帧 136 膝带 57 个 SDEF 顶点到关节中心 0.755/0.608 → **0.661/0.540**，与相邻 BDEF2（0.610/0.517）接上，侧视横向硬棱消失；`bdef2 vs sdef` 膝带最大差 0.209 → **0.164**。顺带让 HEAD 的「视图 → SDEF 降级为 BDEF2」开关真正生效（`skinning._sdef_fallback_table()` + `SkinDeformer.wtype_table()`，此前 deform 路径从不读这个开关）。新增 `go.py knee`（膝带权重类型、半轴口径、两种混合模式的侧视对照与数值），`ellipsoid` 增补「C 平移后半径不变」用例。`verify_native_backend` 测试模型 26 项全过；米娅仅剩既有的 `IK rotations 0.0394` 差异（与蒙皮无关）；skin/dform/ellipsoid/sdefr1/final 场景 0 异常（`ikclamp` 的 0.2036 为既有差异，HEAD 同样复现）。
-- 2026-10-25 IK 坏解重试：链上 FK 旋转仍作初值，但末端残差偏大的链会从静止姿态重解并择优选解，修正 VMD 播放时双腿交叉到身体另一侧的问题（`scen_ikclamp` 回归通过）。
+- **2026-10-25 SDEF 半轴口径修正（膝盖突起）**：PMX 里 SDEF 的 `C/R0/R1` 存的都是"点"——模型库实测 `R0−C` 与 `R1−C` 恒为 180° 反向、`|R0|` 是骨骼长度量级（米娅 6.9、阿涵 14.6），只有逐轴 `|R−C|`（0.1~0.3）才是可信半轴。`native/pmx_core.cpp` 与 `skinning._special_blend()` 改为 `a_i = |R_i − C|`，并用**原始** R1 是否全零决定回退（C 非零时 `|0−C|` 不为零，不能看平移后的半轴）。效果：真机米娅帧 136 膝带 57 个 SDEF 顶点到关节中心 0.755/0.608 → **0.661/0.540**，与相邻 BDEF2（0.610/0.517）接上，侧视横向硬棱消失；`bdef2 vs sdef` 膝带最大差 0.209 → **0.164**。顺带让 HEAD 的「视图 → SDEF 降级为 BDEF2」开关真正生效（`skinning._sdef_fallback_table()` + `SkinDeformer.wtype_table()`，此前 deform 路径从不读这个开关）。新增 `go.py knee`（膝带权重类型、半轴口径、两种混合模式的侧视对照与数值），`ellipsoid` 增补「C 平移后半径不变」用例（该开关与 `knee` 场景已在下一条移除）。`verify_native_backend` 测试模型 26 项全过；米娅仅剩既有的 `IK rotations 0.0394` 差异（与蒙皮无关）；skin/dform/ellipsoid/sdefr1/final 场景 0 异常（`ikclamp` 的 0.2036 为既有差异，HEAD 同样复现）。
+- 2026-10-25 IK 坏解重试：链上 FK 旋转仍作初值，但末端残差偏大的链会从静止姿态重解并择优选解，修正大角度动作下双腿交叉到身体另一侧的问题（`scen_ikclamp` 回归通过；VMD 播放随后已移除，该修复对 VPD 姿态同样有效）。
 
 - **2026-10-25 VMD 动作预览（随后移除）**：新增 `vmd.py`（Vocaloid Motion Data 0002 解析、骨骼/形态轨道、线性与球面线性插值）、`timeline.py`（播放/暂停/循环/拖动定位）与 `Viewport.apply_bone_tracks()`；菜单新增「载入动作（VMD）…」「关闭动作」；载入时自动开物理演算避免物理骨骼穿插；场景 `vmd`/`vmdreal`。真实动作验收：`残虹摇摇乐.vmd` 290 帧、107 条骨骼轨道全部匹配。
 
@@ -453,7 +453,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 - **2026-10-24 物理惰性构建 + 撤销复用分项重建**：`Viewport` 新增 `ensure_physics()`（唯一构建入口，物理模式/演算/参数热更新时按需构建）与 `adopt_model()`（网格与材质布局等价时接管撤销/重做换来的新模型对象，只重建 `Pose`/`SkinDeformer` 与缓存）；`rebuild_physics()` 改为「作废旧世界 + 置待建标记」，正在演算时才立刻重建；`app._reload_structure()` 先尝试 `adopt_model()` 再走 `rebuild_structure()`。米娅（321 骨骼 / 79848 顶点）实测：追加骨骼 60.5 → **18.9 ms**，撤销 65.7 → **40.6 ms**，载入后不再预先构建 183 刚体 + 261 关节的物理世界。新增 `go.py physlazy` 断言「结构编辑后 `physics._ready is False`、进物理模式后为 True、撤销后 `vp.model is doc.model`」。
 
 - **2026-10-24 已知限制四项推进**：①分项重建去过度重建——`rebuild_structure()` 不再因为「骨骼数变化」就重建 `SkinDeformer` 与物理世界，改为比对静止位置前缀、`v_bones/v_weights` 身份与刚体/关节引用签名（追加骨骼 66.2 → 38.8 ms，删除骨骼仍走完整重建）；②页面懒刷新——`_refresh_pages(active_only=True)` 只刷当前页，其余记入 `_pages_dirty`，切页/选中时补刷（编辑耗时降到约 21 ms）；③骨骼拾取改为屏幕像素半径自适应（`min(16, max(6, 0.4*段长))`）+ 悬停名称牌；④物理质量/摩擦力热更新——`bullet_phys` 新增 `bw_set_body_mass/friction/restitution`，静态与运动学刚体跳过并在状态栏提示；⑤SDEF 椭球——半径改为「静止距离 x 椭球伸缩比」，静止姿态严格等于球面半径，双骨骼混合偏转时按 `R0` 各向异性伸缩（回退路径逐行对齐，`verify_native_backend` 米娅 25 项、测试模型 26 项全过）。顺带修掉 `panels/bone.py` 里残留的 `from .pmx import IK`（包拆分后会让「启用 IK」抛 `ModuleNotFoundError`）与 SDEF 权重槽重复导致 NumPy 回退少算一半权重的 bug。
-- **2026-10-23 README 整合**：按当前代码逐节复核，删掉已失效的条目（「姿态没有独立撤销栈」已由轻量姿态条目解决）、修正过期数字（结构编辑 110→66–75 ms、撤销 81→46 ms、便携运行时 218→210 MB）、标明 `dist/release-20261023-r4` 是重构前的构建、补记 `gen_model.py` 依赖 Pillow 与历史探针场景的去留。
+- **2026-10-23 README 整合**：按当前代码逐节复核，删掉已失效的条目（「姿态没有独立撤销栈」已由轻量姿态条目解决）、修正过期数字（结构编辑 110→66–75 ms、撤销 81→46 ms、便携运行时 218→210 MB）、标明 `dist/release-20261023-r4` 是重构前的构建（该目录已在 2026-10-25 清理中删除）、补记 `gen_model.py` 依赖 Pillow 与历史探针场景的去留。
 - **2026-10-23 SDEF/QDEF 精确变形**：蒙皮从「SDEF 当 BDEF2、QDEF 当 BDEF4」升级为真实现——`native/pmx_core.cpp` 的 `deform_vertices()` 增加 `sdef` 入参，SDEF 分支用两根骨骼的变换后的 C 点混合中心、沿混合方向按静止半径重新定位（`pos = c + normalize(d)*|v-C|`），QDEF 分支用双四元数混合（按首个非零权重骨骼做符号对齐，再对旋转与平移分别混合，避免关节反向扭转）；`deform`/`deform_subset` 包装与 `skinning.py` 的两个原生调用点都补上 `v_sdef`，NumPy 回退路径新增 `_special_blend()` 保持同一语义；`native/setup_core.py` 增加 `/utf-8` 并给 `pmx_core.cpp` 加 BOM（否则中文注释在 GBK 解释下会把下一行吞进注释）。真机米娅 326 个 SDEF 顶点在屈膝 90° 时与线性混合最大差 0.158、半径误差 0.0000（线性混合最大缩 0.158）；新增 `tests/go.py skin` 场景（球面半径保持、QDEF 同矩阵等价刚体、回退与原生一致），`tools/verify_native_backend.py` 仍 26 项全过。
 - **2026-10-23 大文件拆分**：`panels.py`（2498 行）拆成 `panels/` 包——`base.py`（`PageBase` 与共用小工具）+ `info/bone/material/morph/physics/settings.py`，`__init__.py` 只做重导出，导入语句由脚本按 AST 实际引用裁剪生成；`viewport.py`（2194 行）拆成 `viewport/` 包——`core.py`（`Viewport`）、`camera.py`（`OrbitCamera`）、`shaders.py`（着色器源与编译）、`geom.py`（几何小工具）、`hud.py`（HUD 覆盖层）。`theme.sync_modules()` 增加包前缀匹配，让 `pmxeditor.panels.*` / `pmxeditor.viewport.*` 的颜色常量也能跟随主题；拆分后全部回归场景（含真机模型）为 0 异常。
 - **2026-10-23 姿态轻量撤销**：`Document.push_pose_undo()` 只存姿态（`base_rot/base_trans` 拷贝）与形态权重，不深拷贝整个模型（大模型 27 ms → 0.04 ms）；撤销条目里 `model=None` 表示姿态条目，`undo/redo` 只回滚姿态并 `edited.emit("pose")`，不替换 `Document.model`、不触发结构重建；`R` 重置姿态与 VPD 导入也改走这条路径，因此现在都能单独撤销；新增 `tests/go.py poseundo` 场景（条目类型、撤销不换模型、重置可撤销、与模型编辑混排顺序）。
