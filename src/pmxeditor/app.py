@@ -10,7 +10,7 @@ import numpy as np
 from .native_backend import backend_label, unavailable_reason
 
 # Load the MSVC extension before Qt DLLs on Windows.
-from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer
+from PyQt5.QtCore import QEvent, QSettings, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
                              QHBoxLayout, QLabel, QMainWindow, QMenuBar,
@@ -21,12 +21,10 @@ from . import theme
 from .doc import Document
 from .panels import (BonePage, InfoPage, MaterialPage, MorphPage, PhysicsPage,
                     SettingsPage)
-from .timeline import TimelineBar
 from .theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, TEXT_DIM,
                    build_qss, make_icon, mono_font, svg_assets, ui_font)
 from .ui_widgets import Segmented, icon_button, label
 from .viewport import Viewport
-from .vmd import load_vmd as load_vmd_file
 from .vpd import (apply_vpd_pose, build_vpd_text, load_vpd, match_vpd,
                  write_vpd_text)
 
@@ -142,14 +140,6 @@ class MainWindow(QMainWindow):
         # 结构编辑后只刷新当前页，其余页标记为脏，切换过去时再刷新，
         # 避免每次编辑都重建 6 个页面（大模型里 321 项下拉重建很贵）。
         self._pages_dirty = set()
-        # VMD 动作预览：不入撤销栈，只改静止姿态与形态权重
-        self.action = None
-        self._action_bones = {}
-        self._action_morphs = {}
-        self._action_frame = 0
-        self._action_timer = QTimer(self)
-        self._action_timer.setInterval(33)          # 30fps
-        self._action_timer.timeout.connect(self._on_action_tick)
         self.settings = QSettings("PmxEditorModern", "editor")
         from . import skinning as _sk
         _sk.SDEF_AS_BDEF2 = bool(self.settings.value("view/sdef_as_bdef2", False, type=bool))
@@ -225,11 +215,6 @@ class MainWindow(QMainWindow):
         center_lay.setSpacing(0)
         center_lay.addWidget(self._build_toolbar())
         center_lay.addWidget(self.viewport, 1)
-        self.timeline = TimelineBar()
-        self.timeline.setVisible(False)
-        self.timeline.frameChanged.connect(self._on_timeline_frame)
-        self.timeline.playToggled.connect(self._on_timeline_play)
-        center_lay.addWidget(self.timeline)
         self.splitter.addWidget(center)
 
         self.inspector = QStackedWidget()
@@ -323,11 +308,6 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.import_vpd_dialog)
         a = m_file.addAction("导出 VPD 姿态…")
         a.triggered.connect(self.export_vpd_dialog)
-        m_file.addSeparator()
-        a = m_file.addAction("载入动作（VMD）…")
-        a.triggered.connect(self.load_vmd_dialog)
-        a = m_file.addAction("关闭动作")
-        a.triggered.connect(self.close_vmd)
         m_file.addSeparator()
         a = m_file.addAction("保存")
         a.setShortcut("Ctrl+S")
@@ -558,140 +538,6 @@ class MainWindow(QMainWindow):
         self._apply_model()
         self._set_status("已打开 %s" % os.path.basename(path))
 
-    # ------------------------------------------------------------ VMD 动作
-    def load_vmd_dialog(self):
-        if not self.doc.model:
-            self._set_status("请先打开 PMX 模型")
-            return
-        start = self.settings.value(
-            "last_vmd_dir", self.settings.value("last_dir", os.getcwd()))
-        path, _ = QFileDialog.getOpenFileName(
-            self, "载入动作（VMD）", start, "VMD 动作 (*.vmd);;所有文件 (*.*)")
-        if path:
-            self.load_vmd_path(path)
-
-    def load_vmd_path(self, path: str) -> bool:
-        """解析 VMD 并挂到时间轴；只改姿态预览，不写模型、不入撤销栈。"""
-        if not self.doc.model or self.viewport.model is None:
-            self._set_status("请先打开 PMX 模型")
-            return False
-        try:
-            action = load_vmd_file(path)
-        except Exception as e:                       # 读坏了不能把界面弄崩
-            QMessageBox.critical(self, "载入动作失败", "无法读取 VMD：\n%s" % e)
-            self._set_status("载入动作失败：%s" % e)
-            return False
-        self.settings.setValue("last_vmd_dir", os.path.dirname(path))
-        self._bind_action(action)
-        self.timeline.configure(action.max_frame, os.path.basename(path))
-        self.timeline.setVisible(True)
-        self._apply_action_frame(0)
-        self.timeline.set_frame(0, action.max_frame)
-        # 动作只驱动骨骼，裙摆/头发等物理骨骼要演算才会跟随；
-        # 模型带刚体时顺手打开物理，避免播放时留下穿插的硬边。
-        phys = ""
-        if self.doc.model is not None and len(self.doc.model.rigid):
-            if not self.viewport.physics.enabled:
-                self.viewport.set_physics(True)
-                self._pages[5].sync_display(self.viewport)
-            if self.viewport.physics.enabled:
-                phys = " · 已启用物理演算"
-        self._set_status("已载入动作 %s（%d 帧 · %d 骨骼轨道 · %d 形态轨道）%s"
-                         % (os.path.basename(path), action.max_frame,
-                            len(action.bones), len(action.morphs), phys))
-        return True
-
-    def _bind_action(self, action):
-        """按名称把 VMD 轨道对到当前模型的骨骼/形态索引。"""
-        self.action = action
-        self._action_bones = {}
-        self._action_morphs = {}
-        model = self.viewport.model
-        if model is None:
-            return
-        for i, bone in enumerate(model.bones):
-            self._action_bones.setdefault(bone.name, i)
-        for i, morph in enumerate(model.morphs):
-            self._action_morphs.setdefault(morph.name, i)
-        missing = [n for n in action.bones if n not in self._action_bones]
-        if missing and len(missing) == len(action.bones):
-            self._set_status("动作里的骨骼名与当前模型完全不匹配（可能不是同一角色）")
-
-    def _apply_action_frame(self, frame: int):
-        action = self.action
-        vp = self.viewport
-        if action is None or vp.model is None:
-            return
-        bones = {}
-        for name, (pos, rot) in action.frame_bones(frame).items():
-            idx = self._action_bones.get(name)
-            if idx is None:
-                continue
-            # VMD 的位移是相对静止姿势的偏移，正好对应 Pose.base_trans
-            bones[idx] = (np.asarray(pos, dtype=np.float32),
-                          np.asarray(rot, dtype=np.float32))
-        morphs = {}
-        for name, weight in action.frame_morphs(frame).items():
-            idx = self._action_morphs.get(name)
-            if idx is not None and float(weight) > 0.0005:
-                morphs[idx] = float(weight)
-        vp.apply_bone_tracks(bones, morphs)
-        self._action_frame = int(frame)
-
-    def seek_action_frame(self, frame: int) -> bool:
-        """外部定位到指定帧：同步滑杆并应用骨骼/形态（场景与快捷键共用）。"""
-        if self.action is None:
-            return False
-        top = self.action.max_frame
-        frame = max(0, min(int(frame), top))
-        self.timeline.set_frame(frame, top)
-        self._apply_action_frame(frame)
-        self._set_status("动作帧 %d / %d" % (frame, top))
-        return True
-
-    def _on_timeline_frame(self, frame: int):
-        self._apply_action_frame(frame)
-        self._set_status("动作帧 %d / %d" % (frame, self.timeline.slider.maximum()))
-
-    def _on_timeline_play(self, playing: bool):
-        self._action_timer.stop()
-        if not playing:
-            return
-        if self.action is None:
-            self.timeline.btn_play.setChecked(False)
-            return
-        self._action_timer.start()
-
-    def _on_action_tick(self):
-        action = self.action
-        if action is None:
-            self._action_timer.stop()
-            return
-        top = action.max_frame
-        nxt = self._action_frame + 1
-        if nxt > top:
-            if not self.timeline.looping:
-                self.timeline.btn_play.setChecked(False)
-                return
-            nxt = 0
-        self.timeline.set_frame(nxt, top)
-        self._apply_action_frame(nxt)
-
-    def close_vmd(self) -> bool:
-        if self.action is None:
-            self._set_status("当前没有载入动作")
-            return False
-        self._action_timer.stop()
-        self.action = None
-        self._action_bones = {}
-        self._action_morphs = {}
-        self.timeline.btn_play.setChecked(False)
-        self.timeline.setVisible(False)
-        if self.viewport.model is not None:
-            self.viewport.reset_pose()
-        self._set_status("已关闭动作")
-        return True
-
     # ------------------------------------------------------------ VPD 姿态
     def import_vpd_dialog(self):
         if not self.doc.model or self.viewport.pose is None:
@@ -864,13 +710,6 @@ class MainWindow(QMainWindow):
                 act.blockSignals(False)
         finally:
             self.doc.suppress = False
-        if self.action is not None:
-            action = self.action
-            self._action_timer.stop()
-            self.timeline.btn_play.setChecked(False)
-            self._bind_action(action)
-            self.timeline.configure(action.max_frame, self.timeline.name_label.text())
-            self._apply_action_frame(0)
         self._update_title()
 
     def _reload_structure(self):
@@ -1034,11 +873,6 @@ class MainWindow(QMainWindow):
     def close_model(self):
         if not self._maybe_save():
             return
-        if self.action is not None:
-            self._action_timer.stop()
-            self.action = None
-            self.timeline.btn_play.setChecked(False)
-            self.timeline.setVisible(False)
         self.doc.clear()
         self.viewport.clear_model()
         self._refresh_pages()

@@ -852,38 +852,6 @@ class Viewport(QOpenGLWidget):
         self._mark_full_skin_dirty()
         self.update()
 
-    def apply_bone_tracks(self, bones: Dict[int, tuple],
-                          morphs: Dict[int, float]) -> bool:
-        """按动作帧写入静止姿态（预览用：不进撤销栈、不标记模型已修改）。
-
-        bones 为 {骨骼索引: (位移(np3), 旋转四元数 np4)}，morphs 为
-        {形态索引: 权重}；两者都直接覆盖 `Pose.base_*` 与 `morph_weights`。
-        """
-        m = self.model
-        if m is None or self.pose is None:
-            return False
-        pose = self.pose
-        # 先把所有骨骼归位：VMD 没打关键帧的骨骼应当是静止姿势，
-        # 否则上一帧的求解结果（尤其是 IK 写回的膝/足）会残留下来。
-        pose.base_rot[:] = (0.0, 0.0, 0.0, 1.0)
-        pose.base_trans[:] = 0.0
-        for index, (pos, rot) in bones.items():
-            if 0 <= index < pose.n:
-                pose.base_trans[index] = pos
-                pose.base_rot[index] = rot
-        self.morph_weights = dict(morphs)
-        try:
-            self.morph_weights = resolve_morph_weights(m, self.morph_weights)
-        except Exception:
-            pass
-        pose.apply(self.morph_weights, m.morphs)
-        pose.world_update()
-        pose.solve_ik()
-        self._pose_dirty = True
-        self._mark_full_skin_dirty()
-        self.update()
-        return True
-
     def set_selection(self, kind: str, index: int):
         old_kind = self.selection_kind
         self.selection_kind = kind
