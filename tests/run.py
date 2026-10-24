@@ -4408,6 +4408,88 @@ def scen_ellipsoid():
     H.dump()
 
 
+def scen_ikclamp():
+    """IK 限位：欧拉分支连续 + 顶到限位后不再来回抖（native 与回退两条路径）。"""
+    from pmxeditor import skinning as SK
+    from pmxeditor import pmx as PMX
+    import math as _m
+    import numpy as _np
+    # 1) 奇点附近的等价解选择
+    q = SK.euler_to_quat(0.3, 2.0, 0.2)          # 俯仰 2.0 rad 超过 90 度
+    prev = (0.3, 2.0, 0.2)
+    canon = SK.quat_to_euler(q)
+    stable = SK.quat_to_euler_stable(q, prev)
+    log(" 奇点: 默认解=%s 稳定解=%s 与上一轮距离 %.3f -> %.3f"
+        % (["%.3f" % v for v in canon], ["%.3f" % v for v in stable],
+           SK.euler_distance(canon, prev), SK.euler_distance(stable, prev)))
+    if SK.euler_distance(stable, prev) > 1e-6:
+        anomaly("ik-branch", "稳定解没有保持上一轮的分支")
+    if SK.euler_distance(canon, prev) < 1.0:
+        anomaly("ik-branch-test", "构造的用例没有触发分支翻转，测试无效")
+
+    m = WIN.doc.model
+    ikbone = next((i for i, b in enumerate(m.bones)
+                   if (b.flags & PMX.BF_IK) and b.ik and b.ik.links), -1)
+    if ikbone < 0:
+        anomaly("ik-clamp", "夹具里没有 IK 骨骼")
+        H.dump()
+        return
+    link = m.bones[ikbone].ik.links[0]
+
+    def run(tag):
+        # 把 IK 控制器整体推离末端，逼 CCD 一路顶到限位
+        pose = SK.Pose(m)
+        pose.reset()
+        pose.base_trans[ikbone] = _np.array([0.0, 2.2, 0.0], dtype=_np.float32)
+        pose._invalidate_world()
+        prev_e = None
+        worst = 0.0
+        outs = 0
+        moved = 0.0
+        for _ in range(16):
+            pose.solve_ik(1)
+            cur = SK.quat_to_euler(pose.rot[link.bone])
+            if prev_e is not None:
+                worst = max(worst, _m.sqrt(SK.euler_distance(cur, prev_e)))
+            prev_e = cur
+            moved = max(moved, float(_np.abs(pose.rot[link.bone] - SK.IDENTITY_Q).max()))
+            if any(abs(cur[k]) > float(link.hi[k]) + 1e-4 for k in range(3)):
+                outs += 1
+        log(" 限位[%s]: 钳制次数=%d 单轮最大跳变=%.3f rad 越界=%d 旋转量=%.3f 末态=%s"
+            % (tag, pose.ik_clamp_hits, worst, outs, moved,
+               ["%.3f" % v for v in prev_e]))
+        if outs:
+            anomaly("ik-clamp", "%s 钳制后仍有角度越过限制（%d 次）" % (tag, outs))
+        if worst > 0.6:
+            anomaly("ik-jump", "%s 限位处欧拉角单轮跳变过大：%.3f rad" % (tag, worst))
+        if moved < 1e-3:
+            anomaly("ik-clamp-test", "%s 没有产生旋转，用例无效" % tag)
+        return pose, prev_e
+
+    link.limited = True
+    link.lo = [-0.35, -0.35, -0.35]
+    link.hi = [0.35, 0.35, 0.35]
+    native = SK.native_core
+    res = {}
+    if native is not None:
+        res["native"] = run("native")
+    SK.native_core = None
+    try:
+        res["python"] = run("python")
+    finally:
+        SK.native_core = native
+    if res["python"][0].ik_clamp_hits <= 0:
+        anomaly("ik-clamp-test", "Python 回退路径没有触发钳制")
+    if len(res) == 2:
+        d = _m.sqrt(SK.euler_distance(res["native"][1], res["python"][1]))
+        log(" native 与回退末态差=%.6f rad" % d)
+        if d > 1e-3:
+            anomaly("ik-native-mismatch", "native 与回退的限位结果不一致：%.6f" % d)
+    link.limited = False
+    shot(WIN, "ikclamp")
+    H.dump()
+
+
 def scen_physlazy():
     """结构编辑后不立即构建物理世界；进物理模式才构建。"""
     vp = WIN.viewport
@@ -4461,6 +4543,7 @@ def scen_physlive():
     m = doc.model
     pp = WIN._pages[4]
     WIN._select_page(4)
+    vp.set_physics(True)          # 物理惰性构建：进物理模式后才建世界
     pump(80)
     ph = vp.physics
     if not ph._ready:

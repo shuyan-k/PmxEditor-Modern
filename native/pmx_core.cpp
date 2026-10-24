@@ -823,6 +823,40 @@ std::array<float, 4> euler_quaternion(float x, float y, float z) {
     return multiply_quaternion(qz.data(), yx.data());
 }
 
+
+std::array<float, 3> euler_alternative(const std::array<float, 3>& e) {
+    auto wrap = [](float a) {
+        a = static_cast<float>(std::fmod(a + 3.14159265358979f, 6.28318530717959f));
+        if (a < 0.0f) a += 6.28318530717959f;
+        return a - 3.14159265358979f;
+    };
+    return {wrap(e[0] + 3.14159265358979f),
+            wrap(3.14159265358979f - e[1]),
+            wrap(e[2] + 3.14159265358979f)};
+}
+
+float euler_distance(const std::array<float, 3>& a,
+                     const std::array<float, 3>& b) {
+    float total = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        float d = a[i] - b[i];
+        d = static_cast<float>(std::fmod(d + 3.14159265358979f, 6.28318530717959f));
+        if (d < 0.0f) d += 6.28318530717959f;
+        d -= 3.14159265358979f;
+        total += d * d;
+    }
+    return total;
+}
+
+std::array<float, 3> quaternion_euler_stable(
+    const float* q, const std::array<float, 3>* prev) {
+    const auto euler = quaternion_euler(q);
+    if (prev == nullptr) return euler;
+    const auto alt = euler_alternative(euler);
+    if (euler_distance(alt, *prev) < euler_distance(euler, *prev)) return alt;
+    return euler;
+}
+
 void compute_world_rows(
     py::ssize_t bone_count, const std::uint32_t* flags,
     const std::int32_t* append_parents, const float* append_ratios,
@@ -1014,6 +1048,10 @@ int solve_ik(
     const auto* limited_ptr = link_limited.data();
     const auto* limit_ptr = link_limits.data();
     int solved = 0;
+    const py::ssize_t link_count = link_bones.shape(0);
+    std::vector<std::array<float, 3>> prev_euler(
+        static_cast<std::size_t>(link_count), {0.0f, 0.0f, 0.0f});
+    std::vector<std::uint8_t> has_prev(static_cast<std::size_t>(link_count), 0);
     {
         py::gil_scoped_release release;
         std::fill_n(changed_ptr, bone_count, std::uint8_t(0));
@@ -1142,15 +1180,36 @@ int solve_ik(
                     std::array<float, 4> next_rotation =
                         matrix_quaternion(local4.data());
                     if (limited_ptr[link_index]) {
-                        auto euler = quaternion_euler(next_rotation.data());
+                        const auto* prev = has_prev[link_index]
+                            ? &prev_euler[link_index] : nullptr;
+                        const auto euler = quaternion_euler_stable(
+                            next_rotation.data(), prev);
+                        std::array<float, 3> clamped{};
+                        bool clipped = false;
                         for (int axis_index = 0; axis_index < 3; ++axis_index) {
-                            euler[axis_index] = std::min(
+                            clamped[axis_index] = std::min(
                                 std::max(euler[axis_index],
                                          limit_ptr[link_index * 6 + axis_index]),
                                 limit_ptr[link_index * 6 + 3 + axis_index]);
+                            if (clamped[axis_index] != euler[axis_index]) {
+                                clipped = true;
+                            }
                         }
-                        next_rotation = euler_quaternion(
-                            euler[0], euler[1], euler[2]);
+                        if (clipped) {
+                            // 增量钳制：钳制结果与上一轮完全一致，说明这一轴已经
+                            // 顶在限制上，继续累计只会来回抖动，舍弃本轮旋转。
+                            if (prev != nullptr &&
+                                euler_distance(clamped, *prev) < 1e-6f) {
+                                continue;
+                            }
+                            prev_euler[link_index] = clamped;
+                            has_prev[link_index] = 1;
+                            next_rotation = euler_quaternion(
+                                clamped[0], clamped[1], clamped[2]);
+                        } else {
+                            prev_euler[link_index] = euler;
+                            has_prev[link_index] = 1;
+                        }
                     }
                     std::copy(next_rotation.begin(), next_rotation.end(),
                               base_rotation_ptr + link_bone * 4);

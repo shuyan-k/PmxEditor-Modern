@@ -124,6 +124,39 @@ def quat_to_euler(q):
     rz = math.atan2(siny, cosy)
     return rx, ry, rz
 
+
+def euler_alt(rx, ry, rz):
+    """Rz.Ry.Rx 分解的另一个等价解：绕 Y 反号、X/Z 各差 PI。"""
+    def wrap(a):
+        a = (a + math.pi) % (2.0 * math.pi) - math.pi
+        return a
+    return wrap(rx + math.pi), wrap(math.pi - ry), wrap(rz + math.pi)
+
+
+def euler_distance(a, b) -> float:
+    """两组欧拉角的环面距离（逐轴取最短差值后平方和）。"""
+    total = 0.0
+    for u, v in zip(a, b):
+        d = (float(u) - float(v) + math.pi) % (2.0 * math.pi) - math.pi
+        total += d * d
+    return total
+
+
+def quat_to_euler_stable(q, prev=None):
+    """转欧拉角，并在 prev 存在时选择与上一帧同分支的解。
+
+    Rz.Ry.Rx 在俯仰接近 +-90 度时有两组等价解，按默认公式会在奇点附近
+    突然切分支，表现为 X/Z 轴瞬间跳 180 度（就是「轴歧义」）。IK 每轮都
+    重新分解绝对旋转，因此必须按上一轮的角度选解，才能保持连续。
+    """
+    rx, ry, rz = quat_to_euler(q)
+    if prev is None:
+        return rx, ry, rz
+    alt = euler_alt(rx, ry, rz)
+    if euler_distance(alt, prev) < euler_distance((rx, ry, rz), prev):
+        return alt
+    return rx, ry, rz
+
 def translation(x, y, z) -> np.ndarray:
     m = np.eye(4, dtype=np.float32)
     m[0, 3], m[1, 3], m[2, 3] = x, y, z
@@ -238,6 +271,9 @@ class Pose:
         self.trans = self.base_trans.copy()
         self.ov_rot: Dict[int, np.ndarray] = {}
         self.ov_trans: Dict[int, np.ndarray] = {}
+        # IK 限位用：每根受限骨骼上一轮的欧拉角（保持分支连续）与钳制次数统计
+        self._ik_euler: Dict[int, tuple] = {}
+        self.ik_clamp_hits = 0
         self.world_cache: Optional[np.ndarray] = None
         self._world_dirty: Set[int] = set()
         self.last_morph_key = None
@@ -312,6 +348,8 @@ class Pose:
         self.base_trans[:] = 0
         self.ov_rot.clear()
         self.ov_trans.clear()
+        self._ik_euler.clear()
+        self.ik_clamp_hits = 0
         self._invalidate_world()
         self.apply()
 
@@ -618,11 +656,21 @@ class Pose:
                     new_local = localR @ quat_to_mat(self.rot[link.bone])
                     if link.limited:
                         lo, hi = link.lo, link.hi
-                        rx, ry, rz = quat_to_euler(mat_to_quat(new_local))
-                        rx = min(max(rx, float(lo[0])), float(hi[0]))
-                        ry = min(max(ry, float(lo[1])), float(hi[1]))
-                        rz = min(max(rz, float(lo[2])), float(hi[2]))
-                        new_local = quat_to_mat(euler_to_quat(rx, ry, rz))
+                        prev = self._ik_euler.get(link.bone)
+                        rx, ry, rz = quat_to_euler_stable(mat_to_quat(new_local), prev)
+                        cx = min(max(rx, float(lo[0])), float(hi[0]))
+                        cy = min(max(ry, float(lo[1])), float(hi[1]))
+                        cz = min(max(rz, float(lo[2])), float(hi[2]))
+                        if (cx, cy, cz) != (rx, ry, rz):
+                            self.ik_clamp_hits += 1
+                            # 增量钳制：本轮的钳制结果与上一轮一致，说明这一轴
+                            # 已经顶在限制上，继续累计只会来回抖动，直接放弃本轮。
+                            if prev is not None and euler_distance((cx, cy, cz), prev) < 1e-12:
+                                continue
+                            self._ik_euler[link.bone] = (cx, cy, cz)
+                            new_local = quat_to_mat(euler_to_quat(cx, cy, cz))
+                        else:
+                            self._ik_euler[link.bone] = (rx, ry, rz)
                     q = mat_to_quat(new_local)
                     self.base_rot[link.bone] = q
                     # rot 必须同步更新，否则下一次 world 计算仍用旧姿态，

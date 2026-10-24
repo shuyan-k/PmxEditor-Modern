@@ -164,6 +164,30 @@ class Morph(_FastCopy):
     type: int = 1
     offsets: List[dict] = field(default_factory=list)
 
+    def __deepcopy__(self, memo):
+        """形态快照只复制外层列表与每个偏移字典的平坦列表。
+
+        形态偏移是全模型里对象数最多的部分（大模型可达数万项），通用
+        _copy_value 要逐项做类型分派；这里就地展开成两层循环，既保持
+        「快照与在线模型互不影响」的隔离性，又省掉函数调用开销。
+        """
+        new = Morph.__new__(Morph)
+        memo[id(self)] = new
+        new.name = self.name
+        new.name_en = self.name_en
+        new.panel = self.panel
+        new.type = self.type
+        copied = []
+        for off in self.offsets:
+            d = off.copy()
+            for key, val in off.items():
+                if type(val) is list:
+                    d[key] = val.copy()
+            copied.append(d)
+        new.offsets = copied
+        return new
+
+
 @dataclass
 class DisplayFrame(_FastCopy):
     name: str = ""
