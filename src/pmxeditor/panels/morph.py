@@ -4,12 +4,12 @@ from __future__ import annotations
 # -*- coding: utf-8 -*-
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QSlider, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from ..doc import add_morph, duplicate_morph, remove_morph
 from ..gl_names import morph_zh
 from ..pmx import MORPH_TYPE_NAMES
 from ..theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, DANGER, FIELD_BG, HEADER_BG, TEXT, TEXT_DIM, TEXT_FAINT)
-from ..ui_widgets import (Card, ConfirmDialog, EntryList, Form, SearchEdit, label, text_button)
+from ..ui_widgets import (Card, ConfirmDialog, EntryList, Form, SearchEdit, label, make_spin, text_button)
 from .base import _vec, PANEL_NAMES, PageBase
 
 # ================================================================= 形态
@@ -77,12 +77,13 @@ class MorphPage(PageBase):
         reset.clicked.connect(lambda: self.weight.setValue(0))
         dl.addWidget(card)
 
-        card, sec = self._card("偏移数据")
+        card, sec = self._card("偏移数据", "选中一条在下方编辑目标与数值")
         self.offset_table = QTableWidget(0, 2)
         self.offset_table.setHorizontalHeaderLabels(["目标", "数值"])
         self.offset_table.verticalHeader().setVisible(False)
         self.offset_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.offset_table.setSelectionMode(QTableWidget.NoSelection)
+        self.offset_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.offset_table.setSelectionMode(QTableWidget.SingleSelection)
         self.offset_table.setShowGrid(False)
         self.offset_table.horizontalHeader().setStretchLastSection(True)
         self.offset_table.horizontalHeader().setVisible(True)
@@ -93,9 +94,29 @@ class MorphPage(PageBase):
             "QHeaderView::section{background:%s;border:none;"
             "border-bottom:1px solid %s;padding:4px 6px;color:%s;font-size:8.4pt;}"
             % (FIELD_BG, BORDER, TEXT, HEADER_BG, BORDER_SOFT, TEXT_DIM))
+        self.offset_table.itemSelectionChanged.connect(self._sync_offset_editor)
         sec.add(self.offset_table)
         self.offset_note = label("", "Faint", True)
         sec.add(self.offset_note)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self.off_add = text_button("添加偏移", "Ghost", tip="按当前形态类型追加一条零值偏移")
+        self.off_del = text_button("删除偏移", "Ghost", tip="删除选中的偏移")
+        self.off_add.clicked.connect(self._add_offset)
+        self.off_del.clicked.connect(self._del_offset)
+        row.addWidget(self.off_add)
+        row.addStretch(1)
+        row.addWidget(self.off_del)
+        sec.add_layout(row)
+        dl.addWidget(card)
+
+        card, sec = self._card("编辑选中偏移")
+        self.off_host = QWidget()
+        self.off_lay = QVBoxLayout(self.off_host)
+        self.off_lay.setContentsMargins(0, 0, 0, 0)
+        self.off_lay.setSpacing(6)
+        sec.add(self.off_host)
         dl.addWidget(card)
         dl.addStretch(1)
         self.root.addWidget(self.scroll(self.detail), 3)
@@ -210,7 +231,9 @@ class MorphPage(PageBase):
 
     def _fill_offsets(self, m, mo):
         rows = mo.offsets
-        cap = 120
+        keep = self.offset_table.currentRow()
+        cap = 4000
+        self.offset_table.blockSignals(True)
         self.offset_table.setRowCount(0)
         for n, off in enumerate(rows[:cap]):
             target, value = self._offset_desc(m, mo, off)
@@ -222,6 +245,10 @@ class MorphPage(PageBase):
             self.offset_table.setItem(n, 0, a)
             self.offset_table.setItem(n, 1, b)
         self.offset_table.resizeColumnToContents(0)
+        self.offset_table.blockSignals(False)
+        if rows:
+            self.offset_table.setCurrentCell(max(0, min(keep, len(rows) - 1)), 0)
+        self._sync_offset_editor()
         if len(rows) > cap:
             self.offset_note.setText("共 %d 项，仅显示前 %d 项" % (len(rows), cap))
         else:
@@ -258,6 +285,185 @@ class MorphPage(PageBase):
             return "冲量 · " + nm, "速度 %s / 扭矩 %s" % (
                 _vec(off.get("velocity", [])), _vec(off.get("torque", [])))
         return "?", ""
+
+    # ------------------------------------------------------------ 偏移编辑
+    def _offset_spec(self, m, mo):
+        t = mo.type
+        morphs = [(i, mm.name or "未命名") for i, mm in enumerate(m.morphs)]
+        if t in (0, 9):
+            return [("morph", "combo", morphs), ("ratio", "float")]
+        if t == 1:
+            return [("vertex", "int", len(m.v_pos)), ("offset", "vec", 3)]
+        if t == 2:
+            return [("bone", "combo", [(i, b.name or "未命名") for i, b in enumerate(m.bones)]),
+                    ("move", "vec", 3), ("rot", "vec", 4)]
+        if 3 <= t <= 7:
+            return [("vertex", "int", len(m.v_pos)), ("offset", "vec", 4)]
+        if t == 8:
+            return [("material", "combo", [(-1, "全部材质")]
+                     + [(i, mt.name or "未命名") for i, mt in enumerate(m.materials)]),
+                    ("calc", "combo", [(0, "乘法"), (1, "加法")]),
+                    ("diffuse", "vec", 4), ("specular", "vec", 3), ("specular_coef", "float"),
+                    ("ambient", "vec", 3), ("edge_color", "vec", 4), ("edge_size", "float"),
+                    ("texture", "vec", 4), ("sphere", "vec", 4), ("toon", "vec", 4)]
+        if t == 10:
+            return [("rigid", "combo", [(i, rb.name or "未命名") for i, rb in enumerate(m.rigid)]),
+                    ("local", "combo", [(0, "无"), (1, "局部")]),
+                    ("velocity", "vec", 3), ("torque", "vec", 3)]
+        return []
+
+    def _clear_offset_editor(self):
+        while self.off_lay.count():
+            it = self.off_lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        self._off_widgets = {}
+
+    def _sync_offset_editor(self):
+        if not hasattr(self, "off_lay"):
+            return
+        self._clear_offset_editor()
+        m = self.doc.model
+        mo = self._morph()
+        row = self.offset_table.currentRow()
+        if not m or not mo or not (0 <= row < len(mo.offsets)):
+            return
+        off = mo.offsets[row]
+        spec = self._offset_spec(m, mo)
+        form = Form(72)
+        prev = self.loading
+        self.loading = True
+        try:
+            for item in spec:
+                key, kind = item[0], item[1]
+                if kind == "combo":
+                    combo = QComboBox()
+                    for data, text in item[2]:
+                        combo.addItem(text, data)
+                    cur = int(off.get(key, -1))
+                    at = combo.findData(cur)
+                    combo.setCurrentIndex(at if at >= 0 else 0)
+                    combo.currentIndexChanged.connect(
+                        lambda _i, k=key: self._off_changed(k))
+                    form.add(key, combo)
+                    self._off_widgets[key] = combo
+                elif kind == "int":
+                    sp = QSpinBox()
+                    sp.setRange(0, max(0, int(item[2]) - 1))
+                    sp.setValue(int(off.get(key, 0)))
+                    sp.editingFinished.connect(lambda k=key: self._off_changed(k))
+                    form.add(key, sp)
+                    self._off_widgets[key] = sp
+                elif kind == "float":
+                    sp = make_spin(5, -99999.0, 99999.0, 0.01)
+                    sp.setValue(float(off.get(key, 0.0)))
+                    sp.editingFinished.connect(lambda k=key: self._off_changed(k))
+                    form.add(key, sp)
+                    self._off_widgets[key] = sp
+                else:
+                    n = int(item[2])
+                    spins = []
+                    box = QWidget()
+                    lay = QHBoxLayout(box)
+                    lay.setContentsMargins(0, 0, 0, 0)
+                    lay.setSpacing(4)
+                    vals = list(off.get(key, []) or [])
+                    vals += [1.0 if (key == "rot" and i == 3) else 0.0
+                             for i in range(len(vals), n)]
+                    for i in range(n):
+                        tag = label("XYZW"[i], "Faint")
+                        sp = make_spin(5, -99999.0, 99999.0, 0.01)
+                        sp.setMinimumWidth(52)
+                        sp.setValue(float(vals[i]))
+                        sp.editingFinished.connect(lambda k=key: self._off_changed(k))
+                        lay.addWidget(tag)
+                        lay.addWidget(sp, 1)
+                        spins.append(sp)
+                    spins[0]._off_group = spins
+                    form.add(key, box)
+                    self._off_widgets[key] = spins
+        finally:
+            self.loading = prev
+        self.off_lay.addWidget(form)
+
+    def _off_value(self, key):
+        w = self._off_widgets.get(key)
+        if w is None:
+            return None
+        if isinstance(w, list):
+            return [float(sp.value()) for sp in w]
+        if isinstance(w, QComboBox):
+            d = w.currentData()
+            return int(d) if d is not None else None
+        if isinstance(w, QSpinBox):
+            return int(w.value())
+        return float(w.value())
+
+    def _off_changed(self, key):
+        if self.loading:
+            return
+        mo = self._morph()
+        row = self.offset_table.currentRow()
+        if not mo or not (0 <= row < len(mo.offsets)):
+            return
+        val = self._off_value(key)
+        if val is None:
+            return
+        cur = mo.offsets[row].get(key)
+        if isinstance(val, list):
+            if list(cur or []) == val:
+                return
+        elif cur is not None and float(cur) == float(val):
+            return
+        idx = self.idx
+
+        def fn(m):
+            m.morphs[idx].offsets[row][key] = val
+        self.edit("修改形态偏移", fn, "morph", "morph.offset." + key)
+
+    def _add_offset(self):
+        m = self.doc.model
+        mo = self._morph()
+        if not m or not mo:
+            return
+        if not self._offset_spec(m, mo):
+            self.set_hint("该形态类型不支持添加偏移")
+            return
+        t = mo.type
+        if t in (0, 9):
+            off = {"morph": 0, "ratio": 0.0}
+        elif t == 1:
+            off = {"vertex": 0, "offset": [0.0, 0.0, 0.0]}
+        elif t == 2:
+            off = {"bone": 0, "move": [0.0, 0.0, 0.0], "rot": [0.0, 0.0, 0.0, 1.0]}
+        elif 3 <= t <= 7:
+            off = {"vertex": 0, "offset": [0.0, 0.0, 0.0, 0.0]}
+        elif t == 8:
+            off = {"material": -1, "calc": 0, "diffuse": [0.0] * 4, "specular": [0.0] * 3,
+                   "specular_coef": 0.0, "ambient": [0.0] * 3, "edge_color": [0.0] * 4,
+                   "edge_size": 0.0, "texture": [0.0] * 4, "sphere": [0.0] * 4,
+                   "toon": [0.0] * 4}
+        else:
+            off = {"rigid": 0, "local": 0, "velocity": [0.0] * 3, "torque": [0.0] * 3}
+        idx = self.idx
+        self.doc.push_undo("新建形态偏移")
+        mo.offsets.append(off)
+        self.doc.mark_dirty()
+        self.doc.edited.emit("morph")
+        self._fill()
+
+    def _del_offset(self):
+        mo = self._morph()
+        row = self.offset_table.currentRow()
+        if not mo or not (0 <= row < len(mo.offsets)):
+            return
+        idx = self.idx
+        self.doc.push_undo("删除形态偏移")
+        del mo.offsets[row]
+        self.doc.mark_dirty()
+        self.doc.edited.emit("morph")
+        self._fill()
 
     # ------------------------------------------------------------ 编辑
     def _name_changed(self):

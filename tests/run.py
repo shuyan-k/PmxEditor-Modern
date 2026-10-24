@@ -5207,3 +5207,93 @@ def scen_frame():
         anomaly("ik-roundtrip", "IK 状态不一致")
     log("[frame] 表示枠 / IK 链编辑通过：frames=%d links=%d"
         % (len(m.frames), len(m.bones[target].ik.links) if m.bones[target].ik else 0))
+
+
+def scen_morph_edit():
+    """形态偏移编辑：目标/数值、添加/删除、往返。"""
+    win = WIN
+    doc = win.doc
+    m = doc.model
+    if not m:
+        anomaly("medit-nomodel", "没有模型")
+        dump()
+        return
+    page = win._pages[3]
+    win._select_page(3)
+    pump(80)
+
+    def pick(t):
+        for i, mo in enumerate(m.morphs):
+            if mo.type == t:
+                return i
+        return -1
+
+    vi = pick(1)
+    if vi < 0:
+        log("[morph-edit] 没有顶点形态，跳过顶点部分")
+    else:
+        page.select("morph", vi)
+        page.refresh()
+        pump(60)
+        if not m.morphs[vi].offsets:
+            page._add_offset()
+            pump(80)
+            if len(m.morphs[vi].offsets) != 1:
+                anomaly("medit-add", "偏移 %d" % len(m.morphs[vi].offsets))
+        page.offset_table.setCurrentCell(0, 0)
+        pump(40)
+        spins = page._off_widgets.get("offset")
+        if not spins:
+            anomaly("medit-form", "编辑器缺少 offset 字段")
+        else:
+            spins[0].setValue(0.25)
+            spins[0].editingFinished.emit()
+            pump(80)
+            val = m.morphs[vi].offsets[0].get("offset")
+            if abs(float(val[0]) - 0.25) > 1e-5:
+                anomaly("medit-value", "offset[0] = %r" % (val,))
+        n0 = len(m.morphs[vi].offsets)
+        page._add_offset()
+        pump(80)
+        if len(m.morphs[vi].offsets) != n0 + 1:
+            anomaly("medit-add2", "偏移 %d != %d" % (len(m.morphs[vi].offsets), n0 + 1))
+        page.offset_table.setCurrentCell(len(m.morphs[vi].offsets) - 1, 0)
+        pump(30)
+        page._del_offset()
+        pump(80)
+        if len(m.morphs[vi].offsets) != n0:
+            anomaly("medit-del", "偏移 %d != %d" % (len(m.morphs[vi].offsets), n0))
+
+    mi = pick(8)
+    if mi >= 0 and m.morphs[mi].offsets:
+        page.select("morph", mi)
+        page.refresh()
+        pump(60)
+        page.offset_table.setCurrentCell(0, 0)
+        pump(40)
+        spins = page._off_widgets.get("diffuse")
+        if not spins:
+            anomaly("medit-mat-form", "材质偏移缺少 diffuse")
+        else:
+            spins[0].setValue(0.75)
+            spins[0].editingFinished.emit()
+            pump(80)
+            d = m.morphs[mi].offsets[0].get("diffuse")
+            if abs(float(d[0]) - 0.75) > 1e-5:
+                anomaly("medit-mat-value", "diffuse = %r" % (d,))
+        combo = page._off_widgets.get("calc")
+        if combo is not None:
+            combo.setCurrentIndex(1)
+            pump(80)
+            if int(m.morphs[mi].offsets[0].get("calc", 0)) != 1:
+                anomaly("medit-calc", "calc = %r" % (m.morphs[mi].offsets[0].get("calc"),))
+    shot(win, "morph_edit")
+
+    path = os.path.join(H.ROOT, "tests", "morph_rt.pmx")
+    from pmxeditor.pmx import load_pmx as _pmx_load, save_pmx as _pmx_save
+    count = len(m.morphs)
+    _pmx_save(m, path)
+    back = _pmx_load(path)
+    if len(back.morphs) != count:
+        anomaly("medit-roundtrip", "%d != %d" % (len(back.morphs), count))
+    log("[morph-edit] 形态偏移编辑通过：morphs=%d" % count)
