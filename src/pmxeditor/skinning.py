@@ -921,12 +921,19 @@ class SkinDeformer:
                 direction = (p0 - c0) * w0 + (p1 - c1) * w1
                 dlen = float(np.linalg.norm(direction))
                 radius = float(np.linalg.norm(pos - point_c))
-                # R0/R1 是椭球半轴（骨骼本地坐标系）：静止方向上的半径
-                # = 1/sqrt(sum((d_i/a_i)^2))；全零时保持球面半径。
+                # R0 是静止椭球半轴、R1 是形变后半轴：静止方向与当前方向
+                # 都用同一组半轴比较（R1 优先，全零回退 R0），未变形时比值
+                # 恒为 1，从而逐位还原静止姿态。
                 r0 = np.abs(np.asarray(sdef[vi, 3:6], dtype=np.float64))
+                r1 = np.abs(np.asarray(sdef[vi, 6:9], dtype=np.float64))
                 rmax = float(r0.max()) if r0.size == 3 else 0.0
+                r1max = float(r1.max()) if r1.size == 3 else 0.0
+                if r1max > 1e-6:
+                    axes0, amax = r1, r1max
+                else:
+                    axes0, amax = r0, rmax
                 d_rest = pos - point_c
-                if rmax > 1e-6 and dlen > 1e-6:
+                if amax > 1e-6 and dlen > 1e-6:
                     rot = m0[:3, :3]
                     rest_local = d_rest
                     cur_local = rot.T @ direction
@@ -934,7 +941,7 @@ class SkinDeformer:
                     lc = float(np.linalg.norm(cur_local))
                     if lr > 1e-6 and lc > 1e-6:
                         # 与 C++ 一致：静止距离 x 椭球伸缩比
-                        axes = np.where(r0 < 1e-6, rmax, r0)
+                        axes = np.where(axes0 < 1e-6, amax, axes0)
                         sum_rest = float(np.sum(((rest_local / lr) / axes) ** 2))
                         sum_cur = float(np.sum(((cur_local / lc) / axes) ** 2))
                         if sum_rest > 1e-12 and sum_cur > 1e-12:

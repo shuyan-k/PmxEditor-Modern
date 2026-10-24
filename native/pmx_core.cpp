@@ -203,9 +203,17 @@ void deform_vertices(
             //   radius = |v - C| * ell(u_cur) / ell(u_rest)
             // 其中 ell(u) = 1/sqrt(sum((u_i/a_i)^2))。R0 全零时保持球面半径。
             const float* r0 = sd + 3;
+            const float* r1 = sd + 6;
             const float rmax = std::max(std::fabs(r0[0]),
                                         std::max(std::fabs(r0[1]), std::fabs(r0[2])));
-            if (rmax > 1e-6f && dir_len > 1e-6f) {
+            const float r1max = std::max(std::fabs(r1[0]),
+                                         std::max(std::fabs(r1[1]), std::fabs(r1[2])));
+            // R1 是形变后的椭球半轴。静止姿态必须逐位还原，因此静止方向与
+            // 当前方向都用同一组半轴比较（R1 优先，全零时回退 R0），未变形
+            // 时比值恒为 1；R1 与 R0 相等时与原实现完全一致。
+            const float* axes = (r1max > 1e-6f) ? r1 : r0;
+            const float amax = (r1max > 1e-6f) ? r1max : rmax;
+            if (amax > 1e-6f && dir_len > 1e-6f) {
                 const float* W0 = world + b0 * 16;
                 const float d_rest[3] = {base_pos[vi * 3 + 0] - center[0],
                                          base_pos[vi * 3 + 1] - center[1],
@@ -234,8 +242,8 @@ void deform_vertices(
                     float sum_rest = 0.0f;
                     float sum_cur = 0.0f;
                     for (int axis = 0; axis < 3; ++axis) {
-                        float a = std::fabs(r0[axis]);
-                        if (a < 1e-6f) a = rmax;  // 退化轴用最大半轴兜底
+                        float a = std::fabs(axes[axis]);
+                        if (a < 1e-6f) a = amax;  // 退化轴用最大半轴兜底
                         const float tr = (dl_rest[axis] / len_rest) / a;
                         const float tc = (dl_cur[axis] / len_cur) / a;
                         sum_rest += tr * tr;

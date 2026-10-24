@@ -4408,6 +4408,85 @@ def scen_ellipsoid():
     H.dump()
 
 
+def scen_sdefr1():
+    """SDEF 的 R1（形变后的椭球半轴）。
+
+    语义：静止方向与当前方向都用同一组半轴度量（R1 优先，全零回退 R0），
+    静止时比值恒为 1，所以 R1 不会挪动静止姿态；R1 与 R0 相等时与旧实现
+    逐位一致。
+    """
+    import types
+    import numpy as _np
+    from pmxeditor import skinning as SK
+
+    log("== SDEF R1 ==")
+    nrm = _np.array([[0, 0, 1]], dtype=_np.float32)
+    rest = _np.zeros((2, 3), dtype=_np.float32)
+
+    def make_world(deg):
+        world = _np.stack([_np.eye(4, dtype=_np.float32)] * 2)
+        if deg:
+            a = _np.deg2rad(deg)
+            world[1] = _np.array([[ _np.cos(a), -_np.sin(a), 0, 0],
+                                  [ _np.sin(a),  _np.cos(a), 0, 0],
+                                  [0, 0, 1, 0], [0, 0, 0, 1]], dtype=_np.float32)
+        return world
+
+    def run(r0, r1, deg, base_pt=(1.5, 0.0, 0.0)):
+        base = _np.array([base_pt], dtype=_np.float32)
+        world = make_world(deg)
+        sd = _np.zeros((1, 9), dtype=_np.float32)
+        sd[0, 3:6] = _np.asarray(r0, dtype=_np.float32)
+        sd[0, 6:9] = _np.asarray(r1, dtype=_np.float32)
+        model = types.SimpleNamespace(
+            v_pos=base, v_nrm=nrm,
+            v_bones=_np.array([[0, 1, 0, 0]], dtype=_np.int32),
+            v_weights=_np.array([[0.5, 0.5, 0, 0]], dtype=_np.float32),
+            v_wtype=_np.array([3], dtype=_np.uint8), v_sdef=sd)
+        out, _ = SK.native_core.deform(base, nrm, model.v_bones,
+                                       model.v_weights, model.v_wtype,
+                                       rest, world, sd)
+        fake = types.SimpleNamespace(model=model, rest_pos=rest)
+        back = SK.SkinDeformer._special_blend(fake, base, world,
+                                              _np.zeros_like(base))
+        diff = float(_np.linalg.norm(back[0] - out[0]))
+        return float(_np.linalg.norm(out[0])), diff, out[0]
+
+    iso, iso_fb, _ = run([1.0, 1.0, 1.0], [0, 0, 0], 60.0)
+    log(" R0 各向同性、R1=0（回退 R0）: 半径=%.4f 回退差=%.6f" % (iso, iso_fb))
+    if abs(iso - 1.5) > 2e-3:
+        anomaly("sdefr1-iso", "各向同性半轴应保持球面半径 1.5，实际 %.4f" % iso)
+
+    r1_only, r1_fb, _ = run([1.0, 1.0, 1.0], [1.0, 2.0, 0.5], 60.0)
+    log(" R1=[1,2,0.5] 生效: 半径=%.4f (期望 1.6642) 回退差=%.6f"
+        % (r1_only, r1_fb))
+    if abs(r1_only - 1.6642) > 3e-3:
+        anomaly("sdefr1-active",
+                "R1 应改变半径到 1.6642，实际 %.4f" % r1_only)
+    if abs(r1_only - iso) < 1e-3:
+        anomaly("sdefr1-ignored", "R1 未参与计算（与各向同性结果相同）")
+
+    fb_r0, fb_r0_fb, _ = run([1.0, 2.0, 0.5], [0, 0, 0], 60.0)
+    log(" R0=[1,2,0.5]、R1=0（旧数据）: 半径=%.4f 回退差=%.6f"
+        % (fb_r0, fb_r0_fb))
+    if abs(fb_r0 - 1.6642) > 3e-3:
+        anomaly("sdefr1-compat", "R1 全零应回退 R0，实际 %.4f" % fb_r0)
+
+    same, same_fb, _ = run([1.0, 2.0, 0.5], [1.0, 2.0, 0.5], 60.0)
+    log(" R1==R0: 半径=%.4f 回退差=%.6f" % (same, same_fb))
+    if abs(same - fb_r0) > 1e-4:
+        anomaly("sdefr1-identical", "R1==R0 时应与旧实现一致")
+
+    at_rest, rest_fb, _ = run([1.0, 1.0, 1.0], [1.0, 2.0, 0.5], 0.0)
+    log(" 静止姿态（R1=[1,2,0.5]）: 半径=%.4f (期望 1.5000) 回退差=%.6f"
+        % (at_rest, rest_fb))
+    if abs(at_rest - 1.5) > 1e-3:
+        anomaly("sdefr1-rest", "R1 不应挪动静止姿态，实际 %.4f" % at_rest)
+    if max(iso_fb, r1_fb, fb_r0_fb, same_fb, rest_fb) > 1e-4:
+        anomaly("sdefr1-fallback", "Python 回退与原生 R1 半径不一致")
+    H.dump()
+
+
 def scen_ikclamp():
     """IK 限位：欧拉分支连续 + 顶到限位后不再来回抖（native 与回退两条路径）。"""
     from pmxeditor import skinning as SK
