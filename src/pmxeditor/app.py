@@ -151,6 +151,8 @@ class MainWindow(QMainWindow):
         self._action_timer.setInterval(33)          # 30fps
         self._action_timer.timeout.connect(self._on_action_tick)
         self.settings = QSettings("PmxEditorModern", "editor")
+        from . import skinning as _sk
+        _sk.SDEF_AS_BDEF2 = bool(self.settings.value("view/sdef_as_bdef2", False, type=bool))
         self._pages = []
         self._current_page = 0
 
@@ -370,6 +372,11 @@ class MainWindow(QMainWindow):
             act.setChecked(bool(getattr(self.viewport, key)))
             act.toggled.connect(lambda on, k=key: self._toggle_display(k, on))
             self.display_actions[key] = act
+        m_view.addSeparator()
+        act = m_view.addAction("SDEF 降级为 BDEF2（规避膝部鼓包）")
+        act.setCheckable(True)
+        act.setChecked(bool(self.settings.value("view/sdef_as_bdef2", False, type=bool)))
+        act.toggled.connect(self._toggle_sdef_fallback)
 
         m_help = mb.addMenu("帮助")
         a = m_help.addAction("快捷键与说明")
@@ -1077,6 +1084,15 @@ class MainWindow(QMainWindow):
         texts = {"browse": "浏览模式", "pose": "姿态模式 · 拖动骨骼旋转",
                  "physics": "物理模式 · 左键选择刚体/关节"}
         self._set_status(texts.get(mode, ""))
+
+    def _toggle_sdef_fallback(self, on: bool) -> None:
+        """把 SDEF 当 BDEF2 处理（规避膝部椭球鼓包），重建蒙皮并记忆到 QSettings。"""
+        from . import skinning as _sk
+        _sk.SDEF_AS_BDEF2 = bool(on)
+        self.settings.setValue("view/sdef_as_bdef2", bool(on))
+        if self.doc.model is not None:
+            self.viewport.set_model(self.doc.model)
+        self._set_status("SDEF 已降级为 BDEF2" if on else "SDEF 恢复正常计算")
 
     def _toggle_display(self, key: str, on: bool):
         self.viewport.set_display(**{key: on})
