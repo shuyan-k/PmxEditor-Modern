@@ -86,6 +86,10 @@ class Viewport(QOpenGLWidget):
         self._rest_sig = None
         self._phys_state = None
         self._skin_sig = None
+        # 物理世界惰性构建：浏览/编辑模式不演算，没必要每次结构编辑都 build
+        self._phys_pending = False
+        # 与对象身份无关的网格指纹（撤销会整对象替换，id 比较会全部失效）
+        self._mesh_sig = None
         # 解码后的像素（CPU 侧），供后台预热线程与 _texture 共用
         self._tex_pixels: Dict[str, Optional[tuple]] = {}
         self._tex_lock = threading.Lock()
@@ -292,16 +296,15 @@ class Viewport(QOpenGLWidget):
         self.physics.gravity = self.physics_settings["gravity"]
         self.physics.iterations = self.physics_settings["iterations"]
         self.physics.ground = self.physics_settings["ground"]
-        try:
-            self.physics.build(model)
-        except Exception as e:
-            self.physics.error = str(e)
         self.physics.enabled = False
+        # 惰性构建：开模型时不 build 物理世界，省掉约 19 ms（米娅 183 刚体）
+        self._phys_pending = True
         self.mode = "browse" if self.mode == "physics" else self.mode
         self._invalidate_all_geometry()
         self.update()
         self._prewarm_textures()
         self._struct_state = self.structure_state()
+        self._mesh_sig = self._mesh_signature(model)
         self._pose_state = self.pose_state()
         self._rest_sig = self.rest_pos_state()
         self._phys_state = self.phys_state()
@@ -340,6 +343,10 @@ class Viewport(QOpenGLWidget):
         self._rest_sig = None
         self._phys_state = None
         self._skin_sig = None
+        # 物理世界惰性构建：浏览/编辑模式不演算，没必要每次结构编辑都 build
+        self._phys_pending = False
+        # 与对象身份无关的网格指纹（撤销会整对象替换，id 比较会全部失效）
+        self._mesh_sig = None
         self._invalidate_all_geometry()
         self.update()
 
@@ -440,6 +447,78 @@ class Viewport(QOpenGLWidget):
         self._prepare_bone_cache()
         return True
 
+    @staticmethod
+    def _mesh_signature(model):
+        """与对象身份无关的网格指纹。
+
+        structure_state() 用 id() 判断数组是否被重写，但撤销/重做会整体替换
+        Document.model，id 全部变化而内容其实一致，所以另用一份内容指纹。
+        """
+        if model is None:
+            return None
+        try:
+            return (int(model.n_vertices), int(model.indices.size),
+                    int(model.v_uv.shape[0]), len(model.materials))
+        except Exception:
+            return None
+
+    def ensure_physics(self) -> bool:
+        """按需构建物理世界（惰性构建的唯一入口），返回是否可用。"""
+        if not self.model:
+            return False
+        if self.physics is not None and self.physics._ready and not self._phys_pending:
+            return True
+        if self.physics is None:
+            self.physics = MMDPhysics()
+        self.physics.gravity = self.physics_settings["gravity"]
+        self.physics.iterations = self.physics_settings["iterations"]
+        self.physics.ground = self.physics_settings["ground"]
+        try:
+            self.physics.build(self.model)
+        except Exception as e:
+            self.physics.error = str(e)
+        self._phys_pending = False
+        self._rb_dirty = True
+        return bool(self.physics._ready)
+
+    def adopt_model(self, model) -> bool:
+        """接管结构等价的另一个模型对象，返回 False 表示必须整次 set_model。
+
+        撤销/重做会把 Document.model 换成快照副本：网格与材质布局没变时，
+        只需要重建 Pose/SkinDeformer 与缓存，不必重传网格、重置相机或重建
+        物理世界。网格布局变了则交回调用方处理。
+        """
+        if model is None or self.model is None or self.pose is None:
+            return False
+        if self._mesh_signature(model) != self._mesh_sig:
+            return False
+        self.model = model
+        self._prepare_bone_cache()
+        if any(i >= len(model.morphs) for i in self.morph_weights):
+            self.morph_weights = {}
+        base = (self.pose.base_rot.copy(), self.pose.base_trans.copy())
+        self.pose = Pose(model)
+        if base[0].shape == self.pose.base_rot.shape:
+            self.pose.base_rot = base[0]
+            self.pose.base_trans = base[1]
+        self.pose.apply(self.morph_weights, model.morphs)
+        self.pose.world_update()
+        self.deformer = SkinDeformer(model)
+        self._struct_state = self.structure_state()
+        self._mesh_sig = self._mesh_signature(model)
+        self._pose_state = self.pose_state()
+        self._rest_sig = self.rest_pos_state()
+        self._skin_sig = (id(model.v_bones), id(model.v_weights))
+        if self.phys_state() != self._phys_state:
+            self.rebuild_physics()
+        self._phys_state = self.phys_state()
+        if self.selection_index >= len(model.bones):
+            self.selection_kind = ""
+            self.selection_index = -1
+        self._invalidate_all_geometry()
+        self.update()
+        return True
+
     def rebuild_structure(self) -> bool:
         """结构编辑后的就地最小重建。
 
@@ -485,6 +564,7 @@ class Viewport(QOpenGLWidget):
         if phys_changed:
             self.rebuild_physics()
         self._struct_state = new
+        self._mesh_sig = self._mesh_signature(model)
         self._pose_state = self.pose_state()
         self._phys_state = self.phys_state()
         self._invalidate_all_geometry()
@@ -633,8 +713,7 @@ class Viewport(QOpenGLWidget):
 
     def set_physics(self, on: bool):
         if on:
-            if not self.physics._ready and self.model:
-                self.physics.build(self.model)
+            self.ensure_physics()
             if self.physics._ready:
                 self.physics.reset(self.pose, self.morph_weights,
                                    self.model.morphs if self.model else None)
@@ -692,7 +771,7 @@ class Viewport(QOpenGLWidget):
         """
         if not self.model or not (0 <= index < len(self.model.rigid)):
             return False
-        if self.physics is None or not self.physics._ready:
+        if self.physics is None or not self.ensure_physics():
             return False
         rb = self.model.rigid[index]
         ok = self.physics.set_body_params(index, mass=float(rb.mass),
@@ -702,18 +781,20 @@ class Viewport(QOpenGLWidget):
         return ok
 
     def rebuild_physics(self):
-        """结构或参数变化后重建物理世界，保持开关状态。"""
+        """结构或参数变化后重建物理世界，保持开关状态。
+
+        默认惰性：只作废旧世界并置待建标记，真正演算时再由 ensure_physics()
+        构建；若此刻正在演算（was=True）则立刻重建，避免物理停摆。
+        """
         was = self.physics.enabled if self.physics else False
         self.physics.release()
         self.physics = MMDPhysics()
         self.physics.gravity = self.physics_settings["gravity"]
         self.physics.iterations = self.physics_settings["iterations"]
         self.physics.ground = self.physics_settings["ground"]
-        if self.model:
-            try:
-                self.physics.build(self.model)
-            except Exception as e:
-                self.physics.error = str(e)
+        self._phys_pending = True
+        if was:
+            self.ensure_physics()
         if was and self.physics._ready:
             self.physics.reset(self.pose, self.morph_weights,
                                self.model.morphs if self.model else None)
@@ -729,6 +810,8 @@ class Viewport(QOpenGLWidget):
 
     def _on_tick(self):
         if not (self.model and self.pose):
+            return
+        if not self.ensure_physics():
             return
         dt = max(0.0, min(0.05, self._phys_last.elapsed() / 1000.0))
         self._phys_last.restart()

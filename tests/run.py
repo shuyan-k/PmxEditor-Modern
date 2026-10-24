@@ -4408,6 +4408,53 @@ def scen_ellipsoid():
     H.dump()
 
 
+def scen_physlazy():
+    """结构编辑后不立即构建物理世界；进物理模式才构建。"""
+    vp = WIN.viewport
+    doc = WIN.doc
+    if vp.physics is None or not doc.model.rigid:
+        anomaly("physlazy", "物理对象或刚体缺失")
+        return
+    log("初始: ready=%s pending=%s" % (vp.physics._ready, vp._phys_pending))
+    if vp.physics._ready:
+        anomaly("physlazy", "载入后不该已经构建物理世界")
+    # 结构编辑（新建骨骼）
+    t0 = time.time()
+    WIN._select_page(1)
+    WIN._pages[1]._add()
+    pump(120)
+    dt = (time.time() - t0) * 1000.0
+    log("新建骨骼 %.1f ms: ready=%s pending=%s"
+        % (dt, vp.physics._ready, vp._phys_pending))
+    if vp.physics._ready:
+        anomaly("physlazy", "结构编辑后不该立即构建物理世界")
+    if not vp._phys_pending:
+        anomaly("physlazy", "结构编辑后应置待建标记")
+    # 进物理模式 -> 立刻构建
+    t0 = time.time()
+    vp.set_mode("physics")
+    pump(80)
+    log("进物理模式 %.1f ms: ready=%s pending=%s"
+        % ((time.time() - t0) * 1000.0, vp.physics._ready, vp._phys_pending))
+    if not vp.physics._ready:
+        anomaly("physlazy", "物理模式应构建物理世界")
+    # 撤销（adopt_model 接管新对象，物理惰性）
+    WIN.set_mode("browse")
+    n0 = len(doc.model.bones)
+    t0 = time.time()
+    doc.undo()
+    pump(120)
+    log("撤销 %.1f ms: bones %d->%d 接管=%s"
+        % ((time.time() - t0) * 1000.0, n0, len(doc.model.bones),
+           vp.model is doc.model))
+    if vp.model is not doc.model:
+        anomaly("physlazy", "撤销后视口未接管新模型对象")
+    if vp.physics.enabled:
+        anomaly("physlazy", "浏览模式下物理不该在演算")
+    shot(WIN, "physlazy")
+    H.dump()
+
+
 def scen_physlive():
     """P1-b：质量/摩擦力热更新——世界不重建，静态刚体被跳过。"""
     vp, doc = WIN.viewport, WIN.doc

@@ -45,3 +45,5 @@ native/*.txt
 native/*.log
 _test/
 !tests/test_model.pmx
+
+*.log

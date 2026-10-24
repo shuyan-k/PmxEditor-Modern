@@ -723,9 +723,13 @@ class MainWindow(QMainWindow):
         kind, index = self.doc.sel_kind, self.doc.sel_index
         self.doc.suppress = True
         try:
-            # 撤销/重做会整体替换 Document.model 对象；此时视口手里的还是旧对象，
-            # 就地分项重建会基于过期数据，必须走完整的 set_model 重新挂接。
-            if vp.model is self.doc.model and vp.rebuild_structure():
+            # 撤销/重做会整体替换 Document.model 对象：网格与材质布局没变时，
+            # 先让视口接管新对象（只重建 Pose/Deformer），仍可走分项重建；
+            # 布局变了（顶点/索引/UV/材质区间）才回落到完整 set_model。
+            adopted = True
+            if vp.model is not self.doc.model:
+                adopted = vp.adopt_model(self.doc.model)
+            if adopted and vp.rebuild_structure():
                 self._refresh_pages(active_only=True)
                 self._pages[5].sync_display(vp)
                 if kind:
