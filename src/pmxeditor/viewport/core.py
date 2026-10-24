@@ -54,7 +54,10 @@ class Viewport(QOpenGLWidget):
         self.physics = MMDPhysics()
         self.physics_settings = {"gravity": -9.8, "iterations": 10, "ground": True}
         self.camera = OrbitCamera()
-        self.mode = "browse"           # browse / pose / physics
+        # 单一视图：姿态编辑随时可用，物理是独立开关（见 set_physics），
+        # 两者可以同时生效（物理+姿态）。这里只记录"当前按住的骨骼"，
+        # 供双击选中后的连续拖动作业。
+        self._armed_bone = -1
         self.selection_kind = ""
         self.selection_index = -1
         self._pick_cycle = None
@@ -299,7 +302,7 @@ class Viewport(QOpenGLWidget):
         self.physics.enabled = False
         # 惰性构建：开模型时不 build 物理世界，省掉约 19 ms（米娅 183 刚体）
         self._phys_pending = True
-        self.mode = "browse" if self.mode == "physics" else self.mode
+        self._armed_bone = -1
         self._invalidate_all_geometry()
         self.update()
         self._prewarm_textures()
@@ -335,7 +338,7 @@ class Viewport(QOpenGLWidget):
             self.physics.release()
         except Exception:
             pass
-        self.mode = "browse"
+        self._armed_bone = -1
         self._skin_pos = None
         self._skin_nrm = None
         self._struct_state = None
@@ -703,15 +706,8 @@ class Viewport(QOpenGLWidget):
         self.camera.fit(lo, hi)
 
     # ------------------------------------------------------------ 更新
-    def set_mode(self, mode):
-        self.mode = mode
-        if mode == "physics":
-            self.set_physics(True)
-        else:
-            self.set_physics(False)
-        self.update()
-
     def set_physics(self, on: bool):
+        """物理开关；与姿态编辑互不排斥（物理演算的同时仍可摆姿）。"""
         if on:
             self.ensure_physics()
             if self.physics._ready:
@@ -1742,8 +1738,8 @@ class Viewport(QOpenGLWidget):
                 f"{self.model.n_vertices:,}", f"{self.model.n_faces:,}",
                 self.model.n_bones, len(self.model.materials), self.model.n_morphs)
             p.drawText(18, 43, stats)
-        # 模式徽标
-        mode_text = {"browse": "浏览", "pose": "摆姿", "physics": "物理"}.get(self.mode, self.mode)
+        # 模式徽标：单一视图，只显示物理开关状态
+        mode_text = "物理演算" if self.physics.enabled else "摆姿"
         p.setFont(ui_font(8.5, QFont.DemiBold))
         fm = p.fontMetrics()
         tw = fm.horizontalAdvance(mode_text) + 20
@@ -1766,14 +1762,12 @@ class Viewport(QOpenGLWidget):
         # 底部提示
         p.setFont(ui_font(8.2))
         p.setPen(c_faint)
-        hint = "左键拖动 旋转 · 右键拖动 平移 · 滚轮缩放 · 左键单击 选择（Alt 循环重叠）· F 聚焦 · R 重置"
-        if self.mode == "pose":
-            hint = "左键拖动骨骼 旋转 / IK移动 · 右键拖动 平移 · 滚轮缩放 · F 聚焦 · R 重置"
+        hint = "左键拖动骨骼 位移 · 右键拖动骨骼 旋转 · 中键拖动 旋转视角（Shift 平移）· 滚轮缩放 · 双击选中 · F 聚焦 · R 重置"
         p.drawText(18, h - 16, hint)
         # 空闲不重绘时没有真实帧率可言，显示"空闲"而不是误导性的 0/1 FPS
         fps_txt = "空闲" if self._fps <= 0.0 else "%.0f FPS" % self._fps
-        if self.mode == "physics":
-            fps_txt = ("物理演算中 · " if self.physics.enabled else "物理就绪 · ") + fps_txt
+        if self.physics.enabled:
+            fps_txt = "物理演算中 · " + fps_txt
         p.setFont(mono_font(8.2))
         p.setPen(c_faint)
         p.drawText(QRectF(w - 260, h - 28, 240, 16), Qt.AlignRight | Qt.AlignVCenter, fps_txt)
@@ -1872,7 +1866,7 @@ class Viewport(QOpenGLWidget):
         changed_bones = set()
         for mode, bone, dx, dy in pending:
             changed_bones.add(bone)
-            if mode == "pose":
+            if mode == "rotate":
                 self.pose.rotate_world(bone, (0.0, 1.0, 0.0), dx * 0.012)
                 self.pose.rotate_world(bone, tuple(self.camera.right()), dy * 0.012)
             elif mode == "move":
@@ -1896,6 +1890,22 @@ class Viewport(QOpenGLWidget):
         self._pose_dirty = True
         self.update()
 
+    def _begin_bone_drag(self, index: int, mode: str):
+        """按下骨骼：先选中，再按左键/右键进入位移/旋转拖动。"""
+        old_kind = self.selection_kind
+        self.selection_kind, self.selection_index = "bone", index
+        self.boneClicked.emit(index)
+        self._mark_selection_geometry_dirty(old_kind, "bone")
+        self.update()
+        # 撤销记录推迟到真正拖动时：单击不拖动不该压入撤销栈
+        self._edit_pushed = False
+        self._pose_moved = False
+        self._drag_bone = index
+        self._armed_bone = index
+        self._dragging = mode
+        self._last_mouse = self._press_pos
+        self.setCursor(Qt.SizeAllCursor if mode == "move" else Qt.CrossCursor)
+
     def mousePressEvent(self, e):
         self.setFocus()
         self._press_pos = e.pos()
@@ -1908,38 +1918,49 @@ class Viewport(QOpenGLWidget):
             kind, index = self.pick(e.x(), e.y(),
                                     cycle=bool(e.modifiers() & Qt.AltModifier))
             self._pending_pick = (kind, index)
-            if self.mode == "pose" and kind == "bone":
-                old_kind = self.selection_kind
-                self.selection_kind, self.selection_index = kind, index
-                self.boneClicked.emit(index)
-                self._mark_selection_geometry_dirty(old_kind, kind)
-                self.update()
-                # 撤销记录推迟到真正拖动时：单击不拖动不该压入撤销栈
-                self._edit_pushed = False
-                self._pose_moved = False
-                if e.modifiers() & Qt.ShiftModifier:
-                    self._dragging = "move"
-                elif self._is_ik_bone(index):
-                    # IK 控制器不参与骨骼旋转，直接拖动即移动目标点
-                    self._dragging = "move"
-                else:
-                    self._dragging = "pose"
-                self._drag_bone = index
-                self._last_mouse = e.pos()
-                self.setCursor(Qt.SizeAllCursor if self._dragging == "move"
-                               else Qt.CrossCursor)
+            if kind == "bone":
+                # 左键 = 位移（IK 控制器、Shift 修饰同样走位移）
+                self._begin_bone_drag(index, "move")
                 return
             self._dragging = "select"
             self._last_mouse = e.pos()
             self.setCursor(Qt.PointingHandCursor if kind else Qt.ArrowCursor)
             return
         if e.button() == Qt.RightButton:
-            # 右键拖动平移（通用 3D 视角操作）
+            kind, index = self.pick(e.x(), e.y(),
+                                    cycle=bool(e.modifiers() & Qt.AltModifier))
+            if kind == "bone":
+                # 右键 = 旋转；右键落在空白处仍是视角平移
+                self._pending_pick = (kind, index)
+                self._begin_bone_drag(index, "rotate")
+                return
             self._dragging = "pan"
             self._last_mouse = e.pos()
             self.setCursor(Qt.ClosedHandCursor)
             return
         super().mousePressEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        """双击选中骨骼：之后左键拖动位移、右键拖动旋转。"""
+        if e.button() == Qt.LeftButton:
+            kind, index = self.pick(e.x(), e.y(),
+                                    cycle=bool(e.modifiers() & Qt.AltModifier))
+            if kind == "bone":
+                old_kind = self.selection_kind
+                self.selection_kind, self.selection_index = "bone", index
+                self.boneClicked.emit(index)
+                self._mark_selection_geometry_dirty(old_kind, "bone")
+                self._armed_bone = index
+                self._dragging = None
+                self.setCursor(Qt.ArrowCursor)
+                self.update()
+                name = ""
+                if self.model and 0 <= index < len(self.model.bones):
+                    name = self.model.bones[index].name or ""
+                self.statusChanged.emit(
+                    "已选中「%s」：左键拖动位移 · 右键拖动旋转" % (name or "骨骼"))
+                return
+        super().mouseDoubleClickEvent(e)
 
     def mouseMoveEvent(self, e):
         if self._dragging == "select" and (e.buttons() & Qt.LeftButton):
@@ -1961,26 +1982,14 @@ class Viewport(QOpenGLWidget):
                 self.camera.target += self.camera.up_vec() * d.y() * k
             self.update()
             return
-        if self._dragging == "pose" and self._drag_bone >= 0 and self.pose:
+        if self._dragging in ("rotate", "move") and self._drag_bone >= 0 and self.pose:
             d = e.pos() - self._last_mouse
             self._last_mouse = e.pos()
             if d.x() or d.y():
                 if not self._edit_pushed:
                     self._edit_pushed = True
-                    self.editStarted.emit("调整骨骼姿态")
-                self._pose_moved = True
-                self._pending_pose_deltas.append(
-                    (self._dragging, self._drag_bone, d.x(), d.y()))
-                if not self._pose_flush_timer.isActive():
-                    self._pose_flush_timer.start()
-            return
-        if self._dragging == "move" and self._drag_bone >= 0 and self.pose:
-            d = e.pos() - self._last_mouse
-            self._last_mouse = e.pos()
-            if d.x() or d.y():
-                if not self._edit_pushed:
-                    self._edit_pushed = True
-                    self.editStarted.emit("调整骨骼姿态")
+                    self.editStarted.emit(
+                        "旋转骨骼" if self._dragging == "rotate" else "移动骨骼")
                 self._pose_moved = True
                 self._pending_pose_deltas.append(
                     (self._dragging, self._drag_bone, d.x(), d.y()))
@@ -2004,7 +2013,7 @@ class Viewport(QOpenGLWidget):
 
     def mouseReleaseEvent(self, e):
         was = self._dragging
-        if was in ("pose", "move") and self.pose:
+        if was in ("rotate", "move") and self.pose:
             d = e.pos() - self._last_mouse
             if d.x() or d.y():
                 self._pending_pose_deltas.append(
@@ -2036,7 +2045,7 @@ class Viewport(QOpenGLWidget):
                     self.selectionCleared.emit()
                     self.update()
         self._pending_pick = ("", -1)
-        if was in ("pose", "move") and self.pose and self._pose_moved:
+        if was in ("rotate", "move") and self.pose and self._pose_moved:
             # 松手时用完整迭代次数再收敛一次，保证姿态精确
             self.pose.world_update()
             before_rot = self.pose.base_rot.copy()
@@ -2082,27 +2091,30 @@ class Viewport(QOpenGLWidget):
         def depth_of(p):
             return float(np.linalg.norm(np.array(p, np.float64) - eye))
 
-        if self.mode == "physics":
-            # 刚体优先，其次关节
+        # 单一视图：骨骼手柄优先（摆姿是主操作），没有命中骨骼时才让
+        # 显示中的刚体/关节参与拾取；Alt 循环在同类候选内轮换。
+        bones = []
+        others = []
+        if self.show_rigid:
             for i, rb in enumerate(m.rigid):
                 p = self.camera.project(rb.pos, self.width(), self.height())
                 if not p:
                     continue
                 d = math.hypot(p[0] - x, p[1] - y)
                 if d < 13.0:
-                    out.append((d, depth_of(rb.pos), "rigid", i))
-            if not out:
-                for i, j in enumerate(m.joints):
-                    p = self.camera.project(j.pos, self.width(), self.height())
-                    if not p:
-                        continue
-                    d = math.hypot(p[0] - x, p[1] - y)
-                    if d < 13.0:
-                        out.append((d, depth_of(j.pos), "joint", i))
-            return out
+                    others.append((d, depth_of(rb.pos), "rigid", i))
+        if self.show_joints:
+            for i, j in enumerate(m.joints):
+                p = self.camera.project(j.pos, self.width(), self.height())
+                if not p:
+                    continue
+                d = math.hypot(p[0] - x, p[1] - y)
+                if d < 13.0:
+                    others.append((d, depth_of(j.pos), "joint", i))
         world = self.pose.world() if self.pose else None
         if world is None:
-            return []
+            return others
+        out = bones
         for i, b in enumerate(m.bones):
             if not (b.flags & 0x0008):
                 continue
@@ -2133,7 +2145,7 @@ class Viewport(QOpenGLWidget):
                 d -= 5.0
             if d < radius:
                 out.append((d, depth_of(head), "bone", i))
-        return out
+        return out if out else others
 
     def pick(self, x, y, cycle=False):
         """返回光标下最可能的对象；cycle=True 时按由近到远轮换候选。"""

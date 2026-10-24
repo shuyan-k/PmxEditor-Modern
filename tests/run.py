@@ -191,11 +191,11 @@ def inventory(tag=""):
                 log("%s %-10s %s" % (name, type(w).__name__, desc(w)[:70]))
     log("页面切换按钮:", [b.toolTip() for b in WIN.rail_buttons])
     log("菜单:", [a.text() for a in WIN.menubar.actions()])
-    log("模式:", WIN.mode_seg.value(), [b.text() for b in WIN.mode_seg.findChildren(QAbstractButton)])
+    log("物理开关:", WIN.physics_switch.isChecked(), "enabled=", WIN.viewport.physics.enabled)
     log("状态栏:", WIN.status_label.text(), "|", WIN.sel_label.text(), "|", WIN.phys_label.text())
     log("窗口几何:", WIN.geometry().getRect(), "DPR:", WIN.devicePixelRatioF())
     log("splitter:", WIN.splitter.sizes())
-    log("viewport:", WIN.viewport.width(), WIN.viewport.height(), "mode=", WIN.viewport.mode,
+    log("viewport:", WIN.viewport.width(), WIN.viewport.height(), "physics=", WIN.viewport.physics.enabled,
         "fps=", getattr(WIN.viewport, "fps", "?"))
 
 # ---------------------------------------------------------------- 场景：清单
@@ -915,41 +915,61 @@ def scen_vp():
     QTest.keyClick(vp, Qt.Key_F)
     pump(300)
     log("    dist=%.3f target=%s" % (cam.distance, [round(float(v), 3) for v in cam.target]))
-    # 姿态模式拖动骨骼
-    log("=== 姿态模式")
-    WIN.set_mode("pose")
+    # 姿态编辑：左键拖动 = 位移，右键拖动 = 旋转
+    log("=== 姿态编辑（物理关闭）")
+    WIN.set_physics(False)
     pump(400)
     rot_before = [list(map(float, r)) for r in vp.pose.base_rot] if vp.pose else None
+    trans_before = [list(map(float, r)) for r in vp.pose.base_trans] if vp.pose else None
     n_undo = len(WIN.doc._undo)
     if "bone" in hits:
         hx, hy, idx = [v for v in hits["bone"] if v[2] != 0][0]
-        log("--- 姿态模式左键拖动骨骼 index=%d 本地(%d,%d)" % (idx, hx, hy))
-        _mouse_drag(vp, QPoint(hx, hy), QPoint(hx + 40, hy + 15), Qt.LeftButton, Qt.NoModifier)
+        log("--- 右键拖动骨骼旋转 index=%d 本地(%d,%d)" % (idx, hx, hy))
+        _mouse_drag(vp, QPoint(hx, hy), QPoint(hx + 40, hy + 15), Qt.RightButton, Qt.NoModifier)
         pump(500)
         log("    undo %d → %d status=%r" % (n_undo, len(WIN.doc._undo), STATUS.text))
         if vp.pose:
             rot_after = [list(map(float, r)) for r in vp.pose.base_rot]
             diff = [i for i in range(len(rot_before)) if rot_before[i] != rot_after[i]]
-            log("    姿态变化的骨骼 = %s" % diff)
+            log("    旋转变化的骨骼 = %s" % diff)
             if not diff:
-                anomaly("pose-drag", "姿态模式下拖动骨骼后没有任何骨骼旋转变化")
+                anomaly("pose-rotate", "右键拖动骨骼后没有任何骨骼旋转变化")
+        # 左键拖动同一骨骼：应只改位移、不改旋转
+        rot_mid = [list(map(float, r)) for r in vp.pose.base_rot]
+        log("--- 左键拖动骨骼位移 index=%d" % idx)
+        _mouse_drag(vp, QPoint(hx, hy), QPoint(hx - 30, hy - 20), Qt.LeftButton, Qt.NoModifier)
+        pump(500)
+        log("    status=%r" % STATUS.text)
+        if vp.pose:
+            rot_after2 = [list(map(float, r)) for r in vp.pose.base_rot]
+            rot_diff = [i for i in range(len(rot_mid)) if rot_mid[i] != rot_after2[i]]
+            trans_after = [list(map(float, r)) for r in vp.pose.base_trans]
+            trans_diff = [i for i in range(len(trans_before))
+                          if trans_before[i] != trans_after[i]]
+            log("    位移变化的骨骼 = %s，旋转变化的骨骼 = %s"
+                % (trans_diff, rot_diff))
+            if not trans_diff:
+                anomaly("pose-move", "左键拖动骨骼后没有骨骼位移变化")
+            if idx in rot_diff:
+                # IK 控制器被拖动时解算会转动链上的其他骨骼，但被拖的骨骼本身不该转
+                anomaly("pose-move-rot", "左键拖动只应改位移，却改到了被拖骨骼的旋转")
         # 单击不拖：是否产生空撤销
         n_undo2 = len(WIN.doc._undo)
-        log("--- 姿态模式仅单击骨骼（不拖动）")
+        log("--- 仅单击骨骼（不拖动）")
         QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(hx, hy))
         pump(350)
         log("    undo %d → %d status=%r" % (n_undo2, len(WIN.doc._undo), STATUS.text))
         if len(WIN.doc._undo) > n_undo2:
-            anomaly("pose-click-undo", "姿态模式下只单击骨骼未拖动，却压入了一条撤销记录")
+            anomaly("pose-click-undo", "只单击骨骼未拖动，却压入了一条撤销记录")
     shot(WIN, "vp_pose")
     # R 重置
     log("--- 按键 R 重置姿态")
     QTest.keyClick(vp, Qt.Key_R)
     pump(400)
     log("    status=%r" % STATUS.text)
-    # 物理模式
-    log("=== 物理模式")
-    WIN.set_mode("physics")
+    # 物理演算开关
+    log("=== 物理演算开关")
+    WIN.set_physics(True)
     if not vp.show_rigid:
         vp.set_display(show_rigid=True)
     pump(600)
@@ -968,9 +988,33 @@ def scen_vp():
         log("    status=%r" % STATUS.text)
     else:
         anomaly("pick-rigid", "物理模式下视口里拾取不到任何刚体（已打开 show_rigid）")
-    vp.set_display(show_rigid=False)
-    WIN.set_mode("browse")
-    pump(300)
+    # 物理开着的同时摆姿：挑一根不受刚体驱动的骨骼，左键拖动应改变它的位移
+    driven = {int(rb.bone) for rb in WIN.doc.model.rigid}
+    target = None
+    for yy in range(40, Hh - 40, 12):
+        for xx in range(20, W - 20, 12):
+            k, i = vp.pick(xx, yy)
+            if k == "bone" and i not in driven:
+                target = (xx, yy, i)
+                break
+        if target:
+            break
+    if target:
+        bx, by, bidx = target
+        t0 = vp.pose.base_trans[bidx].copy()
+        log("--- 物理演算中左键拖动非物理骨骼 index=%d" % bidx)
+        _mouse_drag(vp, QPoint(bx, by), QPoint(bx + 35, by + 20),
+                    Qt.LeftButton, Qt.NoModifier)
+        pump(400)
+        moved = float(__import__("numpy").abs(vp.pose.base_trans[bidx] - t0).max())
+        log("    位移变化=%.4f physics=%s status=%r"
+            % (moved, vp.physics.enabled, STATUS.text))
+        if moved < 1e-4:
+            anomaly("phys-pose", "物理演算中拖动骨骼没有改变姿态（%.6f）" % moved)
+        if not vp.physics.enabled:
+            anomaly("phys-pose-off", "拖动骨骼后物理演算被意外关闭")
+    else:
+        log("--- 没有找到不受刚体驱动的骨骼，跳过物理+姿态共存检查")
     H.dump()
 
 
@@ -1429,9 +1473,9 @@ def scen_final():
     log("D3 非文件拖入 accepted=%s（应 False）" % de2.isAccepted())
 
     # ================= E. 姿态/形态/双击
-    WIN.set_mode("pose"); pump(300)
+    WIN.set_physics(False); pump(300)
     log("E1 模式=%r status=%r undo=%d" % (getattr(WIN, "cur_mode", "?"), STATUS.text, len(WIN.doc._undo)))
-    WIN.set_mode("browse"); pump(200)
+    WIN.set_physics(False); pump(200)
     WIN.doc.select("bone", 1); pump(200)
     WIN._select_page(3); pump(300)
     mp = WIN._pages[3]
@@ -2062,7 +2106,7 @@ def scen_fix2():
     if WIN.doc.sel_kind:
         anomaly("deselect", "点视口空白处后选择未清除")
     # 2) 姿态模式仅单击不产生撤销
-    WIN.set_mode("pose"); pump(300)
+    WIN.set_physics(False); pump(300)
     hits = []
     for yy in range(60, vp.height() - 60, 14):
         for xx in range(30, vp.width() - 30, 14):
@@ -2081,7 +2125,7 @@ def scen_fix2():
             anomaly("pose-click-undo", "只单击未拖动却压入撤销记录")
         if "姿态已更新" in STATUS.text:
             anomaly("pose-click-status", "只单击却提示姿态已更新")
-    WIN.set_mode("browse"); pump(200)
+    WIN.set_physics(False); pump(200)
     H.dump()
 
 
@@ -2451,7 +2495,7 @@ def scen_real4():
         anomaly("morph", traceback.format_exc())
     # 2) 姿态模式拖骨骼
     try:
-        WIN.set_mode("pose"); pump(300)
+        WIN.set_physics(False); pump(300)
         c = vp.rect().center()
         hit = None
         for dx in range(-200, 201, 10):
@@ -2483,7 +2527,7 @@ def scen_real4():
         anomaly("pose", traceback.format_exc())
     # 3) 物理模式
     try:
-        t0 = time.time(); WIN.set_mode("physics"); pump(500)
+        t0 = time.time(); WIN.set_physics(True); pump(500)
         log("physics mode in %.2fs enabled=%s" % (time.time() - t0, vp.physics.enabled))
         p0 = [tuple(round(v, 3) for v in b.position) for b in []] 
         n0 = vp.physics.frame if hasattr(vp.physics, "frame") else -1
@@ -2492,7 +2536,7 @@ def scen_real4():
         vp.repaint()
         log("physics fps=%.1f" % vp._fps)
         H.shot(WIN, "real_physics")
-        WIN.set_mode("browse"); pump(300)
+        WIN.set_physics(False); pump(300)
     except Exception:
         anomaly("physics", traceback.format_exc())
     H.dump()
@@ -2502,7 +2546,7 @@ def scen_real5():
     H.STATE["step"] = "real5"
     import numpy as np
     doc, vp = WIN.doc, WIN.viewport
-    WIN.set_mode("pose"); pump(300)
+    WIN.set_physics(False); pump(300)
     c = vp.rect().center()
     hit = None
     for dx in range(-200, 201, 10):
@@ -2538,7 +2582,7 @@ def scen_real6():
     H.STATE["step"] = "real6"
     import numpy as np
     doc, vp = WIN.doc, WIN.viewport
-    WIN.set_mode("pose"); pump(400)
+    WIN.set_physics(False); pump(400)
     c = vp.rect().center()
     hit = None
     for dx in range(-200, 201, 10):
@@ -2575,7 +2619,7 @@ def scen_real7():
     H.STATE["step"] = "real7"
     import numpy as np
     doc, vp = WIN.doc, WIN.viewport
-    WIN.set_mode("pose"); pump(400)
+    WIN.set_physics(False); pump(400)
     c = vp.rect().center()
     hit = None
     for dx in range(-200, 201, 10):
@@ -2598,8 +2642,8 @@ def scen_real7():
     log("undo skin: vs_A=%.5f vs_B=%.5f" % (float(np.abs(C - A).max()), float(np.abs(C - B).max())))
     log("pose.rot vs A? rot restored all-zero=%s" % bool((np.abs(vp.pose.rot - np.array([0,0,0,1],'f4')).sum(1) > 1e-6).sum() == 0))
     # 强制改成 browse 再回 pose，看画面是否恢复
-    WIN.set_mode("browse"); pump(300)
-    WIN.set_mode("pose"); pump(300)
+    WIN.set_physics(False); pump(300)
+    WIN.set_physics(False); pump(300)
     D = vp._skin_pos.copy()
     log("mode roundtrip skin vs_A=%.5f" % float(np.abs(D - A).max()))
     log("pix now vs A = %.2f%%" % H.pixdiff(WIN, A and H.raw(WIN)))
@@ -3043,8 +3087,9 @@ def scen_sync():
     t0 = time.time()
     ok = WIN.import_vpd_path(path)
     dt = (time.time() - t0) * 1000.0
-    log("import ok=%s %.0f ms status=%r mode=%r dirty=%s undo %d->%d"
-        % (ok, dt, WIN.status_label.text(), vp.mode, doc.dirty, undo0, len(doc._undo)))
+    log("import ok=%s %.0f ms status=%r physics=%s dirty=%s undo %d->%d"
+        % (ok, dt, WIN.status_label.text(),
+           vp.physics.enabled, doc.dirty, undo0, len(doc._undo)))
     matched = [i for i in range(m.n_bones)
                if not np.allclose(vp.pose.base_rot[i], before[i])]
     log("bones changed: %d %s" % (len(matched), matched[:8]))
@@ -3151,7 +3196,7 @@ def scen_themesync():
 # ---------------------------------------------------------------- 场景：主题视觉取样
 def scen_themeshot():
     """亮/深两套主题下各拍一张物理模式截图，用于人工比对配色。"""
-    WIN.set_mode("physics")
+    WIN.set_physics(True)
     WIN._select_page(5)
     WIN.viewport.repaint()
     pump(400)
@@ -4117,7 +4162,7 @@ def scen_poseundo():
     """姿态类撤销：轻量条目、不换模型、R 重置可撤销、与模型编辑混排。"""
     import time as _time
     from pmxeditor import pmx as _pmx
-    WIN.set_mode("pose")
+    WIN.set_physics(False)
     vp = WIN.viewport
     doc = WIN.doc
     m = doc.model
@@ -4142,7 +4187,7 @@ def scen_poseundo():
     doc.select(before_sel[0], before_sel[1])
     APP.processEvents()
 
-    rot0 = doc.pose_capture()[0].copy() if doc.pose_capture else None
+    rot0 = doc.pose_capture()[1].copy() if doc.pose_capture else None
     model0 = doc.model
     undo0 = len(doc._undo)
     dirty0 = doc.dirty
@@ -4178,10 +4223,10 @@ def scen_poseundo():
         anomaly("poseundo", "姿态条目 %.2f ms 应远低于整模型快照 %.2f ms"
                 % (pose_ms, deep_ms))
 
-    rot1 = doc.pose_capture()[0].copy()
+    rot1 = doc.pose_capture()[1].copy()
     ok = doc.undo()
     APP.processEvents()
-    rot2 = doc.pose_capture()[0].copy()
+    rot2 = doc.pose_capture()[1].copy()
     import numpy as _np
     d_undo = float(_np.abs(rot2 - rot0).max())
     d_drag = float(_np.abs(rot1 - rot0).max())
@@ -4196,7 +4241,7 @@ def scen_poseundo():
 
     doc.redo()
     APP.processEvents()
-    rot3 = doc.pose_capture()[0].copy()
+    rot3 = doc.pose_capture()[1].copy()
     d_redo = float(_np.abs(rot3 - rot1).max())
     log("重做: 与拖动后差值=%.6f" % d_redo)
     if d_redo > 1e-4:
@@ -4204,7 +4249,7 @@ def scen_poseundo():
     doc.undo()
     APP.processEvents()
 
-    pre_reset = doc.pose_capture()[0].copy()
+    pre_reset = doc.pose_capture()[1].copy()
     n0 = len(doc._undo)
     vp.reset_pose()
     APP.processEvents()
@@ -4216,21 +4261,21 @@ def scen_poseundo():
                 % (n0, n1, label))
     doc.undo()
     APP.processEvents()
-    back = doc.pose_capture()[0].copy()
+    back = doc.pose_capture()[1].copy()
     d_reset = float(_np.abs(back - pre_reset).max())
     log("R 重置撤销: 与重置前差值=%.6f" % d_reset)
     if d_reset > 1e-4:
         anomaly("poseundo", "撤销重置未回到重置前姿态，差值 %.6f" % d_reset)
 
     # 与模型编辑混排：先改骨骼坐标（模型条目），再拖姿态（姿态条目）
-    WIN.set_mode("browse")
+    WIN.set_physics(False)
     WIN._select_page(1)
     APP.processEvents()
     bp = WIN._pages[1]
     n0 = len(doc._undo)
     bp.pos_spin.spins[1].setValue(bp.pos_spin.spins[1].value() + 0.2)
     APP.processEvents()
-    WIN.set_mode("pose")
+    WIN.set_physics(False)
     APP.processEvents()
     again = find_bone_pixel()          # 骨骼刚被移动过，重新扫描命中点
     if again:
@@ -4616,14 +4661,14 @@ def scen_physlazy():
         anomaly("physlazy", "结构编辑后应置待建标记")
     # 进物理模式 -> 立刻构建
     t0 = time.time()
-    vp.set_mode("physics")
+    vp.set_physics(True)
     pump(80)
     log("进物理模式 %.1f ms: ready=%s pending=%s"
         % ((time.time() - t0) * 1000.0, vp.physics._ready, vp._phys_pending))
     if not vp.physics._ready:
         anomaly("physlazy", "物理模式应构建物理世界")
     # 撤销（adopt_model 接管新对象，物理惰性）
-    WIN.set_mode("browse")
+    WIN.set_physics(False)
     n0 = len(doc.model.bones)
     t0 = time.time()
     doc.undo()
@@ -4788,7 +4833,7 @@ def scen_hover():
     """P1-a：射线-胶囊式拾取 + 悬停名称牌。"""
     vp = WIN.viewport
     m = WIN.doc.model
-    WIN.set_mode("browse")
+    WIN.set_physics(False)
     pump(80)
 
     def find_pixel():
@@ -4828,3 +4873,4 @@ def scen_hover():
     if vp._hover:
         anomaly("hover-clear", "移出骨骼后悬停状态未清除")
     H.dump()
+

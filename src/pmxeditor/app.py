@@ -23,7 +23,7 @@ from .panels import (BonePage, InfoPage, MaterialPage, MorphPage, PhysicsPage,
                     SettingsPage)
 from .theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, TEXT_DIM,
                    build_qss, make_icon, mono_font, svg_assets, ui_font)
-from .ui_widgets import Segmented, icon_button, label
+from .ui_widgets import Switch, icon_button, label
 from .viewport import Viewport
 from .vpd import (apply_vpd_pose, build_vpd_text, load_vpd, match_vpd,
                  write_vpd_text)
@@ -39,6 +39,8 @@ PAGES = (
     ("settings", "settings", "设置"),
 )
 KIND_PAGE = {"bone": 1, "material": 2, "morph": 3, "rigid": 4, "joint": 4}
+# 只改姿态的编辑（压姿态快照即可，不必克隆整模型）
+POSE_EDIT_LABELS = ("调整骨骼姿态", "移动骨骼", "旋转骨骼")
 
 # ---------------------------------------------------------------- 无边框支持
 
@@ -257,10 +259,17 @@ class MainWindow(QMainWindow):
             lay.addWidget(b)
         lay.addSpacing(10)
 
-        self.mode_seg = Segmented([("browse", "浏览"), ("pose", "姿态"),
-                                   ("physics", "物理")])
-        self.mode_seg.setFixedWidth(196)
-        lay.addWidget(self.mode_seg)
+        self.physics_box = QWidget()
+        pbox = QHBoxLayout(self.physics_box)
+        pbox.setContentsMargins(10, 0, 6, 0)
+        pbox.setSpacing(7)
+        self.physics_label = label("物理演算", "Faint")
+        pbox.addWidget(self.physics_label)
+        self.physics_switch = Switch(False)
+        self.physics_switch.setToolTip("物理演算开关（可与姿态编辑同时生效）")
+        pbox.addWidget(self.physics_switch)
+        self.physics_box.setFixedWidth(124)
+        lay.addWidget(self.physics_box)
         lay.addStretch(1)
 
         self.btn_fit = icon_button("fit", "视图居中  F", TEXT_DIM, 17)
@@ -329,10 +338,10 @@ class MainWindow(QMainWindow):
         a.triggered.connect(self.redo)
 
         m_view = mb.addMenu("视图")
-        for text, key in (("浏览模式", "browse"), ("姿态模式", "pose"),
-                          ("物理模式", "physics")):
-            act = m_view.addAction(text)
-            act.triggered.connect(lambda _c, k=key: self.set_mode(k))
+        self.act_physics = m_view.addAction("物理演算")
+        self.act_physics.setCheckable(True)
+        self.act_physics.setShortcut("P")
+        self.act_physics.triggered.connect(self.toggle_physics)
         m_view.addSeparator()
         a = m_view.addAction("视图全部")
         a.setShortcut("F")
@@ -386,7 +395,7 @@ class MainWindow(QMainWindow):
         self.btn_reset.clicked.connect(vp.reset_pose)
         # F / R 由「视图」菜单的 QAction 提供窗口级快捷键（QAction 本身就是全局的），
         # 这里不再额外建 QShortcut，否则会与菜单项冲突成 "Ambiguous shortcut overload"。
-        self.mode_seg.changed.connect(self.set_mode)
+        self.physics_switch.toggled.connect(self.set_physics)
 
         morph = self._pages[3]
         morph.previewChanged.connect(vp.set_morph_weights)
@@ -405,7 +414,7 @@ class MainWindow(QMainWindow):
     def _on_edit_started(self, label: str):
         # 姿态类编辑只压姿态快照（不含 18 ms 的整模型 deepcopy），
         # 撤销时也不会触发 _reload_structure 全量重建。
-        if label.startswith("调整骨骼姿态") or "姿态" in label:
+        if label in POSE_EDIT_LABELS or "姿态" in label:
             self.doc.push_pose_undo(label)
         else:
             self.doc.push_undo(label)
@@ -568,9 +577,9 @@ class MainWindow(QMainWindow):
         if not self._confirm_vpd(path, match):
             return False
 
-        # 物理模式下的姿态会被刚体覆盖，导入前切回姿态模式。
-        if match.pairs and self.viewport.mode != "pose":
-            self.set_mode("pose")
+        # 物理演算中的姿态会被刚体覆盖，导入前先停下演算。
+        if match.pairs and self.viewport.physics.enabled:
+            self.set_physics(False)
         # VPD 只改姿态与形态权重，不动 PMX 数据：压轻量姿态条目即可
         self.doc.push_pose_undo("导入 VPD 姿态")
         apply_vpd_pose(self.viewport.pose, match,
@@ -719,7 +728,7 @@ class MainWindow(QMainWindow):
         pose_snap = None
         if vp.pose is not None:
             pose_snap = (vp.pose.base_rot.copy(), vp.pose.base_trans.copy())
-        mode = vp.mode
+        was_physics = bool(vp.physics.enabled)
         kind, index = self.doc.sel_kind, self.doc.sel_index
         self.doc.suppress = True
         try:
@@ -752,8 +761,8 @@ class MainWindow(QMainWindow):
                 vp.pose.apply(vp.morph_weights, self.doc.model.morphs)
                 vp.pose.world_update()
                 vp.mark_dirty()
-            if mode == "physics":
-                vp.set_mode("physics")
+            if was_physics:
+                vp.set_physics(True)
             self._refresh_pages()
             self._pages[5].sync_display(vp)
             if kind:
@@ -898,19 +907,28 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     # ------------------------------------------------------------ 视图
-    def set_mode(self, mode: str):
-        if mode == "pose":
-            self._apply_display({"show_bones": True})
-            self._select_page(1)
-        elif mode == "physics":
-            self._apply_display({"show_rigid": True, "show_joints": True})
-            self._select_page(4)
-        self.viewport.set_mode(mode)
-        self.mode_seg.set_value(mode)
-        self._pages[5].sync_display(self.viewport)
-        texts = {"browse": "浏览模式", "pose": "姿态模式 · 拖动骨骼旋转",
-                 "physics": "物理模式 · 左键选择刚体/关节"}
-        self._set_status(texts.get(mode, ""))
+    def set_physics(self, on: bool):
+        """物理演算开关；姿态编辑始终可用，两者可以同时生效。"""
+        on = bool(on)
+        self.viewport.set_physics(on)
+        enabled = bool(self.viewport.physics.enabled)
+        for w in (self.physics_switch, self.act_physics):
+            if w.isChecked() != enabled:
+                w.blockSignals(True)
+                w.setChecked(enabled)
+                w.blockSignals(False)
+        if enabled:
+            self._apply_display({"show_rigid": True, "show_joints": True,
+                                 "show_bones": True})
+            self._pages[5].sync_display(self.viewport)
+            self._set_status("物理演算已开启 · 可同时摆姿（左键位移 / 右键旋转）")
+        else:
+            self._set_status("物理演算已停止")
+
+    def toggle_physics(self, checked: bool = None):
+        if checked is None:
+            checked = not self.viewport.physics.enabled
+        self.set_physics(checked)
 
     def _toggle_display(self, key: str, on: bool):
         self.viewport.set_display(**{key: on})

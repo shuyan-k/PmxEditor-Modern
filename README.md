@@ -23,19 +23,22 @@
 | 编辑历史 | 模型编辑撤销/重做（12 步，0.9 s 内同键合并）；姿态拖动/`R` 重置/VPD 导入用轻量姿态条目，不占整模型快照 | 模型快照与姿态条目各有 12 步预算，互不挤占；不是无限历史 |
 | 发布 | Nuitka 单文件发行包，内置 `--verify-backend` 数值对拍；构建命令见「打包与发布」，产物不入库（`dist/` 由构建生成，仓库不保留 exe） | 跨驱动（另一块 GPU）复测仍待完成 |
 
+> **只有一个视图**：原先的「浏览 / 姿态 / 物理」三视图已合并，物理演算改成工具栏与「视图 → 物理演算」里的开关（快捷键 `P`），可以**一边演算一边摆姿**——姿态写在骨骼上，物理每步只覆盖受刚体驱动的骨骼。姿态编辑不再需要切模式，也就没有「浏览模式」了。
+
 ### 视口鼠标约定
 
 | 操作 | 行为 |
 | --- | --- |
-| 左键拖动 | 旋转视图（浏览模式下拖动即旋转，位移小于 3 px 仍算单击） |
-| 右键拖动 | 平移视图 |
-| 左键单击 | 选择骨骼 / 刚体 / 关节（点空白处取消选择；Alt+单击在重叠目标间循环） |
-| 姿态模式左键拖动骨骼 | 旋转骨骼；拖动 IK 控制器移动目标（骨骼优先于视角旋转） |
+| 左键拖动骨骼 | 位移骨骼（IK 控制器同理，拖动会带动整条链解算） |
+| 右键拖动骨骼 | 旋转骨骼（绕视角的上下 / 左右轴） |
+| 左键拖动空白处 | 旋转视图（位移小于 3 px 仍算单击） |
+| 右键拖动空白处 | 平移视图 |
+| 左键单击 / 双击 | 选择骨骼 / 刚体 / 关节（点空白处取消选择；Alt+单击在重叠目标间循环；双击给出操作提示） |
 | 滚轮 | 缩放视图 |
 | 中键拖动 | 兼容旧习惯：旋转视图；`Shift` + 中键拖动平移 |
-| `F` / `R` | 视图居中 / 重置姿态（全局快捷键，重置可用 Ctrl+Z 撤销） |
+| `F` / `R` / `P` | 视图居中 / 重置姿态 / 物理演算开关（全局快捷键，重置可用 Ctrl+Z 撤销） |
 
-物理模式下左键拖动刚体不施加冲量（当前只做选择）。
+骨骼手柄优先于刚体与关节：只有光标附近没有骨骼线段时，显示中的刚体 / 关节才会参与拾取。物理演算开启时拖动刚体仍不施加冲量（只做选择与显示）。
 
 ## 快速开始
 
@@ -63,7 +66,7 @@ python main.py "测试模型.pmx"
 PmxEditor_Modern/
 ├─ main.py                  # 启动入口：把 src 加入 sys.path 后调用 pmxeditor.app.main
 ├─ src/pmxeditor/           # 应用包（全部业务代码）
-│  ├─ app.py                # 主窗口、菜单、模式、文件操作、主题切换
+│  ├─ app.py                # 主窗口、菜单、工具栏、物理开关、文件操作、主题切换
 │  ├─ panels/               # 右侧六个检查器页（按页面分模块）
 │  │  ├─ base.py            #   PageBase 与共用小工具
 │  │  ├─ info/bone/material/morph/physics/settings.py
@@ -108,7 +111,7 @@ PmxEditor_Modern/
 ### 分层与依赖
 
 ```
-                    src/pmxeditor/app.py（主窗口 / 模式 / 文件 / 主题）
+                    src/pmxeditor/app.py（主窗口 / 工具栏 / 文件 / 主题）
                    /        |            |             \
           panels/      ui_widgets.py    theme.py      viewport/
               |              |              |               |
@@ -132,7 +135,7 @@ PmxEditor_Modern/
 3. 世界空间增量旋转必须**左乘**局部旋转。
 4. CCD 每条链修正后必须立即刷新末端位置。
 5. `world()` 依赖 `eval_order`，付与来源必须先于当前骨骼求值。
-6. 物理结果通过 `ov_rot/ov_trans` 覆盖，退出物理模式要清除覆盖。
+6. 物理结果通过 `ov_rot/ov_trans` 覆盖，**关闭物理演算时**清除覆盖；开启期间姿态编辑仍然写入 `base_*`，物理只覆盖受刚体驱动的骨骼。
 7. 任何姿态/形态/物理变化都要失效 `world_cache` 与 `_dirty`。
 8. 界面修改模型必须走 `Document.edit` / `push_undo`，不要直接改 dataclass。
 9. 改动骨骼的静止位置/父级/付与/IK 后必须让视口重建 `Pose`/`SkinDeformer`（`Viewport.ensure_pose_current()` 会按 `pose_state()` 签名自动重建）；`doc.undo/redo` 会替换 `Document.model` 对象，界面需按身份判断是否重新 `set_model`。
@@ -144,8 +147,8 @@ PmxEditor_Modern/
 | 打开模型 | `app.open_path` → `_maybe_save` → `Document.load`（`pmx.load_pmx`）→ `viewport.set_model` → `_refresh_pages` |
 | 面板编辑 | 控件信号 → `PageBase.edit()` → `doc.edit(kind)` → `push_undo` + 修改 + `edited.emit(kind)` → `app._on_edited`（状态栏 + 局部刷新） |
 | 结构编辑 | `doc.add_*/duplicate_*/remove_*`（含索引重映射）→ `edited("structure")` → `app._reload_structure()` 重建 Pose/Deformer/网格/物理 |
-| 姿态拖动 | `viewport.mouseMoveEvent` → `Pose.rotate_world` → `world_update` → `SkinDeformer.deform` → VBO 更新 → 重绘（首次位移才压撤销栈） |
-| 物理模式 | `viewport.set_mode("physics")` → `physics.MMDPhysics.step` → 刚体结果回写 `ov_*` → 蒙皮 → 重绘 |
+| 姿态拖动 | `viewport.mousePressEvent`（左键位移 / 右键旋转）→ 增量入队 → `Pose.translate_world` / `rotate_world` → `world_update` → `SkinDeformer.deform` → VBO 更新 → 重绘（首次位移才压撤销栈） |
+| 物理演算 | `viewport.set_physics(True)` → `physics.MMDPhysics.step` → 刚体结果回写 `ov_*` → 蒙皮 → 重绘（与姿态编辑互不排斥） |
 | 保存 | `app.save` → `pmx.save_pmx`（按内容决定 2.0/2.1 与索引宽度）→ `doc.dirty=False` |
 | VPD 导出 | `vpd.build_vpd_text`（只导出偏离初始姿态的骨骼与非零形态）→ CP932 写入 |
 
@@ -265,7 +268,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | `verify_p0` | 回归：颜色按钮不崩溃、物理页 `doc.select("rigid", i>0)` 不递归 |
 | `flag8` | 材质绘制标志复选框的点击命中与模型写回 |
 | `rows_fix` | 列表行宽随视口重算（右侧信息不被裁掉） |
-| `fix2` | 点视口空白取消选择、姿态模式单击不压撤销栈 |
+| `fix2` | 点视口空白取消选择、单击骨骼不压撤销栈 |
 | `fps` | HUD FPS 空闲衰减 |
 | `tree2` / `empty` | 骨骼树右键菜单、空列表占位提示 |
 | `sync` | VPD 导入/导出全流程（需真实模型） |
@@ -283,7 +286,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | `sdefr1` | SDEF 的 R1：原始值全零才回退 R0（C 非零时不能看 \|R1−C\|）、R1==R0 与旧实现一致、R1 生效改变半径、静止姿态不受影响 |
 | `struct3`/`struct4` | 追加骨骼不再重建 Deformer/物理；页面懒刷新只刷当前页并在切页时补刷 |
 | `physlive` | 质量/摩擦力热更新不重建世界、运动学刚体被跳过 |
-| `physlazy` | 结构编辑后物理世界保持待建、进物理模式才构建、撤销后接管模型对象 |
+| `physlazy` | 结构编辑后物理世界保持待建、开启物理演算才构建、撤销后接管模型对象 |
 | `ikclamp` | IK 限位：奇点附近欧拉分支保持连续、顶到限位后不再抖动、native 与回退结果一致 |
 | `hover` | 骨骼悬停名称牌命中与空白处清除 |
 | `optim` | 组/翻转形态递归展开、附加 UV 不被当成容器、物理参数热更新、Alt 循环拾取 |
@@ -293,7 +296,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | `struct` | 结构编辑走分项重建：不重传网格、不动相机、不重预热贴图 |
 | `struct2` | 同一结构编辑「分项 vs 全量」耗时对比 |
 | `dform` | 向量化 `SkinDeformer` 与旧逐顶点实现逐项比对 |
-| `final` | 菜单/模式/分隔条/主题/关闭模型等收尾回归 |
+| `final` | 菜单/物理开关/分隔条/主题/关闭模型等收尾回归 |
 
 其余场景（`core*`、`sel*`、`grid_*`、`real*`、`flag2–flag7`、`combo*`、`bgprobe`、`optc`、`dbg2` 等）是当时的取证探针，保留在 `tests/run.py` 中便于复现历史问题，不在常规回归里执行。
 
@@ -326,8 +329,8 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 3. `.\build\python\python.exe tests\go.py verify_p0 dark tests\test_model.pmx`：颜色按钮与物理页选择不崩溃。
 4. `.\build\python\python.exe tests\go.py walk dark tests\test_model.pmx`：异常应只剩已知噪声（spinbox 内部行编辑、滚动箭头、已选中的分段、被 patch 的菜单、harness 自身遍历表头的崩溃），条数随点击顺序在 20~36 之间浮动。
 5. 加载真实模型：顶点/骨骼/刚体/关节数量与参考一致，贴图、描边、线框、灰模正常。
-6. 姿态模式：FK 旋转、IK 拖动、付与、`R` 重置；撤销后姿态逐点还原。
-7. 物理模式：进入/退出无报错，退出后姿态恢复。
+6. 姿态编辑：左键拖动位移、右键拖动旋转、IK 控制器拖动、付与、`R` 重置；撤销后姿态逐点还原。
+7. 物理演算：开关切换无报错，关闭后姿态恢复；开启时仍能拖动骨骼（被刚体驱动的骨骼会被物理覆盖）。
 8. 撤销/重做：结构编辑与字段编辑各一次。
 9. 保存后重新打开：计数全等，顶点/UV 最大差为 0。
 10. 真实模型（`米娅.pmx` 级别）改骨骼坐标应在 **100 ms** 以内（贴图缓存命中、结构分项重建）。
@@ -341,7 +344,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | --- | --- |
 | 加载 / 保存 / 回读 | 0.67 s / 0.15 s / 0.16 s（保存后字节数与源文件一致） |
 | 静态重绘一帧 | 9.5 ms（约 105 FPS） |
-| 物理模式 | 45.9 FPS（183 刚体 + 8 万顶点） |
+| 物理演算 | 45.9 FPS（183 刚体 + 8 万顶点） |
 | 切换页面 | 28–45 ms（首次含懒构建）；单页 `refresh()` 2–7 ms |
 | 结构类编辑（追加骨骼 / 删除骨骼 / 改骨骼坐标） | 约 15 ms（旧版 580 ms；分项重建 75 ms；物理惰性+接管模型 19 ms） |
 | 材质类编辑（改色/换贴图） | 约 58 ms（旧版 460 ms，其中重绘 419 ms） |
@@ -440,6 +443,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 
 ## 更新记录
 
+- **2026-10-25 合并三视图、物理改为开关、位移/旋转解耦**：删掉「浏览 / 姿态 / 物理」三选一——`Viewport` 去掉 `mode` 字段与 `set_mode()`，只保留 `set_physics(bool)`；工具栏在原 Segmented 的位置放一个 `Switch`（「物理演算」），「视图」菜单同一开关（快捷键 `P`），两者按 `physics.enabled` 双向同步。姿态编辑不再受模式门控：左键拖动骨骼 = 位移、右键拖动骨骼 = 旋转（空白处仍是左拖动视角 / 右拖平移 / 中键旋转 / Shift+中键平移），双击骨骼给出「左键位移 · 右键旋转」提示；IK 控制器被拖动时解算仍会带动整条链。物理与姿态可以同时生效，受刚体驱动的骨骼每步被 `ov_*` 覆盖，其余骨骼保持手摆结果；为让「一边演算一边摆姿」看得见，开启演算时自动打开骨骼/刚体/关节叠加。`_pick_candidates()` 改为骨骼优先、刚体/关节仅在光标附近没有骨骼线段时兜底（`show_rigid`/`show_joints` 打开才参与）；`Viewport` 删除 `self.mode = "browse"` 与 set_model/clear_model 里的模式复位。撤销标签拆成「移动骨骼」「旋转骨骼」，`app.POSE_EDIT_LABELS` 保证它们仍走轻量姿态条目（不克隆整模型）；VPD 导入前若在演算则先停演算，`_reload_structure()` 按 `physics.enabled` 恢复。HUD 徽标改为「摆姿 / 物理演算」，`F/R/P` 快捷键与设置页快捷键表同步。
 - **2026-10-25 仓库清理与 README 复核**：删掉 `build/` 下的 Nuitka 中间件与旧构建日志（保留 `build/python` 便携运行时）、`dist/` 里三份过期发行包（r4/r5/r6 共约 1.2 GB，均已落后于当前源码）、`tests/` 的临时诊断产物（`_probe_out*.txt`、`blender*.log/npz`、`out.pmx`、`report.json`、`sync_*.vpd`、`shots/` 截图）与各处 `__pycache__`，合计约 1.38 GB；`native/obj/`（Bullet 导入库）与 `src/pmxeditor/_pmx_core*.pyd` 保留，以免下次构建退化。README 同步：功能表的发布行不再声称仓库内有与源码一致的 exe（`dist/` 改为构建时生成）、SDEF 段落改写为「蒙皮一律按 BDEF2、求值器只作对拍基线」并按现状补充 `_sdef_fallback_table()`、删除「视图 → SDEF 降级」与 `SDEF_AS_BDEF2` 的残留描述、目录树去掉 `dist/`、路线图里过时的「SDEF 半轴插值」换成权重绘制。
 - **2026-10-25 移除 VMD 播放、SDEF 改按 BDEF2**：动作播放属于动画软件的职责，模型编辑器只保留静态姿态（VPD 导入导出）。删掉 `vmd.py`、`timeline.py`、底部时间轴控件、`Viewport.apply_bone_tracks()`、文件菜单的「载入动作/关闭动作」、`tools/compare_blender.py`/`blender_dump.py` 与 8 个 VMD 场景（`vmd`/`vmdreal`/`vmdprobe`/`vmdphys`/`vmdcheck`/`vmdbad`/`vmdsdef`/`knee`），`tests/run.py` 因此少约 430 行。同时把 SDEF 从「可选降级」改成「一律按 BDEF2」（`skinning._sdef_fallback_table()` 固定把 type 3 映射成 1），视图菜单里的降级开关与 QSettings `view/sdef_as_bdef2` 一并删除：半轴口径修正后 SDEF 膝带仍比 BDEF2 外推 0.05~0.16，侧视有台阶，而 PmxEditor 的膝盖观感就是 BDEF2。`.pmx` 里 SDEF 的 C/R0/R1 仍原样解析与回写，`skin`/`ellipsoid`/`sdefr1` 三个场景继续直接调用 `native_core.deform` 对拍两条求值路径。
 - **2026-10-25 SDEF 半轴口径修正（膝盖突起）**：PMX 里 SDEF 的 `C/R0/R1` 存的都是"点"——模型库实测 `R0−C` 与 `R1−C` 恒为 180° 反向、`|R0|` 是骨骼长度量级（米娅 6.9、阿涵 14.6），只有逐轴 `|R−C|`（0.1~0.3）才是可信半轴。`native/pmx_core.cpp` 与 `skinning._special_blend()` 改为 `a_i = |R_i − C|`，并用**原始** R1 是否全零决定回退（C 非零时 `|0−C|` 不为零，不能看平移后的半轴）。效果：真机米娅帧 136 膝带 57 个 SDEF 顶点到关节中心 0.755/0.608 → **0.661/0.540**，与相邻 BDEF2（0.610/0.517）接上，侧视横向硬棱消失；`bdef2 vs sdef` 膝带最大差 0.209 → **0.164**。顺带让 HEAD 的「视图 → SDEF 降级为 BDEF2」开关真正生效（`skinning._sdef_fallback_table()` + `SkinDeformer.wtype_table()`，此前 deform 路径从不读这个开关）。新增 `go.py knee`（膝带权重类型、半轴口径、两种混合模式的侧视对照与数值），`ellipsoid` 增补「C 平移后半径不变」用例（该开关与 `knee` 场景已在下一条移除）。`verify_native_backend` 测试模型 26 项全过；米娅仅剩既有的 `IK rotations 0.0394` 差异（与蒙皮无关）；skin/dform/ellipsoid/sdefr1/final 场景 0 异常（`ikclamp` 的 0.2036 为既有差异，HEAD 同样复现）。
