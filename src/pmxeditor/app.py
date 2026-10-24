@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
 from . import theme
 from .doc import Document
 from .panels import (BonePage, FramePage, InfoPage, MaterialPage, MorphPage,
-                     PhysicsPage, SettingsPage)
+                     PhysicsPage, SettingsPage, VertexPage)
 from .theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, TEXT_DIM,
                    build_qss, make_icon, mono_font, svg_assets, ui_font)
 from .ui_widgets import Switch, icon_button, label
@@ -38,10 +38,11 @@ PAGES = (
     ("physics", "physics", "物理"),
     ("settings", "settings", "设置"),
     ("frame", "mesh", "表示枠"),
+    ("vertex", "mesh", "顶点"),
 )
 # new pages go last so the existing indices stay stable
-RAIL_ORDER = (0, 1, 6, 2, 3, 4, 5)
-KIND_PAGE = {"bone": 1, "frame": 6, "material": 2, "morph": 3, "rigid": 4, "joint": 4}
+RAIL_ORDER = (0, 1, 6, 7, 2, 3, 4, 5)
+KIND_PAGE = {"bone": 1, "frame": 6, "vertex": 7, "material": 2, "morph": 3, "rigid": 4, "joint": 4}
 # 只改姿态的编辑（压姿态快照即可，不必克隆整模型）
 POSE_EDIT_LABELS = ("调整骨骼姿态", "移动骨骼", "旋转骨骼")
 
@@ -229,7 +230,7 @@ class MainWindow(QMainWindow):
         self._pages = [InfoPage(self.doc), BonePage(self.doc),
                        MaterialPage(self.doc), MorphPage(self.doc),
                        PhysicsPage(self.doc), SettingsPage(self.doc),
-                       FramePage(self.doc)]
+                       FramePage(self.doc), VertexPage(self.doc)]
         for p in self._pages:
             self.inspector.addWidget(p)
         self.splitter.addWidget(self.inspector)

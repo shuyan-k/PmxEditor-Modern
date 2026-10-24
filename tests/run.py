@@ -5297,3 +5297,63 @@ def scen_morph_edit():
     if len(back.morphs) != count:
         anomaly("medit-roundtrip", "%d != %d" % (len(back.morphs), count))
     log("[morph-edit] 形态偏移编辑通过：morphs=%d" % count)
+
+
+def scen_vertex_edit():
+    """顶点页：索引定位、属性/权重写回、诊断与往返。"""
+    import numpy as np
+
+    win = WIN
+    doc = win.doc
+    m = doc.model
+    if not m:
+        anomaly("vedit-nomodel", "没有模型")
+        dump()
+        return
+    page = win._pages[7]
+    win._select_page(7)
+    pump(80)
+    page.refresh()
+    pump(40)
+    n = len(m.v_pos)
+    if page.index_spin.maximum() != n - 1:
+        anomaly("vedit-range", "索引上限 %d != %d" % (page.index_spin.maximum(), n - 1))
+    page.index_spin.setValue(3)
+    pump(40)
+    if page.idx != 3:
+        anomaly("vedit-index", "idx = %r" % (page.idx,))
+    page.pos_spin.spins[0].setValue(1.25)
+    page.uv_spin.spins[1].setValue(0.125)
+    page._apply()
+    pump(60)
+    if abs(float(m.v_pos[3, 0]) - 1.25) > 1e-6:
+        anomaly("vedit-pos", "x = %r" % (m.v_pos[3, 0],))
+    if abs(float(m.v_uv[3, 1]) - 0.125) > 1e-6:
+        anomaly("vedit-uv", "v = %r" % (m.v_uv[3, 1],))
+    # 切成 BDEF2，两根骨骼 + 权重
+    page.wtype_combo.setCurrentIndex(1)
+    pump(20)
+    page.bone_combos[0].setCurrentIndex(1)
+    page.bone_combos[1].setCurrentIndex(2)
+    page.weight_spins[0].setValue(0.3)
+    page.weight_spins[1].setValue(0.7)
+    page._apply()
+    pump(60)
+    if int(m.v_wtype[3]) != 1:
+        anomaly("vedit-wtype", "wtype = %r" % (m.v_wtype[3],))
+    if abs(float(m.v_weights[3, 1]) - 0.7) > 1e-5:
+        anomaly("vedit-weight", "w1 = %r" % (m.v_weights[3, 1],))
+    stats = page.stats_label.text()
+    if "顶点" not in stats:
+        anomaly("vedit-stats", "诊断 = %r" % stats)
+
+    path = os.path.join(H.ROOT, "tests", "vertex_rt.pmx")
+    from pmxeditor.pmx import load_pmx as _pmx_load, save_pmx as _pmx_save
+    _pmx_save(m, path)
+    back = _pmx_load(path)
+    if not np.allclose(back.v_pos[3], m.v_pos[3], atol=1e-5):
+        anomaly("vedit-roundtrip", "位置不一致")
+    if int(back.v_wtype[3]) != int(m.v_wtype[3]):
+        anomaly("vedit-roundtrip-w", "权重类型不一致")
+    shot(win, "vertex_page")
+    log("[vertex-edit] 顶点编辑通过：vertices=%d" % n)

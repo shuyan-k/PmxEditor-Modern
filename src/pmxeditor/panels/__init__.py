@@ -9,10 +9,11 @@ from .base import PANEL_NAMES, PageBase
 from .info import InfoPage
 from .bone import BonePage
 from .frame import FramePage
+from .vertex import VertexPage
 from .material import MaterialPage
 from .morph import MorphPage
 from .physics import PhysicsPage
 from .settings import SettingsPage
 
-__all__ = ["PANEL_NAMES", "PageBase", "InfoPage", "BonePage", "FramePage",
+__all__ = ["PANEL_NAMES", "PageBase", "InfoPage", "BonePage", "FramePage", "VertexPage",
            "MaterialPage", "MorphPage", "PhysicsPage", "SettingsPage"]
