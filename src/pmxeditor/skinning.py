@@ -771,6 +771,10 @@ class Pose:
                 if not moved:
                     break
             solved += 1
+        if self.ik_reset_links:
+            # 与原生路径保持一致：链上旋转会把 CCD 引向镜像解时，
+            # 从静止姿势重解一次，残差没变小就回滚。
+            solved += self._retry_stuck_chains(max_loops, only)
         if solved:
             self.apply()
         return solved
@@ -981,12 +985,17 @@ class SkinDeformer:
         """
         model = self.model
         wtype = np.asarray(model.v_wtype).ravel()
-        todo = np.nonzero((wtype == 3) | (wtype == 4))[0]
+        # BDEF2/BDEF4 也走双四元数混合（DQS），与 native/pmx_core.cpp 一致：
+        # 线性混合在「关节大角度弯曲 + 轴向自转」时会拧成糖纸。
+        todo = np.nonzero((wtype <= 2) | (wtype == 3) | (wtype == 4))[0]
         if todo.size == 0:
             return out
         sdef = np.asarray(model.v_sdef, dtype=np.float32).reshape(-1, 9)
         for vi in todo:
             vi = int(vi)
+            if int(wtype[vi]) <= 2 and int(np.count_nonzero(
+                    np.asarray(model.v_weights[vi]).ravel())) < 2:
+                continue  # 单骨骼（BDEF1）没有混合，线性即刚性
             bones = np.asarray(model.v_bones[vi]).ravel()
             wts = np.asarray(model.v_weights[vi]).ravel()
             pos = np.asarray(base_pos[vi], dtype=np.float64)

@@ -267,8 +267,10 @@ void deform_vertices(
             }
         }
 
-        // QDEF：四骨骼双四元数混合（刚性变换的螺旋插值，避免线性混合的体积塌陷）。
-        if (weight_type == 4 && sdef != nullptr && !resolved) {
+        // 双四元数混合（DQS）：BDEF2/BDEF4 与 QDEF 共用同一套螺旋插值，
+        // 避免线性混合在「关节大角度弯曲 + 轴向自转」时的"糖纸"式扭曲
+        // （实测米娅帧 136 膝盖弯 49°、大腿自转 88°，线性蒙皮在接缝处拧成螺旋）。
+        if (weight_type <= 2 && influence_count >= 2 && !resolved) {
             float qsum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             float dsum[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             float reference[4] = {0.0f, 0.0f, 0.0f, 0.0f};
