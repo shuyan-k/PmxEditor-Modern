@@ -4,7 +4,7 @@
   "[sync] model: 116036 verts / 168 bones / 21 mats / 22 morphs / 82 rigid / 74 joints",
   "[sync] VPD menu items: ['导入 VPD 姿态…', '导出 VPD 姿态…']",
   "[sync] vpd written: 5 bones -> D:\\Project\\PmxEditor_Modern\\tests\\sync_pose.vpd",
-  "[sync] import ok=True 21 ms status='已导入 VPD 姿态：5/5 根骨骼' physics=False dirty=True undo 0->1",
+  "[sync] import ok=True 15 ms status='已导入 VPD 姿态：5/5 根骨骼' physics=False dirty=True undo 0->1",
   "[sync] bones changed: 11 [0, 1, 2, 3, 4, 21, 22, 23]",
   "[sync] undo restores pose: maxdiff=0.00000000 undo=0 redo=1",
   "[sync] redo re-applies: changed=11",

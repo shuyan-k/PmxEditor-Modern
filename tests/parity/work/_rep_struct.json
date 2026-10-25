@@ -1,9 +1,9 @@
 {
  "log": [
   "[boot] APP STARTED struct dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
-  "[boot]  新建骨骼 78.8 ms bones 168 -> 169",
-  "[boot]  撤销 74.5 ms bones=168",
-  "[boot]  新建关节 58.4 ms joints=75 pose 复用=True",
+  "[boot]  新建骨骼 79.2 ms bones 168 -> 169",
+  "[boot]  撤销 76.6 ms bones=168",
+  "[boot]  新建关节 54.6 ms joints=75 pose 复用=True",
   "[boot]  结束 bones=168 rigid=82"
  ],
  "anomalies": []

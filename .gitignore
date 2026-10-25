@@ -66,3 +66,10 @@ tests/*.vmd
 settings.json
 settings.json.bak
 settings.json.tmp
+
+# 代码签名证书与密码（私钥不入库）
+code_sign.pfx
+code_sign.pass
+
+# 打包临时目录（TEMP/NUITKA_CACHE_DIR 指向处）
+.build_tmp/

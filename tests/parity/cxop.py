@@ -5,6 +5,8 @@ import origui as U, origlib as O, cxrun, pmxsem as P
 
 WORK = r"D:\Project\PmxEditor_Modern\tests\parity\work"
 CX = r"D:\Project\PmxEditor_Modern\tests\parity\cx"
+MODEL = os.environ.get("PARITY_MODEL") or None
+SUF = os.environ.get("PARITY_SUF", "")
 TAIL = ("connect.Pmx.Update(pmx);\n"
         "connect.Form.UpdateList(UpdateObject.All);\n"
         "connect.View.PMDView.UpdateModel();\n"
@@ -25,7 +27,10 @@ def run(op, save=True):
         if U.dialog_windows():
             U.answer_dialog()
             time.sleep(0.4)
-    U.open_model()
+    if MODEL:
+        U.open_model(MODEL)
+    else:
+        U.open_model()
     time.sleep(0.8)
     out = cxrun.run_code(code=body(op) + "\n" + TAIL + "\n")
     if out is None:
@@ -38,7 +43,7 @@ def run(op, save=True):
     time.sleep(0.4)
     O.focus(U.editor())
     time.sleep(0.6)
-    path = os.path.join(WORK, "%s_cx.pmx" % op)
+    path = os.path.join(WORK, "%s%s_cx.pmx" % (op, SUF))
     ok, why = U.save_as(path)
     if not ok:
         raise RuntimeError("另存失败: %s" % (why,))

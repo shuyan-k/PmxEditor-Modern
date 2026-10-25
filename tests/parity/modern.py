@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (QAbstractButton, QLineEdit, QComboBox, QLabel,
 from PyQt5.QtCore import Qt  # noqa: E402
 
 WIN = None
-PAGE_NAMES = ["信息", "骨骼", "材质", "形态", "物理", "显示设置", "表示枠", "顶点"]
+PAGE_NAMES = ["信息", "骨骼", "材质", "形态", "物理", "显示设置", "表示枠", "顶点", "面", "柔体"]
 
 
 def boot(model=None, theme="dark", size=(1560, 1000)):

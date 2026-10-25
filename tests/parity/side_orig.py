@@ -73,7 +73,15 @@ def _registry():
 
 def main():
     ids = sys.argv[1:] or ["R1"]
+    # 结果按 op 累积，避免一次只跑几个 op 时把之前的记录覆盖掉
+    res_path = os.path.join(WORK, "_orig_result.json")
     out = {}
+    if os.path.exists(res_path):
+        try:
+            with open(res_path, encoding="utf8") as f:
+                out = json.load(f)
+        except Exception:
+            out = {}
     if not U.alive():
         U.start()
     for oid in ids:
@@ -95,7 +103,7 @@ def main():
             import traceback
             out[oid] = {"status": "error", "detail": traceback.format_exc()[-800:]}
             U.shot(oid + "_orig_err")
-    json.dump(out, open(os.path.join(WORK, "_orig_result.json"), "w", encoding="utf8"),
+    json.dump(out, open(res_path, "w", encoding="utf8"),
               ensure_ascii=False, indent=1)
     print(json.dumps(out, ensure_ascii=False, indent=1)[:1500])
 
@@ -556,6 +564,11 @@ def op_P4():
     time.sleep(0.5)
     jump_index(RIGID_INDEX, 0)
     pick_xy((669, 500), 1)
+
+
+# ---------------- PMX 2.1 柔体基座：只做原样另存（基座由 cxop.py SB0 生成）
+def op_SB1():
+    return "PMX 2.1 柔体基座原样另存（1 柔体 / 1 锚点 / 1 固定点）"
 
 
 if __name__ == "__main__":

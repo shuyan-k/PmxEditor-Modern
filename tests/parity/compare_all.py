@@ -52,14 +52,24 @@ DESC = {
     "F2": "表示枠 Root 追加骨骼 #106「兔耳_2_2.R」",
     "I2": "骨骼5 开启 IK",
     "I3": "骨骼5 IK 目标/循环/角度 + 追加两条链（bone4、bone5）",
+    "FA1": "面材质重分配：材质0 前 300 个面 → 材质1",
+    "N3": "复制骨骼5「上半身」并追加",
+    "N4": "复制材质0「Skin」并追加（连面一起复制）",
+    "SB1": "PMX 2.1 柔体基座往返另存（1 柔体 / 1 锚点 / 1 固定点）",
+    "SB2": "柔体0 总质量 2.5 → 3.5、碰撞余量 0.05 → 0.1",
 }
 ORDER = ["E1", "E2", "E3", "E4", "E5", "B1", "B2", "B3", "M1", "M2",
          "V1", "F1", "P1", "J1", "S1", "S2", "U1", "N1", "N2", "M3",
          "M4", "M5", "M6", "V2", "B4", "B5", "P2", "F2", "I2", "I3",
-         "V3", "V4", "B6", "B7", "M7", "P3", "P4"]
+         "V3", "V4", "B6", "B7", "M7", "P3", "P4",
+         "FA1", "N3", "N4", "SB1", "SB2"]
 
 # 某些操作的「原版侧」不是 GUI 另存，而是踩 CSScript（.cx）通道另存
-PAIR = {"I3": ("I3_cx.pmx", "I3_mod.pmx")}
+PAIR = {"I3": ("I3_cx.pmx", "I3_mod.pmx"),
+        "FA1": ("FA1_cx.pmx", "FA1_mod.pmx"),
+        "N3": ("N3_cx.pmx", "N3_mod.pmx"),
+        "N4": ("N4_cx.pmx", "N4_mod.pmx"),
+        "SB2": ("SB2_cx.pmx", "SB2_mod.pmx")}
 
 
 def main():
@@ -70,15 +80,22 @@ def main():
         "N2": "（原版 + 号灰化，无法新建材质）",
         "I3": "（原版侧经 CSScript .cx 通道写入，GUI 无法编辑 IK 链）",
         "B7": "（原版开启轴固定时把轴向量归一化为骨骼朝向，新版保持原值）",
+        "FA1": "（新版已补齐「面」页并走真实 GUI；原版侧经 .cx 定义同一语义）",
+        "N3": "（原版无复制入口；原版侧用 .cx Clone 同一命名规则）",
+        "N4": "（原版无复制入口；原版侧 Clone 连面一起复制）",
+        "SB1": "（基座 SB0_cx.pmx 由原版 .cx 生成，PMX 2.1）",
+        "SB2": "（新版已补齐「柔体」页并走真实 GUI；原版侧经 .cx 定义同一语义）",
     }
     rows = []
     detail = []
+    counts = {"一致": 0, "差异": 0, "未双侧完成": 0}
     for op in ORDER:
         fa, fb = PAIR.get(op, (op + "_orig.pmx", op + "_mod.pmx"))
         po = os.path.join(W, fa)
         pm = os.path.join(W, fb)
         if not os.path.exists(po) or not os.path.exists(pm):
             rows.append("| %s | %s | 未双侧完成 | — | — |" % (op, DESC[op]))
+            counts["未双侧完成"] += 1
             continue
         r = P.diff(po, pm)
         sa, sb = r["stats_a"], r["stats_b"]
@@ -89,17 +106,23 @@ def main():
         if r["total"] == 0:
             verdict = "**一致**"
             sec = "—"
+            counts["一致"] += 1
         else:
             verdict = "差异 %d 处" % r["total"]
             sec = "、".join("%s(%d)" % (k, len(v)) for k, v in r["sections"].items()) if isinstance(list(r["sections"].values())[0], list) else "、".join(r["sections"])
+            counts["差异"] += 1
         note = NOTE.get(op, "")
         rows.append("| %s | %s | %s%s | %s | %s |" % (op, DESC[op], verdict, note, sec, sd or "—"))
         if r["total"]:
             detail.append("### %s %s\n\n```\n%s\n```\n" % (op, DESC[op], P.fmt(r, 8)))
+    summary = ("**共 %d 项：%d 项一致、%d 项差异、%d 项未双侧完成。**"
+               % (len(ORDER), counts["一致"], counts["差异"], counts["未双侧完成"]))
 
     out = ["# 原版 PmxEditor vs 新版 PmxEditor_Modern — 同操作语义比对总表", "",
-           "基准模型：`KARU式Rabbit Hole MIKU.ver 1.6.pmx`（116036 顶点 / 204919 面 / 21 材质 / 168 骨骼 / 22 表情 / 10 贴图 / 82 刚体 / 74 关节）", "",
-           "比对方式：两侧各自操作后「另存为」，再用 `pmxsem` 按 1e-5 容差逐字段比对两个另存文件。原版侧通常用真实鼠标键盘（GUI），I3（IK 链）等 GUI 无法编辑的字段改由 `tests/parity/cxop.py` 驱动原版自带 CSScript 插件（`.cx`）写入，落盘仍走 PmxEditor 自身的另存。", "",
+           "基准模型：`KARU式Rabbit Hole MIKU.ver 1.6.pmx`（116036 顶点 / 204919 面 / 21 材质 / 168 骨骼 / 22 表情 / 10 贴图 / 82 刚体 / 74 关节）。"
+           "柔体两项（SB1/SB2）的基座为 `SB0_cx.pmx`：由原版 .cx 在基准模型上追加 1 个柔体后另存，PMX 2.1。", "",
+           "比对方式：两侧各自操作后「另存为」，再用 `pmxsem` 按 1e-5 容差逐字段比对两个另存文件。原版侧通常用真实鼠标键盘（GUI）；I3（IK 链）、FA1（面材质重分配）、N3/N4（复制骨骼/材质）、SB2（柔体参数）等原版无 GUI 入口或难以自动化的操作，改由 `tests/parity/cxop.py` 驱动原版自带 CSScript 插件（`.cx`）写入，落盘仍走 PmxEditor 自身的另存；其中 FA1 与 SB2 的新版侧已改为「面」页 / 「柔体」页的真实 GUI 操作。", "",
+           summary, "",
            "| 操作 | 说明 | 判定 | 差异段（处数） | 统计变化 |", "| --- | --- | --- | --- | --- |"]
     out += rows
     out += ["", "## 差异明细", ""]

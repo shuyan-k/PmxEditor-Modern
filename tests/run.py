@@ -1072,13 +1072,16 @@ def scen_sel():
                 continue
             before = (WIN.doc.sel_kind, WIN.doc.sel_index)
             n_undo = len(WIN.doc._undo)
+            # 点击可能让面板重建列表（例如物理页切换刚体/关节），
+            # 之后再读 idx 就是悬空索引；文本必须在点击前取。
+            row_text = mdl.data(idx, Qt.DisplayRole)
             try:
                 QTest.mouseClick(lv.viewport(), Qt.LeftButton, Qt.NoModifier, rc.center())
                 pump(150)
             except Exception:
                 anomaly("click-row-%s-%d" % (kind, r), traceback.format_exc())
             log("    单击 row %d %r → %s undo %d→%d status=%r"
-                % (r, mdl.data(idx, Qt.DisplayRole), (WIN.doc.sel_kind, WIN.doc.sel_index),
+                % (r, row_text, (WIN.doc.sel_kind, WIN.doc.sel_index),
                    n_undo, len(WIN.doc._undo), STATUS.text))
             if STATUS.text.startswith("选择失败"):
                 anomaly("click-fail-%s-%d" % (kind, r), STATUS.text)
@@ -1202,7 +1205,8 @@ def scen_sel6():
     pp.select = _sel
     WIN.doc.select("rigid", 1)
     pp.select = orig
-    log("select calls=%d sel=%r status=%r" % (st["n"], WIN.doc.sel, WIN.status_label.text()))
+    log("select calls=%d sel=%r status=%r"
+        % (st["n"], (WIN.doc.sel_kind, WIN.doc.sel_index), WIN.status_label.text()))
     H.dump()
 # ---------------------------------------------------------------- 场景：真实点击刚体列表行
 def scen_click_rigid():
@@ -4393,6 +4397,136 @@ def scen_skin():
 
 
 
+def scen_append():
+    """付与语义：非ローカル付与按「源骨骼的父级」取本地旋转，膝反向付与该生效。"""
+    import math as _m
+    import numpy as _np
+    from pmxeditor import skinning as SK
+
+    win = WIN
+    m = win.doc.model
+    if not m:
+        anomaly("append-nomodel", "没有模型")
+        return
+    knee = bone = None
+    for i, b in enumerate(m.bones):
+        if (b.flags & 0x0100) and 0 <= b.append_parent < len(m.bones) \
+                and b.append_parent == b.parent and b.append_ratio < 0:
+            knee, bone = i, b
+            break
+    if knee is None:
+        log("[append] 模型没有「自父级反向付与」骨骼，跳过")
+        return
+
+    def world():
+        pose = SK.Pose(m)
+        pose.base_rot[bone.parent] = SK.euler_to_quat(_m.radians(60), 0, 0)
+        pose.apply({}, m.morphs)
+        return pose.world().copy()
+
+    saved = SK.native_core
+    try:
+        SK.native_core = saved
+        wn = world()
+        SK.native_core = None
+        wp = world()
+    finally:
+        SK.native_core = saved
+    d = float(_np.abs(wn - wp).max())
+    if d > 1e-5:
+        anomaly("append-native", "native/numpy 世界矩阵差 %.6f" % d)
+
+    q = SK.mat_to_quat(wn[knee][:3, :3])
+    angle = _m.degrees(2 * _m.acos(min(1.0, abs(float(q[3])))))
+    want = 60.0 * (1.0 + float(bone.append_ratio))
+    log("[append] %s 世界角 %.2f°（期望 %.2f°）" % (bone.name, angle, want))
+    if abs(angle - want) > 0.5:
+        anomaly("append-knee", "%s 反向付与未生效：%.2f° != %.2f°"
+                % (bone.name, angle, want))
+    log("[append] 付与链通过，native/numpy 差 %.6f" % d)
+
+
+def scen_overlay_pose():
+    """刚体/关节叠加层与拾取使用当前姿态矩阵，而不是 PMX 静止坐标。"""
+    import numpy as _np
+
+    win = WIN
+    m = win.doc.model
+    vp = win.viewport
+    if not m or not m.rigid:
+        anomaly("overlay-nomodel", "没有刚体")
+        return
+    rb = m.rigid[0]
+    if not (0 <= rb.bone < len(m.bones)):
+        log("[overlay] 刚体0 没有关联骨骼，跳过")
+        return
+    before = vp._rigid_current_matrix(0)[:3, 3].copy()
+    jb = None
+    if m.joints:
+        j = m.joints[0]
+        if 0 <= j.rigid_a < len(m.rigid) and j.rigid_a == 0:
+            jb = vp._joint_current_matrix(0)[:3, 3].copy()
+    vp.pose.base_trans[rb.bone] = [1.5, 0.0, 0.0]
+    vp.pose.apply(vp.morph_weights, m.morphs)
+    vp.pose.world_update()
+    vp.set_display(show_rigid=True, show_joints=True)
+    vp._pose_dirty = True
+    vp._mark_full_skin_dirty()
+    vp.update()
+    pump(300)
+    after = vp._rigid_current_matrix(0)[:3, 3]
+    d = float(_np.linalg.norm(after - before))
+    if abs(d - 1.5) > 1e-4:
+        anomaly("overlay-rigid", "刚体标记位移 %.4f != 1.5" % d)
+    if vp._rb_world and float(_np.linalg.norm(vp._rb_world[0][:3, 3] - after)) > 1e-4:
+        anomaly("overlay-build", "叠加层几何没有跟随当前姿态")
+    if jb is not None:
+        ja = vp._joint_current_matrix(0)[:3, 3]
+        dj = float(_np.linalg.norm(ja - jb))
+        if abs(dj - 1.5) > 1e-4:
+            anomaly("overlay-joint", "关节标记位移 %.4f != 1.5" % dj)
+    # 拾取：把当前刚体位置投影到屏幕，应能命中刚体（骨骼优先，可能命中骨骼）
+    p = vp.camera.project(after, vp.width(), vp.height())
+    if p:
+        hit = vp.pick(int(p[0]), int(p[1]))
+        if hit[0] == "rigid" and hit[1] != 0:
+            anomaly("overlay-pick", "命中错误刚体 %r" % (hit,))
+    log("[overlay] 刚体/关节叠加层跟随姿态通过，位移 %.3f" % d)
+
+    # 无骨骼刚体（bone = -1，如胸部物理体）：不跟随单根骨骼，但要跟随模型整体
+    free = next((i for i, r in enumerate(m.rigid)
+                 if not (0 <= r.bone < len(m.bones))), None)
+    if free is not None:
+        rest = vp._rigid_rest_matrix(free)[:3, 3]
+        cur = vp._rigid_current_matrix(free)[:3, 3]
+        if float(_np.linalg.norm(cur - rest)) > 1e-4:
+            anomaly("overlay-free-single", "无骨骼刚体被单根骨骼的位移带走")
+        jfree = next((ji for ji, j in enumerate(m.joints)
+                      if free in (j.rigid_a, j.rigid_b)), None)
+        j_before = (vp._joint_current_matrix(jfree)[:3, 3].copy()
+                    if jfree is not None else None)
+        roots = [i for i, b in enumerate(m.bones)
+                 if not (0 <= b.parent < len(m.bones))]
+        root = max(roots, key=lambda i: len(vp.pose.subtrees[i])) if roots else -1
+        if root >= 0:
+            vp.pose.base_trans[root] = [0.0, 0.0, 1.5]
+            vp.pose.apply(vp.morph_weights, m.morphs)
+            vp.pose.world_update()
+            vp._pose_dirty = True
+            vp._mark_full_skin_dirty()
+            vp.update()
+            pump(300)
+            df = float(_np.linalg.norm(vp._rigid_current_matrix(free)[:3, 3] - rest))
+            if abs(df - 1.5) > 1e-4:
+                anomaly("overlay-free-rigid", "无骨骼刚体位移 %.4f != 1.5" % df)
+            if jfree is not None:
+                djf = float(_np.linalg.norm(
+                    vp._joint_current_matrix(jfree)[:3, 3] - j_before))
+                if abs(djf - 1.5) > 1e-4:
+                    anomaly("overlay-free-joint", "无骨骼刚体关节位移 %.4f != 1.5" % djf)
+            log("[overlay] 无骨骼刚体跟随模型整体位移通过，位移 %.3f" % df)
+
+
 def scen_ellipsoid():
     """P2-a：SDEF 椭球半轴（R0）。
 
@@ -5367,6 +5501,193 @@ def scen_vertex_edit():
         anomaly("vedit-roundtrip-w", "权重类型不一致")
     shot(win, "vertex_page")
     log("[vertex-edit] 顶点编辑通过：vertices=%d" % n)
+
+
+def scen_face_edit():
+    """面页：按材质移动三角面（数据层 + GUI）、撤销与往返。"""
+    import numpy as np
+    from pmxeditor.doc import reassign_faces
+
+    win = WIN
+    doc = win.doc
+    m = doc.model
+    if not m or len(m.materials) < 2:
+        anomaly("face-skip", "模型材质不足")
+        return
+    page = win._pages[8]
+    win._select_page(8)
+    pump(100)
+    page.refresh()
+    pump(40)
+
+    n_idx = int(m.indices.size)
+    f0 = int(m.materials[0].face_count)
+    f1 = int(m.materials[1].face_count)
+    orig = np.asarray(m.indices).copy()
+    if f0 < 900:
+        anomaly("face-skip-faces", "材质0 面数不足：%d" % f0)
+    else:
+        doc.push_undo("移动面到材质")
+        n = reassign_faces(m, 0, 0, 300, 1)
+        doc.mark_dirty()
+        doc.edited.emit("structure")
+        pump(400)
+        if n != 300:
+            anomaly("face-move-count", "移动面数 %r" % (n,))
+        if int(m.indices.size) != n_idx:
+            anomaly("face-move-size", "%d -> %d" % (n_idx, int(m.indices.size)))
+        if int(m.materials[0].face_count) != f0 - 900:
+            anomaly("face-move-src", "%d" % int(m.materials[0].face_count))
+        if int(m.materials[1].face_count) != f1 + 900:
+            anomaly("face-move-dst", "%d" % int(m.materials[1].face_count))
+        rest = np.asarray(m.indices)
+        if not np.array_equal(rest[:f0 - 900], orig[900:f0]):
+            anomaly("face-move-rest", "源材质剩余面顺序改变")
+        if not np.array_equal(rest[f0 - 900:f0 - 900 + f1], orig[f0:f0 + f1]):
+            anomaly("face-move-append", "目标材质原有面被改变")
+        if not np.array_equal(rest[f0 - 900 + f1:f0 + f1], orig[0:900]):
+            anomaly("face-move-order", "移动的面没有按原顺序追加到末尾")
+        doc.undo()
+        pump(500)
+        m = doc.model
+        if (int(m.indices.size) != n_idx or int(m.materials[0].face_count) != f0
+                or int(m.materials[1].face_count) != f1):
+            anomaly("face-undo", "撤销后没有还原：%d/%d/%d"
+                    % (int(m.indices.size), int(m.materials[0].face_count),
+                       int(m.materials[1].face_count)))
+
+    # GUI 路径：源材质 0 → 目标材质 1，移动 10 个面
+    page.refresh()
+    pump(60)
+    page.src_combo.setCurrentIndex(0)
+    page.start_spin.setValue(0)
+    page.count_spin.setValue(10)
+    page.dst_combo.setCurrentIndex(1)
+    pump(60)
+    if not page.move_btn.isEnabled():
+        anomaly("face-btn", "移动按钮未启用")
+    else:
+        page._move()
+        pump(400)
+        m = doc.model
+        if int(m.materials[0].face_count) != f0 - 30:
+            anomaly("face-gui-src", "%d" % int(m.materials[0].face_count))
+        if int(m.materials[1].face_count) != f1 + 30:
+            anomaly("face-gui-dst", "%d" % int(m.materials[1].face_count))
+        doc.undo()
+        pump(500)
+    page.refresh()
+    pump(40)
+    page.dst_combo.setCurrentIndex(0)
+    pump(40)
+    if page.move_btn.isEnabled():
+        anomaly("face-same-source", "源与目标相同时按钮仍可用")
+
+    path = os.path.join(H.ROOT, "tests", "face_rt.pmx")
+    from pmxeditor.pmx import load_pmx as _pmx_load, save_pmx as _pmx_save
+    m = doc.model
+    counts = [int(mt.face_count) for mt in m.materials]
+    _pmx_save(m, path)
+    back = _pmx_load(path)
+    if [int(mt.face_count) for mt in back.materials] != counts:
+        anomaly("face-roundtrip", "材质面数不一致")
+    if not np.array_equal(np.asarray(back.indices), np.asarray(m.indices)):
+        anomaly("face-roundtrip-idx", "索引不一致")
+    shot(win, "face_page")
+    log("[face] 面重分配通过：materials=%d faces=%d" % (len(m.materials), len(m.indices) // 3))
+
+
+def scen_softbody_edit():
+    """柔体页：新建、字段/锚点/固定点编辑、PMX 2.1 往返与删除撤销。"""
+    win = WIN
+    doc = win.doc
+    m = doc.model
+    if not m:
+        anomaly("soft-nomodel", "没有模型")
+        dump()
+        return
+    page = win._pages[9]
+    win._select_page(9)
+    pump(100)
+    page.refresh()
+    pump(40)
+    n0 = len(m.soft_bodies)
+    page._add()
+    pump(400)
+    if len(m.soft_bodies) != n0 + 1:
+        anomaly("soft-add", "%d != %d" % (len(m.soft_bodies), n0 + 1))
+        return
+    idx = len(m.soft_bodies) - 1
+    page.select("soft", idx)
+    pump(80)
+
+    page.name_edit.setText("柔体测试")
+    page._name_changed()
+    pump(80)
+    page.mass_spin.setValue(3.5)
+    pump(80)
+    page.margin_spin.setValue(0.1)
+    pump(80)
+    page.flag_random.setChecked(True)
+    pump(80)
+    page.config_spins[0].setValue(1.5)
+    pump(80)
+    page.iter_spins[1].setValue(2)
+    pump(80)
+    if m.rigid:
+        page.anchor_rigid.setCurrentIndex(0)
+        page.anchor_vertex.setValue(min(5, max(0, m.n_vertices - 1)))
+        page.anchor_add.click()
+        pump(100)
+    page.pin_spin.setValue(min(4, max(0, m.n_vertices - 1)))
+    page._pin_add()
+    pump(100)
+
+    s = m.soft_bodies[idx]
+    if s.name != "柔体测试":
+        anomaly("soft-name", "%r" % s.name)
+    if abs(float(s.total_mass) - 3.5) > 1e-5:
+        anomaly("soft-mass", "%r" % s.total_mass)
+    if abs(float(s.collision_margin) - 0.1) > 1e-5:
+        anomaly("soft-margin", "%r" % s.collision_margin)
+    if not (int(s.flags) & 0x04):
+        anomaly("soft-flag", "flags=%r" % s.flags)
+    if abs(float(s.config[0]) - 1.5) > 1e-5:
+        anomaly("soft-config", "config[0]=%r" % s.config[0])
+    if int(s.iteration[1]) != 2:
+        anomaly("soft-iter", "iteration=%r" % (s.iteration,))
+    if m.rigid and not s.anchors:
+        anomaly("soft-anchor", "锚点为空")
+    if not s.pins:
+        anomaly("soft-pin", "固定点为空")
+
+    path = os.path.join(H.ROOT, "tests", "soft_rt.pmx")
+    from pmxeditor.pmx import load_pmx as _pmx_load, save_pmx as _pmx_save
+    _pmx_save(m, path)
+    back = _pmx_load(path)
+    if back.version < 2.1:
+        anomaly("soft-version", "保存版本 %r" % back.version)
+    if len(back.soft_bodies) != n0 + 1:
+        anomaly("soft-roundtrip", "%d" % len(back.soft_bodies))
+    else:
+        bs = back.soft_bodies[idx]
+        if abs(float(bs.total_mass) - 3.5) > 1e-5 or abs(float(bs.collision_margin) - 0.1) > 1e-5:
+            anomaly("soft-roundtrip-vals", "mass=%r margin=%r"
+                    % (bs.total_mass, bs.collision_margin))
+        if list(bs.anchors) != list(s.anchors) or list(bs.pins) != list(s.pins):
+            anomaly("soft-roundtrip-links", "锚点/固定点不一致")
+    shot(win, "soft_page")
+
+    page._remove()
+    pump(400)
+    if len(m.soft_bodies) != n0:
+        anomaly("soft-remove", "%d != %d" % (len(m.soft_bodies), n0))
+    doc.undo()
+    pump(500)
+    if len(doc.model.soft_bodies) != n0 + 1:
+        anomaly("soft-undo", "%d" % len(doc.model.soft_bodies))
+    log("[soft] 柔体编辑通过：soft=%d anchors=%d pins=%d"
+        % (n0 + 1, len(s.anchors), len(s.pins)))
 
 
 def scen_small_fixes():

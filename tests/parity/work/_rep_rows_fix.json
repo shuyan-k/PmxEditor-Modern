@@ -1,0 +1,11 @@
+{
+ "log": [
+  "[boot] APP STARTED rows_fix dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[rowsfix] 1560       vw=486 roww=486 hbar=False max=0 hint=486",
+  "[rowsfix] 1120       vw=486 roww=486 hbar=False max=0 hint=486",
+  "[rowsfix] back       vw=486 roww=486 hbar=False max=0 hint=486",
+  "[rowsfix] morph      vw=486 roww=486 hbar=False max=0 hint=486",
+  "[rowsfix] rigid      vw=486 roww=486 hbar=False max=0 hint=486"
+ ],
+ "anomalies": []
+}

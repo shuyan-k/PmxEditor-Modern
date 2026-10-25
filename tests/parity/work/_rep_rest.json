@@ -10,8 +10,8 @@
   "[boot] 父级编辑: bone 2 1 -> pose.parent=0",
   "[boot] 三次撤销后 rest_pos 相对初始 0.00000",
   "[boot] 权重骨骼 idx=8 verts=18604 pos=[-0.0, 17.263, 0.002]",
-  "[boot] 权重骨骼位移: pix=0.08% pos=[-0.0, 17.263, 0.302]",
-  "[boot] 撤销后 pix vs 位移前 = 0.05%"
+  "[boot] 权重骨骼位移: pix=0.06% pos=[-0.0, 17.263, 0.302]",
+  "[boot] 撤销后 pix vs 位移前 = 0.03%"
  ],
  "anomalies": []
 }

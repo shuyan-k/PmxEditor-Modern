@@ -1,0 +1,33 @@
+{
+ "log": [
+  "[boot] APP STARTED real3 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[real3] save 0.31s -> 8437650 bytes (src 8437650)",
+  "[real3] reload 0.30s",
+  "[real3]   v_pos      116036 -> 116036 OK",
+  "[real3]   indices    614757 -> 614757 OK",
+  "[real3]   bones         168 ->    168 OK",
+  "[real3]   materials      21 ->     21 OK",
+  "[real3]   morphs         22 ->     22 OK",
+  "[real3]   rigid          82 ->     82 OK",
+  "[real3]   joints         74 ->     74 OK",
+  "[real3]   textures       10 ->     10 OK",
+  "[real3]   frames          9 ->      9 OK",
+  "[real3]   validate=[]",
+  "[real3]   v_pos maxdiff=0.000000  uv maxdiff=0.000000",
+  "[real3] frame avg 3.7 ms (271.8 fps)",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 0.00% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.71% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.74% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.68% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.67% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.66% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.68% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.75% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.75% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.67% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.83% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] CLICK QWidget #qt_scrollarea_viewport -> pix 2.81% | status: 已保存 D:\\Project\\PmxEditor_Modern\\tests\\miya_out.pmx",
+  "[real3] morph click hit 11/12 sel=('morph', 11)"
+ ],
+ "anomalies": []
+}

@@ -1,0 +1,8 @@
+{
+ "log": [
+  "[boot] APP STARTED overlay_pose dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
+  "[boot] [overlay] 刚体/关节叠加层跟随姿态通过，位移 1.500",
+  "[boot] [overlay] 无骨骼刚体跟随模型整体位移通过，位移 1.500"
+ ],
+ "anomalies": []
+}

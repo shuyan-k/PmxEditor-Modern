@@ -28,5 +28,11 @@
   "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\J1_orig.pmx",
   "note": "ok 0.0s",
   "detail": "None"
+ },
+ "SB1": {
+  "status": "ok",
+  "path": "D:\\Project\\PmxEditor_Modern\\tests\\parity\\work\\SB1_orig.pmx",
+  "note": "ok 0.0s",
+  "detail": "PMX 2.1 柔体基座原样另存（1 柔体 / 1 锚点 / 1 固定点）"
  }
 }

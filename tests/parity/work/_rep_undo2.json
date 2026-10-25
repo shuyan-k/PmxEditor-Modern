@@ -1,19 +1,19 @@
 {
  "log": [
   "[boot] APP STARTED undo2 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
-  "[boot]   morphs           5.5 ms  n=22",
+  "[boot]   morphs          15.8 ms  n=22",
   "[boot]   v_sdef           1.8 ms  n=116036",
   "[boot]   bones            1.3 ms  n=168",
+  "[boot]   v_bones          0.9 ms  n=116036",
   "[boot]   indices          0.8 ms  n=614757",
-  "[boot]   v_bones          0.7 ms  n=116036",
   "[boot]   joints           0.6 ms  n=74",
   "[boot]   v_weights        0.6 ms  n=116036",
   "[boot]   rigid            0.5 ms  n=82",
   "[boot]   v_pos            0.4 ms  n=116036",
-  "[boot]   v_nrm            0.3 ms  n=116036",
-  "[boot]   v_edge           0.2 ms  n=116036",
+  "[boot]   v_nrm            0.4 ms  n=116036",
   "[boot]   v_uv             0.2 ms  n=116036",
-  "[boot]   合计 13.2 ms"
+  "[boot]   materials        0.2 ms  n=21",
+  "[boot]   合计 23.5 ms"
  ],
  "anomalies": []
 }

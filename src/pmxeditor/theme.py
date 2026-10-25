@@ -850,6 +850,19 @@ def make_icon(kind: str, color: str = "", size: int = 20) -> QIcon:
         p.setBrush(QColor(color))
         for pt in tri:
             p.drawEllipse(pt, s * .085, s * .085)
+    elif kind == "face":
+        p.drawPolygon(QPolygonF([QPointF(s * .18, s * .28), QPointF(s * .5, s * .16),
+                                 QPointF(s * .82, s * .34), QPointF(s * .5, s * .8)]))
+        p.drawLine(QPointF(s * .5, s * .16), QPointF(s * .5, s * .8))
+    elif kind == "soft":
+        path = QPainterPath(QPointF(s * .18, s * .6))
+        path.cubicTo(QPointF(s * .18, s * .3), QPointF(s * .4, s * .18),
+                     QPointF(s * .5, s * .3))
+        path.cubicTo(QPointF(s * .6, s * .18), QPointF(s * .82, s * .3),
+                     QPointF(s * .82, s * .6))
+        path.cubicTo(QPointF(s * .82, s * .82), QPointF(s * .18, s * .82),
+                     QPointF(s * .18, s * .6))
+        p.drawPath(path)
     elif kind == "mesh":
         p.drawPolygon(QPolygonF([QPointF(s * .16, s * .66), QPointF(s * .38, s * .3),
                                  QPointF(s * .62, s * .58), QPointF(s * .84, s * .3)]))

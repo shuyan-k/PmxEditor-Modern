@@ -2,14 +2,14 @@
 
 - 被测对象
   - 原版：`D:\Project\MMD\05_工具\PmxEditor (MMD模型编辑器）\PmxEditor_x64.exe`（中文汉化版，0.2.7.3，x64 + 就地 msvcr120 修复）
-  - 新版：`D:\Project\PmxEditor_Modern`（Python + PyQt5 重写，HEAD a3e11dd）
+  - 新版：`D:\Project\PmxEditor_Modern`（Python + PyQt5 重写；基于 HEAD `54d1942`，含本轮未提交修复）
 - 基准模型：`D:\Project\MMD\02_模型库\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\KARU式Rabbit Hole MIKU.ver 1.6.pmx`
   （116,036 顶点 / 204,919 三角面 / 21 材质 / 168 骨骼 / 22 表情 / 10 贴图 / 82 刚体 / 74 关节 / 0 柔体，PMX 2.0，UTF-16LE）
-- 结论速览（**全部修复 + 后续建议 + 单字段补测 + 多模型复跑后**）：**37 项操作（36 项双侧 + M3 单侧）中 31 项保存结果字段级完全一致**，差异 5 项：S1（有意保留）、B7（原版开轴固定时会归一化轴向量）、N1/N2（设计/能力差异）、E5（新版更正确）；M3 仅单侧可比。第二模型 `米娅.pmx` 上复跑 5 项核心操作，全部 0 差异。原报告列出的 8 项差异里有 7 项已修复并复验一致（含本轮 I2 暴露的「新建 IK 默认 loop/angle」），另补上了 E4（文字编码）与 E5（追加 UV）两个可写入口，并按第八节建议新增 M4/M5/M6/V2/B4/B5/P2/F2/I2 共 9 项以往未覆盖的操作，另打通原版自带 **CSScript（.cx）插件通道**，用它补上 GUI 无法编辑的 **I3（IK 链：目标/循环/角度/两条 Link）**。新版在「文件往返保真」上仍优于原版。
+- 结论速览（**全部修复 + 后续建议 + 单字段补测 + 多模型复跑 + ②剩余三项 + 补齐面/柔体页后**）：**42 项操作（41 项双侧 + M3 单侧）中 36 项保存结果字段级完全一致**；差异 5 项：S1（有意保留）、B7（原版开轴固定时会归一化轴向量）、N1/N2（设计/能力差异）、E5（新版更正确）；M3 仅单侧可比。第二模型 `米娅.pmx` 上复跑 5 项核心操作，全部 0 差异。原报告列出的 8 项差异里有 7 项已修复并复验一致（含 I2 暴露的「新建 IK 默认 loop/angle」），另补上 E4（文字编码）/E5（追加 UV）两个可写入口与 M4/M5/M6/V2/B4/B5/P2/F2/I2/I3 共 10 项，再打通原版 **CSScript（.cx）通道**补上 FA1/N3/N4/SB1/SB2 五项，最后由新增的「面」页与「柔体」页把 FA1/SB2 从能力差异转为双侧 GUI 0 差异。新版在「文件往返保真」上仍优于原版。
 
 ## 一、测试方法
 
-同一模型、同一操作序列，两侧**各自用真实 GUI 操作**（不用内部 API 改数据），操作完成后各自「文件 → 另存为」到 `tests/parity/work/<OP>_orig.pmx` 与 `<OP>_mod.pmx`，再用自研语义比较器 `tests/parity/pmxsem.py`（1e-5 容差，逐字段覆盖 version/encoding/add_uv/name/comment/textures/顶点数组/索引/材质/骨骼/表情/表示枠/刚体/关节/柔体）比对两个另存文件。
+同一模型、同一操作序列，两侧**各自用真实 GUI 操作**；GUI 无法编辑或原版无入口的字段，走原版自带 CSScript（`.cx`）通道写入（不用内部 API 改数据）。操作完成后各自「文件 → 另存为」到 `tests/parity/work/<OP>_orig.pmx`（`.cx` 通道为 `_cx.pmx`）与 `<OP>_mod.pmx`，再用自研语义比较器 `tests/parity/pmxsem.py`（1e-5 容差，逐字段覆盖 version/encoding/add_uv/name/comment/textures/顶点数组/索引/材质/骨骼/表情/表示枠/刚体/关节/柔体）比对两个另存文件。
 
 - 原版侧驱动：`tests/parity/origlib.py`（win32 SetCursorPos + mouse_event / SendInput 键鼠、PIL 抓屏）+ `tests/parity/origui.py`（窗口定位、页签切换、索引跳转、另存为、对话框应答）+ `tests/parity/uia.py`（PowerShell UIAutomation 抓取控件矩形以取得点击坐标）。
 - 新版侧驱动：`tests/parity/modern.py`（复用仓库 `tests/harness.py`：真实命中测试点击、对话框打桩、截图、日志）+ `tests/parity/side_mod.py`。
@@ -71,8 +71,13 @@
 | M7 | 材质0 球面模式 无→乘法 | ✅ 一致 | `materials[0].sphere_mode` 0→1 |
 | P3 | 刚体0 形状 球→箱 | ✅ 一致 | `rigid[0].shape` 0→1 |
 | P4 | 刚体0 所属组 0→1 | ✅ 一致 | `rigid[0].group` 0→1 |
+| FA1 | 面材质重分配：材质0 前 300 面 → 材质1 | ✅ 一致（已补齐「面」页） | 原版 `.cx` 与新版「面」页同语义：`materials[0].face_count` 118404→117504、`materials[1]` 15204→16104、`indices` 按材质顺序重建，两侧 0 差异 |
+| N3 | 复制骨骼5「上半身」并追加 | ✅ 一致 | 原版 `.cx` `Clone()` vs 新版「复制当前骨骼」：骨骼 168→169，新骨骼仅 name/name_en 不同，其余字段 0 差异 |
+| N4 | 复制材质0「Skin」并追加（连面） | ✅ 一致（已修复） | 材质 21→22、面 204919→244387、文件 8,911,392 B；新版原先只复制 `face_count` 不复制面索引，已修（见第九节） |
+| SB1 | PMX 2.1 柔体基座往返另存 | ✅ 一致 | 基座 `SB0_cx.pmx`（1 柔体 / 1 锚点 / 1 固定点）；两侧均 8,437,856 B、0 差异 |
+| SB2 | 柔体0 总质量 2.5→3.5、碰撞余量 0.05→0.1 | ✅ 一致（已补齐「柔体」页） | 原版 `.cx` 与新版「柔体」页同语义：`soft[0].total_mass` 2.5→3.5、`collision_margin` 0.05→0.1，其余字段 0 差异 |
 
-## 四、需修复问题（按优先级）
+## 四、问题清单与处理状态（按优先级）
 
 ### P1-1 移动骨骼时会带动权重顶点（B1） — ✅ 已修复（见第九节）
 - 现象：把骨骼5 X 从 0 改到 1.0 后，新版另有 14,602 个顶点被按权重位移（如顶点 554 权重 0.125 → X 0.1879→0.3131，恰为 0.125×1.0），`v_pos` 最大变化 0.859；原版 PmxEditor 移动骨骼**不动任何顶点**。
@@ -107,7 +112,7 @@
   `if b.flags & BF_TAIL_INDEX: b.tail_bone = _remap(...); if b.tail_bone < 0: b.flags &= ~BF_TAIL_INDEX; b.tail_offset = [0,0,0]`
 - 结果：源模型里 9 个「标记为骨骼索引但 tail_bone=-1」的骨骼被清位（flags 271→270、283→282、267→266），原版原样保留。方向上新版更规范（-1 索引本身非法），但属于**未被要求的连带修改**。
 
-### P2-3 新建骨骼的默认值不同（N1）
+### P2-3 新建骨骼的默认值不同（N1） — 有意保留
 | 字段 | 原版 | 新版 |
 | --- | --- | --- |
 | name | `新規ボーン1` | `新建骨骼` |
@@ -118,26 +123,29 @@
 
 新版是「作为当前骨骼的子级」的显式设计，但与原名/原坐标不一致，会影响「同操作同结果」的验收口径，建议至少在报告中标注为**有意的功能增强**。
 
-### P2-4 开启「轴固定」时的轴向量处理（B7）
+### P2-4 开启「轴固定」时的轴向量处理（B7） — 未修（已知差异）
 
 - 现象：两侧 `bones[5].flags` 都 27→1051（置 `BF_FIXED_AXIS`），但**原版在开启轴固定的瞬间会把 `axis` 归一化为骨骼朝向**（`axis` 由 (1,0,0) 变为 (1, 0.998421, −0.056169)），新版保持原值 (1,0,0)。
 - 影响：只有「轴固定」骨骼在 PMX 里的轴向冗余数据不同，不影响物理/姿态；属低危一致性差异，本轮未改（改则需推断原版归一化算法）。
 - 现场：`work/B7_orig.pmx` vs `work/B7_mod.pmx`（`pmxsem` 2 处）。
 
 ### 能力差异（非缺陷，但需记录）
-- E4 文字编码：新版信息页只读（原版可切 UTF-8）→ 建议提供只读值旁的操作入口或说明。
-- E5 追加UV：新版无入口；原版入口存在但 PMX 2.0 不落盘（原版自身也无效）。
+- E5 追加UV：新版已提供 0–4 下拉并真正落盘；原版可设但 PMX 2.0 不落盘 → 记为「新版更正确」的有意差异。
 - N2 新建材质：原版材质页 + 号灰化（不支持），新版支持 → 新版功能更多。
+- ~~FA1 面页材质重分配：新版无「面」页~~ → 已补齐「面」页（`panels/face.py`），原版 `.cx` 语义与新版 GUI 0 差异。
+- ~~SB2 柔体参数编辑：新版无柔体编辑入口~~ → 已补齐「柔体」页（`panels/soft.py`），原版 `.cx` 语义与新版 GUI 0 差异。
 
 ## 五、判定为一致的项（可直接作为回归基线）
 
 E1、E3、B2、B3、F1、P1、J1、U1 以及 R1 往返保真：两侧保存结果字段级完全一致（U1 撤销后与基线 0 差异）。
 
-修复后新增一致项：**E2、B1、M1、M2、V1、S2、E4**（第九节有逐条复核数据），即 20 项双侧操作里 **15 项字段级一致**、1 项有意差异（S1）、2 项设计差异（N1/N2）、1 项新版更正确（E5），另有 M3 只有单侧。
+上一轮小结：修复后新增一致项 **E2、B1、M1、M2、V1、S2、E4**（第九节有逐条复核数据），即 20 项双侧操作里 **15 项字段级一致**、1 项有意差异（S1）、2 项设计差异（N1/N2）、1 项新版更正确（E5），另有 M3 只有单侧。
+
+截至本轮（42 项操作）：**36 项字段级完全一致**；差异 5 项 = S1（有意）、B7、N1/N2（设计差异）、E5（新版更正确），M3 仅单侧可比。
 
 ## 六、截图对比证据
 
-`tests/parity/pairs/<OP>_pair.png`：左侧原版、右侧新版，同操作后的界面状态（19 张，含 E4/E5：E4 两侧「文字编码」都是 UTF-8；E5 新版「附加 UV」下拉为 2，原版下拉同样停在 2 但保存仍写 0）。
+`tests/parity/pairs/<OP>_pair.png`：左侧原版、右侧新版，同操作后的界面状态（28 张，含 E4/E5：E4 两侧「文字编码」都是 UTF-8；E5 新版「附加 UV」下拉为 2，原版下拉同样停在 2 但保存仍写 0）。FA1/N3/N4/SB1/SB2 没有配对拼图，截图见 `tests/parity/shots/` 与 `tests/shots/`（FA1/SB2 新版侧已改为「面」页 / 「柔体」页截图）。
 
 ## 七、复现步骤
 
@@ -155,11 +163,11 @@ python -X utf8 tests/parity/compare_all.py     # → tests/parity/compare_all.md
 python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem as P;print(P.fmt(P.diff(r'tests/parity/work/B1_orig.pmx', r'tests/parity/work/B1_mod.pmx')))"
 ```
 
-工具文件：`tests/parity/{origlib,origui,uia,modern,pmxsem,side_orig,side_mod,compare_all,make_pairs}.py`、`uia/*.json`（各页控件坐标快照）、`work/*.pmx`（19 项操作 × 2 侧的另存结果）、`shots/*_orig.png`、`pairs/*_pair.png`。
+工具文件：`tests/parity/{origlib,origui,uia,modern,pmxsem,side_orig,side_mod,cxrun,cxop,compare_all,make_pairs,regress}.py`、`cx/*.cs`（原版 CSScript 片段）、`uia/*.json`（各页控件坐标快照）、`work/*.pmx`（42 项操作的另存结果，含 `SB0_cx.pmx` 柔体基座）、`shots/*_orig.png`、`pairs/*_pair.png`。
 
 ## 八、后续建议落实情况
 
-上一版报告把「表示枠增删、面页材质重分配、IK 链编辑、复制骨骼/材质、物理类型切换、PMX 2.1、贴图替换、VPD 载入、视口交互」列为未覆盖。本轮按同一框架（`side_orig.py` / `side_mod.py` 追加 `op_XX`，两侧操作 → 另存 → `pmxsem` 比对）补了 **10 项**操作，其中 9 项两侧都用真实 GUI，1 项（I3）原版侧走 CSScript `.cx` 通道，全部串行跑通：
+上一版报告把「表示枠增删、面页材质重分配、IK 链编辑、复制骨骼/材质、物理类型切换、PMX 2.1、贴图替换、VPD 载入、视口交互」列为未覆盖。通过同一框架（`side_orig.py` / `side_mod.py` 追加 `op_XX`，两侧操作 → 另存 → `pmxsem` 比对）累计补了 **15 项**操作；其中前 10 项中 9 项两侧都用真实 GUI、I3 原版侧走 CSScript `.cx`，后 5 项见下方「②剩余三项」，全部串行跑通：
 
 | 操作 | 覆盖的场景 | 判定与关键数据 |
 | --- | --- | --- |
@@ -176,12 +184,26 @@ python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem a
 
 副产物：I2 首次比对暴露出新版「开启 IK」时用了 dataclass 默认的 `loop=40 / angle=0.5`，而 PmxEditor 写入 `loop=0 / angle=1.0` —— 已按第九节 P3 修正。
 
+#### ②剩余三项（面页 / 复制对象 / PMX 2.1 柔体）
+
+新增 5 条比对（原版侧全部经 `.cx` 定义语义，落盘仍由 PmxEditor 完成）：
+
+| 操作 | 覆盖的场景 | 判定与关键数据 |
+| --- | --- | --- |
+| FA1 | 面页材质重分配：材质0 前 300 面 → 材质1 | ✅ 一致（新版「面」页 GUI）：`m0 118404→117504`、`m1 15204→16104`、`indices` 按材质顺序重建 |
+| N3 | 复制骨骼5 | ✅ 一致：`.cx Clone()` 与新版「复制当前骨骼」0 差异（仅 name/name_en 按同一规则变化） |
+| N4 | 复制材质0 | ✅ 一致（修 `duplicate_material` 后）：材质 21→22、面 204919→244387、8,911,392 B |
+| SB1 | PMX 2.1 柔体基座往返 | ✅ 一致：`SB0_cx.pmx`（1 柔体/1 锚点/1 固定点）两侧 0 差异、同尺寸 |
+| SB2 | 柔体参数编辑 | ✅ 一致（新版「柔体」页 GUI）：`total_mass 2.5→3.5`、`collision_margin 0.05→0.1` |
+
+副产物：N4 首次比对暴露 `duplicate_material` 只复制 `face_count`、不复制面索引（材质面数之和 733,161 > 索引 614,757）→ 已修（见第九节）。
+
 ### 仍未覆盖（含原因）
 
-- **面页材质重分配**：原版面页的选中面由视口拾取驱动，脚本无法稳定复现「同一组面」，需人工目视。
-- ~~**IK 链编辑（改 target / 增删 link）**~~：已用 CSScript `.cx` 通道覆盖（I3），不再受 WPF 内部元素限制。
-- **复制骨骼 / 复制材质**：原版这两个页的按钮行只有 頂/↑/↓/底/+/×，没有复制入口（复制在它的插件/菜单里），新版有独立按钮 —— 属能力差异，未做数值比对。
-- **PMX 2.1 特性（柔体、QDEF 等）**：需构造 2.1 模型且原版也要以 2.1 保存，超出本轮基准模型范围。
+- ~~**面页材质重分配**~~：已用 `.cx` 覆盖（FA1），新版随后补齐「面」页，现为双侧 GUI 0 差异。
+- ~~**IK 链编辑（改 target / 增删 link）**~~：已用 CSScript `.cx` 通道覆盖（I3）。
+- ~~**复制骨骼 / 复制材质**~~：已用 `.cx Clone()` 覆盖（N3/N4），并修掉 N4 暴露的材质面索引不一致。
+- ~~**PMX 2.1 特性（柔体）**~~：已构造 `SB0_cx.pmx` 基座并覆盖往返（SB1）与参数编辑（SB2）；新版随后补齐「柔体」页，现为双侧 GUI 0 差异；QDEF 仍未覆盖。
 - **贴图替换 / VPD 载入**：都经由系统文件对话框，落盘只有路径字符串（VPD 的姿态不进 PMX），`pmxsem` 无法判定对错，需目视。
 - **视口交互**（旋转/缩放/线框/骨骼拾取）：纯视觉行为，不产生文件差异，建议单独做视觉回归。
 
@@ -211,7 +233,7 @@ python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem a
 
 ## 九、修复记录与修复后复核
 
-用户「开修」后按报告第四节逐条落地，全部改动集中在 6 个源文件；每项修完都用**同一套两侧 GUI 脚本**（`side_orig.py` / `side_mod.py`）重跑并 `pmxsem` 复验。
+用户「开修」后按报告第四节逐条落地，当轮改动集中在 6 个源文件（后续 N4 修复另加 `src/pmxeditor/doc.py`）；每项修完都用**同一套两侧 GUI 脚本**（`side_orig.py` / `side_mod.py`）重跑并 `pmxsem` 复验。
 
 | 编号 | 改动位置 | 做法 | 复核结果 |
 | --- | --- | --- | --- |
@@ -225,6 +247,7 @@ python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem a
 | E4 文字编码 | `src/pmxeditor/panels/info.py`、`src/pmxeditor/pmx.py` | 信息页把只读编码标签换成下拉（UTF-16LE / UTF-8），选择后走 `self.edit("切换文字编码", ...)`；保存时 `_Writer.text` 按新编码整体重写；`validate_model` 不告警 | `E4_orig` vs `E4_mod` **0 差异**，两侧均 8,435,389 B，UTF-8 下中日文名/注释完好 |
 | E5 追加UV | `src/pmxeditor/pmx.py`（新增 `set_add_uv`）、`src/pmxeditor/panels/info.py` | 新增 0–4 下拉；`set_add_uv` 按需补齐/截断每个顶点的 4×N 个浮点并同步 `add_uv`，`validate_model` 校验宽度一致 | 新版 `add_uv=2`、`v_add (116036, 8)`、12,150,802 B（+3,713,152 = n×32）；0→2→4→0 回到 8,437,650 B 且与 `00_mod.pmx` 逐字节相同；原版侧仍写 0 → 记为「新版更正确」 |
 | P3（I2） | `src/pmxeditor/panels/bone.py` | 开启 IK 时显式使用 PmxEditor 同款初值 `IK(target=-1, loop=0, angle=1.0, links=[])`（原为 dataclass 默认 `loop=40 / angle=0.5`） | `I2_orig` vs `I2_mod` **0 差异** |
+| N4（复制材质） | `src/pmxeditor/doc.py` | `duplicate_material` 复制材质时，把源材质 `face_count` 个索引追加到 `indices` 末尾并同步 `face_count`（原来只复制计数不复制面，导致材质面数之和大于索引总数） | `N4_cx` vs `N4_mod` **0 差异**：材质 21→22、面 204919→244387、8,911,392 B；重载后 `sum(face_count)==614757+118404`，新材质面索引与源材质逐项相同 |
 
 附带的单元级验证（`tests/parity/verify_fixes.py` 等）：CRLF 往返、删材质 20 后统计与原版逐字段一致、删骨骼 100 后 `frames`/`rigid` 引用与基线一致、`validate_model` 全部无告警、保存→重载→保存字节一致。
 
@@ -236,11 +259,13 @@ python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem a
 - **N2 新建材质**：原版 + 号灰化，新版支持新建 —— 新版能力更强，未改。
 - **E5 追加UV**：原版下拉可设为 2 但保存仍写 0（PMX 2.0 下无效），新版会真正写入 4×N 浮点/顶点 —— 有意差异，新版更符合 PMX 规范。
 - **M3 取色对话框**：`QColorDialog` 本体就是 8 位，这条路必然量化；需要精确值请用新增的浮点数值框。
-- 其余仍未覆盖的场景（面页材质重分配、IK 链编辑、复制骨骼/材质、PMX 2.1、贴图替换、VPD 载入、视口交互）见第八节末尾，均附有未覆盖原因。
+- 仍未覆盖：贴图替换 / VPD 载入 / 视口交互 / QDEF，原因见第八节末尾。
 - 新增 B7：原版开轴固定会归一化轴向量，新版不归一化（见第四节 P2-4），保留为已知差异。
+- ~~新增 FA1 / SB2：新版无「面」页、无柔体编辑入口，属能力差异（见第四节），未实现新功能。~~
+  **已补齐**：新增「面」页与「柔体」页，FA1/SB2 由能力差异转为 0 差异（见 11.4）。
 
 
-## 十一、多模型复跑与全量回归（本轮补充）
+## 十一、多模型复跑与全量回归（补充复跑）
 
 ### 11.1 第二模型复跑
 
@@ -255,13 +280,44 @@ python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem a
 
 | 场景 | 结果 | 说明 |
 | --- | --- | --- |
-| 36 个 | anomalies=0 | menu / view / sel2–sel5 / click_rigid / rows / tree2 / empty / struct / struct2 / struct3 / struct4 / undo / undo2 / rest / restmove / mouse / hover / flagguard / frame / morph_edit / vertex_edit / skin / ellipsoid / sdefr1 / ikclamp / physlazy / physlive / optim / undobudget / small_fixes / theme_probe / theme_persist / config / sync / final / fps |
+| 其余功能场景（修复前 36 个） | anomalies=0 | menu / view / sel2–sel5 / click_rigid / rows / tree2 / empty / struct / struct2 / struct3 / struct4 / undo / undo2 / rest / restmove / mouse / hover / flagguard / frame / morph_edit / vertex_edit / skin / ellipsoid / sdefr1 / ikclamp / physlazy / physlive / optim / undobudget / small_fixes / theme_probe / theme_persist / config / sync / final / fps |
 | inventory | anomalies=2 | 超长模型路径的 `Faint` 标签 `text-clipped`（既有问题，与本轮无关） |
 | vp | anomalies=2 | `pose-move`、`phys-pose`：模拟拖动未产生位移 —— **在 HEAD 上同样复现**，非本轮引入 |
-| sel | **进程崩溃 rc=0xC0000005** | 访问冲突 —— **在 HEAD 上同样复现**，属既有缺陷，建议单独立项排查 |
-| sel6 | 场景自身报错 | `AttributeError: 'Document' object has no attribute 'sel'`（既有测试脚本 bug） |
+| sel | 0（已修） | P0-3：选中时重建列表导致悬空 `QModelIndex` → 访问冲突；修复后 rc=0、42.7s（详见 `ANOMALIES.md`） |
+| sel6 | 0（已修） | 场景脚本引用不存在的 `doc.sel` → 改用 `sel_kind/sel_index` |
 | mouse | 0（已修） | P1-1 取消 `editor/move_bone_vertices` 持久化后该场景原断言失效 → 已改为「开关不再写 settings.json、新实例默认关闭」，并清掉本机 `settings.json` 的遗留键 |
 
-- 未跑的重场景：`clickall`（> 260 s 超时，全界面暴力点击，与本次改动无关）；`flag2`–`flag8`、`real*`、`grid_*` 等历史调试场景（开发期一次性探针）。
-- 改动量：`git diff --stat` → 7 个 src 文件 + `tests/run.py`，+270/−30 量级。
+`sel`、`sel6` 修复后复跑均为 0 异常 → 当前 **38/40 场景 0 异常**；`inventory` 的 2 条 `text-clipped` 与 `vp` 的 2 条拖动差异为既有告警/既有行为。
 
+- 未跑的重场景：`clickall`（> 260 s 超时，全界面暴力点击，与本次改动无关）；`flag2`–`flag8`、`real*`、`grid_*` 等历史调试场景（开发期一次性探针）。
+- 当轮改动量：`git diff --stat` → 7 个 src 文件 + `tests/run.py`，+270/−30 量级。
+
+### 11.3 本轮补充（P0-3 崩溃修复 + ②剩余三项）
+
+- `sel` 场景 **0xC0000005** 已定位并修复（`PhysicsPage.select` 每次选中都重建列表 → 场景持有的 `QModelIndex` 悬空）：`sel` rc=0、**0 异常**、42.7s；`sel2 / sel6 / click_rigid / verify_p0 / final / rows_fix / physlazy / physlive / struct4 / sel5` 均 0 异常（详见 `ANOMALIES.md` P0-3）。
+- ② 剩余三项新增 **FA1 / N3 / N4 / SB1 / SB2** 五条比对：N3/N4/SB1 **0 差异**，FA1/SB2 为能力差异；N4 暴露的 `duplicate_material` 材质面索引不一致已修复。
+- 修复后回归：`struct`、`real3` 0 异常；`walk` 为逐控件慢场景，260s 窗口内未跑完（非崩溃，覆盖由上一轮 40 场景 + 本次定向场景兜底）。
+
+### 11.4 补充新版缺失功能（FA1 / SB2 转为一致）
+
+新增两个检查器页，把此前的两项能力差异做成真实 GUI 功能：
+
+| 功能 | 代码 | 说明 | 复核 |
+| --- | --- | --- | --- |
+| 「面」页 | `src/pmxeditor/panels/face.py`、`doc.py: reassign_faces()` | 材质列表显示三角面数；选择源材质、起始面、数量与目标材质后「移动这些面」，按材质顺序重建扁平 `indices`，可撤销 | `side_mod.py: op_FA1` 走真实 GUI；`FA1_cx` vs `FA1_mod` **0 差异**（m0 118404→117504、m1 15204→16104、总索引不变） |
+| 「柔体」页 | `src/pmxeditor/panels/soft.py`、`doc.py: add_softbody()/remove_softbody()` | 柔体列表 + 新建/删除；名称、形状、材质、所属组、16 位碰撞组、生成选项（弯曲链接/簇/随机化）、质量/碰撞余量/气动模型、12 项 config、6 项 cluster、4 项 iteration、3 项 material_params、锚点与固定点 | `side_mod.py: op_SB2` 走真实 GUI；`SB2_cx` vs `SB2_mod` **0 差异**（仅 `total_mass`、`collision_margin`） |
+
+- 应用接线：`app.py` 的 `PAGES` 追加 `face`(8) / `soft`(9)，`RAIL_ORDER=(0,1,6,7,2,8,3,4,9,5)`，`KIND_PAGE["soft"]=9`，`EDIT_STATUS["soft"]`；`theme.py` 新增 `face` / `soft` 图标；`doc._clamp_selection` 支持 `soft`。
+- 同步更新：`tests/parity/compare_all.py` 的 NOTE 与说明、`compare_all.md`（**42 项：36 一致 / 5 差异 / 1 单侧**）、`ANOMALIES.md`、`README.md`（页数 8→10）。
+- 新增回归场景：`tests/run.py: scen_face_edit`（数据层顺序断言 + GUI 移动 + 撤销 + 往返）与 `scen_softbody_edit`（新建/字段/锚点/固定点/PMX 2.1 往返/删除撤销）。
+- 全量回归：`tests/parity/regress.py` 跑了 41 个功能场景（含 `face_edit`、`softbody_edit`，以及 menu/view/sel2–5/struct1–4/undo/undo2/frame/morph_edit/vertex_edit/skin/ellipsoid/sdefr1/ikclamp/physlazy/physlive/optim/undobudget/small_fixes/theme_*/config/sync/final/fps 等），**全部 rc=0、anomalies=0**。
+
+### 11.5 膝部鼓包修复（付与参考系）
+
+- **根因**：非ローカル付与把源骨骼的世界旋转投影到**目标骨骼父级**。`膝` 的 `append_parent` 等于自身父级，相对旋转恒为单位阵，付与率 −0.75 失效（小腿 60° 时 `膝` 仍转 60°，应为 15°），膝周大量权重给到 `膝` 的顶点被过度拧转。
+- **修复**：改用源骨骼**自身父级**求本地旋转（与 `mmd_tools` shadow-bone 语义一致）；`Pose.world_subset` 补源父级；`native/pmx_core.cpp` 同步修改并重建 `_pmx_core`。
+- **验证**：新增 `tests/run.py: scen_append`，60° 时 `膝` 世界角 = **15.00°**、native/NumPy 差 **0**；新增 `scen_overlay_pose` 校验刚体/关节叠加层与拾取使用当前姿态矩阵。全量回归 **43 个功能场景**（原 41 + append + overlay_pose）**全部 rc=0、anomalies=0**；`poseundo` 仍为已记录的既有失败（与本次改动无关）。膝部 60° 弯曲截图见 `tests/shots/parity_knee_fix_60.png`。
+- **Roll/坐标系排查**：PMX 无 Roll 字段，`local_x/local_z` 不参与蒙皮；渲染无 Z 翻转；本模型无 SDEF/QDEF，DQS 已做符号对齐——鼓包与这三者无关。
+- 另修：刚体/关节叠加层与拾取改用当前姿态/物理变换，不再停留在 PMX 静止坐标；`bone = -1` 的 8 个胸部物理体改按「子树最大的根骨骼」整体增量跟随（见 `ANOMALIES.md`）。
+
+<br />

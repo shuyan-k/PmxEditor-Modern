@@ -26,6 +26,9 @@ class PhysicsPage(PageBase):
         self.root.addWidget(self.search)
         self.list = EntryList("dot")
         self.list.indexSelected.connect(self._on_list)
+        # 列表当前展示的类型；select() 只在类型变化时重建列表。
+        # 每次选中都重建会把外部持有的 QModelIndex 变成悬空指针（Qt 侧直接崩溃）。
+        self._list_kind = None
         holder = Card()
         hl = QVBoxLayout(holder)
         hl.setContentsMargins(6, 6, 6, 6)
@@ -230,6 +233,7 @@ class PhysicsPage(PageBase):
             self.doc.select("", -1)
 
     def _refresh_list(self, *_):
+        self._list_kind = self.kind
         m = self.doc.model
         if not m:
             self.list.empty_text = "未载入模型"
@@ -319,7 +323,10 @@ class PhysicsPage(PageBase):
         try:
             self.seg.set_value(self.kind)
             self.stack.setCurrentIndex(0 if kind == "rigid" else 1)
-            self._refresh_list()
+            # 同类型选中时列表内容不变；重建会清掉模型里的条目，
+            # 让调用方（或 Qt 正在处理的选中事件）手里的索引失效。
+            if self._list_kind != self.kind:
+                self._refresh_list()
             self.list.select_data_index(index)
         finally:
             self.loading = False

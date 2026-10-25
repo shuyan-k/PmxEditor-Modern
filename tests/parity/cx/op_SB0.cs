@@ -1,0 +1,30 @@
+// 构造 PMX 2.1 柔体基座：追加 1 个柔体（含 1 个锚点与 1 个固定点）
+// 用 cxop.py 运行后会另存为 SB0_cx.pmx，作为 SB1/SB2 的比对基座。
+IPXSoftBody s = bdx.SoftBody();
+s.Name = "PARITY_SOFT";
+s.NameE = "PARITY_SOFT_EN";
+s.Shape = SoftBodyShape.TriMesh;
+s.Material = material[0];
+s.Group = 1;
+for (int g = 0; g < s.PassGroup.Length; g++) s.PassGroup[g] = (g % 2 == 0);
+s.GenerateBendingLinks = true;
+s.GenerateClusters = true;
+s.RandomizeConstraints = false;
+s.BendingLinkDistance = 2;
+s.ClusterCount = 10;
+s.TotalMass = 2.5f;
+s.Margin = 0.05f;
+s.AeroModel = 0;
+s.VCF = 1.0f; s.DP = 0.0f; s.DG = 0.0f; s.LF = 0.0f; s.PR = 0.0f; s.VC = 0.0f;
+s.DF = 0.5f; s.MT = 0.5f; s.CHR = 0.0f; s.KHR = 0.0f; s.SHR = 0.0f; s.AHR = 0.0f;
+s.SRHR_CL = 0.5f; s.SKHR_CL = 0.5f; s.SSHR_CL = 0.5f;
+s.SR_SPLT_CL = 0.5f; s.SK_SPLT_CL = 0.5f; s.SS_SPLT_CL = 0.5f;
+s.V_IT = 1; s.P_IT = 1; s.D_IT = 1; s.C_IT = 1;
+s.LST = 1.0f; s.AST = 1.0f; s.VST = 1.0f;
+IPXSoftBodyAnchor a = bdx.SoftBodyAnchor();
+a.Body = body[0];
+a.Vertex = vertex[5];
+a.Near = true;
+s.Anchors.Add(a);
+s.Pins.Add(vertex[0]);
+sbody.Add(s);

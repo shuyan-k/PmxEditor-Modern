@@ -70,7 +70,15 @@ def _registry():
 def main():
     ids = sys.argv[1:] or ["R1"]
     M.boot(MODEL)
+    # 结果按 op 累积，避免一次只跑几个 op 时把之前的记录覆盖掉
+    res_path = os.path.join(WORK, "_mod_result.json")
     out = {}
+    if os.path.exists(res_path):
+        try:
+            with open(res_path, encoding="utf8") as f:
+                out = json.load(f)
+        except Exception:
+            out = {}
     for oid in ids:
         fn = _registry().get(oid)
         if fn is None:
@@ -89,7 +97,7 @@ def main():
         # 每个操作后重载原始模型，保证互不污染
         M.WIN.open_path(MODEL)
         M.pump(400)
-    json.dump(out, open(os.path.join(WORK, "_mod_result.json"), "w", encoding="utf8"),
+    json.dump(out, open(res_path, "w", encoding="utf8"),
               ensure_ascii=False, indent=1)
     sys.stdout.flush()
     os._exit(0)
@@ -516,6 +524,64 @@ def op_P4():
     type_spin(p.rb_group, "1")
     M.pump(80)
     return {"ok": True, "detail": "刚体0 所属组 → 1"}
+
+
+# ---------------- 复制骨骼/材质（原版无入口，用 .cx Clone 定义同一语义）
+def op_N3():
+    select_bone(5, "上半身")
+    p = M.page(1)
+    b = tool(p, "复制当前骨骼")
+    if b is None:
+        raise RuntimeError("找不到复制骨骼按钮")
+    M.click(b)
+    M.pump(400)
+    return {"ok": True, "detail": "复制骨骼5 并追加"}
+
+
+def op_N4():
+    p = M.page(2)
+    row_click(p.list, 0)
+    b = tool(p, "复制材质")
+    if b is None:
+        raise RuntimeError("找不到复制材质按钮")
+    M.click(b)
+    M.pump(400)
+    return {"ok": True, "detail": "复制材质0 并追加（含面）"}
+
+
+# ---------------- 面页 / 柔体：新版对应入口（「面」页与「柔体」页）
+def op_FA1():
+    p = M.page(8)
+    row_click(p.list, 0)
+    pick_data(p.src_combo, 0)
+    M.pump(120)
+    type_spin(p.start_spin, "0")
+    type_spin(p.count_spin, "300")
+    pick_data(p.dst_combo, 1)
+    M.pump(150)
+    if not p.move_btn.isEnabled():
+        raise RuntimeError("「移动这些面」按钮未启用")
+    M.click(p.move_btn)
+    M.pump(800)
+    return {"ok": True, "detail": "材质0 前 300 面 → 材质1 末尾"}
+
+
+def op_SB1():
+    return {"ok": True, "detail": "PMX 2.1 柔体基座原样另存"}
+
+
+def op_SB2():
+    p = M.page(9)
+    row_click(p.list, 0)
+    M.pump(120)
+    type_spin(p.mass_spin, "3.5")
+    type_spin(p.margin_spin, "0.1")
+    M.pump(300)
+    s = M.WIN.doc.model.soft_bodies[0]
+    if abs(float(s.total_mass) - 3.5) > 1e-5 or abs(float(s.collision_margin) - 0.1) > 1e-5:
+        raise RuntimeError("柔体参数未写入：mass=%r margin=%r"
+                           % (s.total_mass, s.collision_margin))
+    return {"ok": True, "detail": "柔体0 总质量 3.5、碰撞余量 0.1"}
 
 
 if __name__ == "__main__":

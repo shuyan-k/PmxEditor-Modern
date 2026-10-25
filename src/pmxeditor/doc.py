@@ -9,8 +9,9 @@ from typing import List, Optional
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from .pmx import (BF_IK, BF_TAIL_INDEX, Bone, DisplayFrame, Joint, Material,
-                 Morph, PMXModel, RigidBody, load_pmx, save_pmx)
+from .pmx import (BF_IK, BF_TAIL_INDEX, SB_BEND_LINK, SB_CLUSTER, Bone,
+                 DisplayFrame, Joint, Material, Morph, PMXModel, RigidBody,
+                 SoftBody, load_pmx, save_pmx)
 
 UNDO_LIMIT = 12
 POSE_UNDO_LIMIT = 12
@@ -218,6 +219,8 @@ class Document(QObject):
             self.sel_kind, self.sel_index = "", -1
         elif self.sel_kind == "joint" and not (0 <= self.sel_index < len(m.joints)):
             self.sel_kind, self.sel_index = "", -1
+        elif self.sel_kind == "soft" and not (0 <= self.sel_index < len(m.soft_bodies)):
+            self.sel_kind, self.sel_index = "", -1
 
     def select(self, kind: str, index: int):
         self.sel_kind, self.sel_index = kind, int(index)
@@ -386,8 +389,55 @@ def duplicate_material(model: PMXModel, index: int) -> int:
     mt = copy.deepcopy(src)
     mt.name = src.name + "_副本"
     mt.name_en = (src.name_en or "material") + "_copy"
+    # 材质自带面：新材质排在列表末尾，它的面必须追加到扁平索引末尾，
+    # 否则 face_count 会指向别的材质的面（原版 Clone 也会连面一起复制）。
+    cnt = int(src.face_count)
+    if cnt > 0:
+        start = sum(int(m.face_count) for m in model.materials[:index])
+        faces = np.asarray(model.indices[start:start + cnt]).copy()
+        model.indices = np.concatenate([model.indices, faces])
+        mt.face_count = int(faces.size)
     model.materials.append(mt)
     return len(model.materials) - 1
+
+
+def reassign_faces(model: PMXModel, src: int, start_face: int, count_faces: int,
+                   dst: int) -> int:
+    """把源材质的一段三角面移到目标材质末尾，返回实际移动的面数。
+
+    PMX 的 ``face_count`` 存的是面顶点（索引）数，扁平 ``indices`` 按材质顺序
+    连续排列；因此这里先按材质切分索引，移动后再按原顺序重新拼接。目标材质
+    不在源材质后面时结果同样是「源材质剩余的面 → 目标材质原有面 + 被移动面」。
+    """
+    n = len(model.materials)
+    if not (0 <= src < n and 0 <= dst < n) or src == dst:
+        return 0
+    src_faces = int(model.materials[src].face_count) // 3
+    start = max(0, int(start_face))
+    if start >= src_faces:
+        return 0
+    count = min(int(count_faces), src_faces - start)
+    if count <= 0:
+        return 0
+
+    parts = []
+    pos = 0
+    for mt in model.materials:
+        cnt = max(0, int(mt.face_count))
+        parts.append(model.indices[pos:pos + cnt])
+        pos += cnt
+    tail = model.indices[pos:]
+
+    a = start * 3
+    b = (start + count) * 3
+    moved = parts[src][a:b]
+    parts[src] = np.concatenate([parts[src][:a], parts[src][b:]])
+    parts[dst] = np.concatenate([parts[dst], moved])
+    model.materials[src].face_count = int(parts[src].size)
+    model.materials[dst].face_count = int(parts[dst].size)
+    chunks = parts + ([tail] if tail.size else [])
+    model.indices = np.concatenate(chunks) if chunks else model.indices
+    return count
 
 
 def compact_vertices(model: PMXModel) -> int:
@@ -433,6 +483,14 @@ def compact_vertices(model: PMXModel) -> int:
                 off["vertex"] = nv
                 out.append(off)
         mo.offsets = out
+    for s in model.soft_bodies:
+        anchors = []
+        for rid, vid, near in s.anchors:
+            nv = int(remap[vid]) if 0 <= vid < n else -1
+            if nv >= 0:
+                anchors.append((rid, nv, near))
+        s.anchors = anchors
+        s.pins = [int(remap[v]) for v in s.pins if 0 <= v < n and int(remap[v]) >= 0]
     return int(n - keep.size)
 
 
@@ -683,3 +741,30 @@ def remove_joint(model: PMXModel, index: int) -> int:
         return -1
     del model.joints[index]
     return min(index, len(model.joints) - 1)
+
+
+def add_softbody(model: PMXModel) -> int:
+    """追加一个柔体（PMX 2.1）；初值取 MMD 里常见的三角网格配置。"""
+    s = SoftBody()
+    s.name = "新建柔体"
+    s.name_en = "new_soft"
+    s.shape = 0
+    s.material = 0 if model.materials else -1
+    s.flags = SB_BEND_LINK | SB_CLUSTER
+    s.b_link_dist = 2
+    s.cluster_count = 10
+    s.total_mass = 2.5
+    s.collision_margin = 0.05
+    s.config = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0]
+    s.cluster = [0.5] * 6
+    s.iteration = [1, 1, 1, 1]
+    s.material_params = [1.0, 1.0, 1.0]
+    model.soft_bodies.append(s)
+    return len(model.soft_bodies) - 1
+
+
+def remove_softbody(model: PMXModel, index: int) -> int:
+    if not (0 <= index < len(model.soft_bodies)):
+        return -1
+    del model.soft_bodies[index]
+    return min(index, len(model.soft_bodies) - 1)

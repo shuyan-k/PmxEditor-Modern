@@ -21,8 +21,9 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
 from . import theme
 from .config import Config
 from .doc import Document
-from .panels import (BonePage, FramePage, InfoPage, MaterialPage, MorphPage,
-                     PhysicsPage, SettingsPage, VertexPage)
+from .panels import (BonePage, FacePage, FramePage, InfoPage, MaterialPage,
+                     MorphPage, PhysicsPage, SettingsPage, SoftPage,
+                     VertexPage)
 from .theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, TEXT_DIM,
                    build_qss, make_icon, mono_font, svg_assets, ui_font)
 from .ui_widgets import Switch, icon_button, label
@@ -41,10 +42,13 @@ PAGES = (
     ("settings", "settings", "设置"),
     ("frame", "frame", "表示枠"),
     ("vertex", "vertex", "顶点"),
+    ("face", "face", "面"),
+    ("soft", "soft", "柔体"),
 )
 # new pages go last so the existing indices stay stable
-RAIL_ORDER = (0, 1, 6, 7, 2, 3, 4, 5)
-KIND_PAGE = {"bone": 1, "frame": 6, "vertex": 7, "material": 2, "morph": 3, "rigid": 4, "joint": 4}
+RAIL_ORDER = (0, 1, 6, 7, 2, 8, 3, 4, 9, 5)
+KIND_PAGE = {"bone": 1, "frame": 6, "vertex": 7, "material": 2, "morph": 3,
+             "rigid": 4, "joint": 4, "soft": 9}
 # 只改姿态的编辑（压姿态快照即可，不必克隆整模型）
 POSE_EDIT_LABELS = ("调整骨骼姿态", "移动骨骼", "旋转骨骼")
 
@@ -234,7 +238,8 @@ class MainWindow(QMainWindow):
         self._pages = [InfoPage(self.doc), BonePage(self.doc),
                        MaterialPage(self.doc), MorphPage(self.doc),
                        PhysicsPage(self.doc), SettingsPage(self.doc),
-                       FramePage(self.doc), VertexPage(self.doc)]
+                       FramePage(self.doc), VertexPage(self.doc),
+                       FacePage(self.doc), SoftPage(self.doc)]
         for p in self._pages:
             self.inspector.addWidget(p)
         self.splitter.addWidget(self.inspector)
@@ -828,6 +833,7 @@ class MainWindow(QMainWindow):
         "physics_live": "已应用物理参数（热更新）",
         "material": "已更新材质",
         "morph": "已更新形态",
+        "soft": "已更新柔体",
         "pose": "姿态已更新",
     }
 
@@ -884,6 +890,8 @@ class MainWindow(QMainWindow):
                 name = m.rigid[index].name
             elif kind == "joint" and index < len(m.joints):
                 name = m.joints[index].name
+            elif kind == "soft" and index < len(m.soft_bodies):
+                name = m.soft_bodies[index].name
             self.sel_label.setText(("%s · %s" % (KIND_NAMES.get(kind, kind), name))
                                    if name else "")
         else:
@@ -1144,7 +1152,7 @@ class MainWindow(QMainWindow):
                 pass
 
 KIND_NAMES = {"bone": "骨骼", "material": "材质", "morph": "形态",
-              "rigid": "刚体", "joint": "关节"}
+              "rigid": "刚体", "joint": "关节", "soft": "柔体"}
 
 # ---------------------------------------------------------------- 启动
 
