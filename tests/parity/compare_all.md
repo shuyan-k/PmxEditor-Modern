@@ -1,4 +1,4 @@
-# 原版 PmxEditor vs 新版 PmxEditor_Modern — 同操作语义比对总表
+# 原版 PmxEditor vs PmxStudio — 同操作语义比对总表
 
 基准模型：`KARU式Rabbit Hole MIKU.ver 1.6.pmx`（116036 顶点 / 204919 面 / 21 材质 / 168 骨骼 / 22 表情 / 10 贴图 / 82 刚体 / 74 关节）。柔体两项（SB1/SB2）的基座为 `SB0_cx.pmx`：由原版 .cx 在基准模型上追加 1 个柔体后另存，PMX 2.1。
 

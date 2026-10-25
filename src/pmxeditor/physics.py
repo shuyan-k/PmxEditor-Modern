@@ -179,7 +179,7 @@ class MMDPhysics:
         self._override_translations = np.empty((nb, 3), dtype=np.float32)
         self._override_mask = np.empty(nb, dtype=np.uint8)
         self._pose_layout_id = None
-        for j, joint in enumerate(model.joints):
+        for joint in model.joints:
             a, b = joint.rigid_a, joint.rigid_b
             if not (0 <= a < len(self.body_map) and 0 <= b < len(self.body_map)):
                 continue

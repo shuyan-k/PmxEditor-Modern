@@ -1,5 +1,6 @@
 # Build the pybind11 compute backend with the configured Visual Studio toolchain.
-# Usage: powershell -ExecutionPolicy Bypass -File native\build_core.ps1
+# Usage: powershell -ExecutionPolicy Bypass -File native\build_core.ps1 [-Python <python.exe>]
+param([string]$Python = "")
 $ErrorActionPreference = "Stop"
 # 与 build.ps1 一致：先看环境变量 / vswhere，再回退到常见安装位置（含本机 D 盘 BuildTools）。
 $candidates = @()
@@ -33,7 +34,16 @@ if (-not ($libCandidates | Where-Object { Test-Path $_ })) {
     throw "Missing bullet_phys.lib in native\obj or native\; build Bullet first (native\build.ps1)."
 }
 
-$python = (Get-Command python.exe -ErrorAction Stop).Source
+# 优先用仓库内便携运行时编译，保证扩展与 build\python 的解释器版本一致；显式 -Python 优先。
+$portable = Join-Path (Split-Path -Parent $PSScriptRoot) "build\python\python.exe"
+if ($Python) {
+    $python = (Resolve-Path $Python).Path
+} elseif (Test-Path $portable) {
+    $python = $portable
+} else {
+    $python = (Get-Command python.exe -ErrorAction Stop).Source
+}
+Write-Host "python : $python"
 $command = 'call "{0}" -no_logo -arch=amd64 -host_arch=amd64 && cd /d "{1}" && "{2}" setup_core.py build_ext --inplace' -f `
     $vsDevCmd, $PSScriptRoot, $python
 & $env:ComSpec /d /s /c $command

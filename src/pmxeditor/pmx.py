@@ -341,6 +341,32 @@ class PMXModel(_FastCopy):
 
 # ---------------------------------------------------------------- 读取
 
+# 有符号索引宽度 → numpy dtype（显式小端，保证跨平台字节一致）
+_SI_DTYPE = {1: "<i1", 2: "<i2", 4: "<i4"}
+
+
+def _check_count(n: int, min_size: int, field: str, offset: int, total: int) -> int:
+    """校验计数字段：非负，且剩余字节至少能容纳 ``n`` 个最小元素。
+
+    ``offset`` 为计数字段自身的偏移，``total`` 为文件总长度。校验失败抛中文
+    ValueError，避免用异常大的计数直接分配数组导致内存耗尽。
+    """
+    if n < 0:
+        raise ValueError("%s 非法：%d（偏移 %d）" % (field, n, offset))
+    if min_size > 0:
+        avail = total - (offset + 4)
+        if avail < 0 or n > avail // min_size:
+            raise ValueError(
+                "%s 过大：%d（偏移 %d，剩余 %d 字节，每个至少 %d 字节）"
+                % (field, n, offset, max(0, avail), min_size))
+    return n
+
+
+def _read_count(r, field: str, min_size: int = 0) -> int:
+    offset = r.o
+    return _check_count(r.i32(), min_size, field, offset, len(r.d))
+
+
 class _Reader:
     __slots__ = ("d", "o", "enc")
 
@@ -349,51 +375,61 @@ class _Reader:
         self.o = 0
         self.enc = enc
 
+    def _need(self, n: int) -> int:
+        o = self.o
+        if o + n > len(self.d):
+            raise ValueError("PMX 数据截断：需要 %d 字节（偏移 %d，文件 %d 字节）"
+                             % (n, o, len(self.d)))
+        return o
+
     def u8(self) -> int:
-        v = self.d[self.o]
-        self.o += 1
-        return v
+        o = self._need(1)
+        self.o = o + 1
+        return self.d[o]
 
     def u16(self) -> int:
-        v = struct.unpack_from("<H", self.d, self.o)[0]
+        v = struct.unpack_from("<H", self.d, self._need(2))[0]
         self.o += 2
         return v
 
     def i32(self) -> int:
-        v = struct.unpack_from("<i", self.d, self.o)[0]
+        v = struct.unpack_from("<i", self.d, self._need(4))[0]
         self.o += 4
         return v
 
     def f32(self) -> float:
-        v = struct.unpack_from("<f", self.d, self.o)[0]
+        v = struct.unpack_from("<f", self.d, self._need(4))[0]
         self.o += 4
         return v
 
     def f3(self):
-        v = struct.unpack_from("<3f", self.d, self.o)
+        v = struct.unpack_from("<3f", self.d, self._need(12))
         self.o += 12
         return [v[0], v[1], v[2]]
 
     def f4(self):
-        v = struct.unpack_from("<4f", self.d, self.o)
+        v = struct.unpack_from("<4f", self.d, self._need(16))
         self.o += 16
         return [v[0], v[1], v[2], v[3]]
 
     def text(self) -> str:
+        offset = self.o
         n = self.i32()
+        if n < 0 or n > len(self.d) - self.o:
+            raise ValueError("字符串长度非法：%d（偏移 %d）" % (n, offset))
         raw = self.d[self.o:self.o + n]
         self.o += n
         return raw.decode("utf-16-le" if self.enc == 0 else "utf-8", "replace")
 
     def sindex(self, size: int) -> int:
         fmt = {1: "<b", 2: "<h", 4: "<i"}[size]
-        v = struct.unpack_from(fmt, self.d, self.o)[0]
+        v = struct.unpack_from(fmt, self.d, self._need(size))[0]
         self.o += size
         return v
 
     def uindex(self, size: int) -> int:
         fmt = {1: "<B", 2: "<H", 4: "<I"}[size]
-        v = struct.unpack_from(fmt, self.d, self.o)[0]
+        v = struct.unpack_from(fmt, self.d, self._need(size))[0]
         self.o += size
         return v
 
@@ -410,9 +446,19 @@ def load_pmx(path: str) -> PMXModel:
     o += 4
     glob_n = data[o]
     o += 1
+    if glob_n < 8 or o + glob_n > len(data):
+        raise ValueError("全局设置区长度非法：%d（偏移 %d）" % (glob_n, o - 1))
     glob = data[o:o + glob_n]
     o += glob_n
     m.encoding, m.add_uv, m.vsz, m.tsz, m.msz, m.bsz, m.mosz, m.rsz = list(glob[:8])
+    if m.encoding not in (0, 1):
+        raise ValueError("文本编码非法：%d（偏移 %d）" % (m.encoding, o - glob_n))
+    if not 0 <= m.add_uv <= 4:
+        raise ValueError("附加 UV 数非法：%d（偏移 %d）" % (m.add_uv, o - glob_n + 1))
+    for name, width in (("vsz", m.vsz), ("tsz", m.tsz), ("msz", m.msz),
+                        ("bsz", m.bsz), ("mosz", m.mosz), ("rsz", m.rsz)):
+        if width not in (1, 2, 4):
+            raise ValueError("索引宽度 %s 非法：%d" % (name, width))
     r = _Reader(data, m.encoding)
     r.o = o
 
@@ -422,7 +468,11 @@ def load_pmx(path: str) -> PMXModel:
     m.comment_en = r.text()
 
     # ---- 顶点
-    nv = r.i32()
+    pre = 32 + m.add_uv * 16          # pos 12 + nrm 12 + uv 8 + 附加 UV
+    bsz = m.bsz
+    wlen = (bsz, 2 * bsz + 4, 4 * bsz + 16, 2 * bsz + 4 + 36, 4 * bsz + 16)
+    reclen = tuple(pre + 1 + x + 4 for x in wlen)
+    nv = _read_count(r, "顶点数 nv", reclen[0])
     pos = np.empty((nv, 3), np.float32)
     nrm = np.empty((nv, 3), np.float32)
     uv = np.empty((nv, 2), np.float32)
@@ -433,63 +483,92 @@ def load_pmx(path: str) -> PMXModel:
     weights = np.zeros((nv, 4), np.float32)
     sdef = np.zeros((nv, 9), np.float32)
     d = data
-    unpack = struct.unpack_from
-    for i in range(nv):
-        pos[i] = unpack("<3f", d, r.o)
-        r.o += 12
-        nrm[i] = unpack("<3f", d, r.o)
-        r.o += 12
-        uv[i] = unpack("<2f", d, r.o)
-        r.o += 8
-        for k in range(m.add_uv):
-            add[i, k * 4:k * 4 + 4] = unpack("<4f", d, r.o)
-            r.o += 16
-        wt = d[r.o]
-        r.o += 1
-        wtype[i] = wt
-        if wt == 0:
-            bones[i, 0] = r.sindex(m.bsz)
-            weights[i, 0] = 1.0
-        elif wt == 1:
-            bones[i, 0] = r.sindex(m.bsz)
-            bones[i, 1] = r.sindex(m.bsz)
-            weights[i, 0] = r.f32()
-            weights[i, 1] = 1.0 - weights[i, 0]
-        elif wt in (2, 4):
-            for k in range(4):
-                bones[i, k] = r.sindex(m.bsz)
-            for k in range(4):
-                weights[i, k] = r.f32()
-        elif wt == 3:
-            bones[i, 0] = r.sindex(m.bsz)
-            bones[i, 1] = r.sindex(m.bsz)
-            weights[i, 0] = r.f32()
-            weights[i, 1] = 1.0 - weights[i, 0]
-            sdef[i, 0:3] = unpack("<3f", d, r.o)
-            r.o += 12
-            sdef[i, 3:6] = unpack("<3f", d, r.o)
-            r.o += 12
-            sdef[i, 6:9] = unpack("<3f", d, r.o)
-            r.o += 12
-        else:
-            raise ValueError("未知的顶点权重类型 %d（顶点 %d）" % (wt, i))
-        edge[i] = r.f32()
+    if nv:
+        # 轻量扫描：只读权重类型字节、累加记录长度，建立每条记录起点
+        starts = np.empty((nv,), np.int64)
+        po = r.o
+        n_data = len(d)
+        for i in range(nv):
+            if po + pre >= n_data:
+                raise ValueError("顶点数据越界：第 %d 个顶点（偏移 %d）" % (i, po))
+            starts[i] = po
+            wt = d[po + pre]
+            if wt > 4:
+                raise ValueError("未知的顶点权重类型 %d（顶点 %d）" % (wt, i))
+            wtype[i] = wt
+            po += reclen[wt]
+        if po > n_data:
+            raise ValueError("顶点数据越界：需要到偏移 %d，文件仅 %d 字节" % (po, n_data))
+        r.o = po
+
+        raw = np.frombuffer(d, np.uint8)
+        odt = np.int64 if n_data > 0x7FFFFFFF else np.int32
+        # 顶点前缀（pos/nrm/uv/附加 UV）批量 gather 后按结构化 dtype 解析
+        idx = starts.astype(odt)[:, None] + np.arange(pre, dtype=odt)
+        vfields = [("pos", "<f4", (3,)), ("nrm", "<f4", (3,)), ("uv", "<f4", (2,))]
+        if m.add_uv:
+            vfields.append(("add", "<f4", (m.add_uv * 4,)))
+        vdt = np.dtype(vfields)
+        recs = np.frombuffer(np.ascontiguousarray(raw[idx]), dtype=vdt, count=nv)
+        pos[:] = recs["pos"]
+        nrm[:] = recs["nrm"]
+        uv[:] = recs["uv"]
+        if m.add_uv:
+            add[:] = recs["add"]
+
+        # 骨骼索引 / 权重 / SDEF：按权重类型分组 gather
+        for t, ncols in ((0, 1), (1, 2), (3, 2), (2, 4), (4, 4)):
+            sel = np.nonzero(wtype == t)[0]
+            if not sel.size:
+                continue
+            s0 = starts[sel]
+            bidx = s0[:, None] + np.arange(pre + 1, pre + 1 + ncols * bsz, dtype=odt)
+            braw = np.ascontiguousarray(raw[bidx])
+            bones[sel, :ncols] = np.frombuffer(
+                braw, dtype=_SI_DTYPE[bsz], count=sel.size * ncols
+            ).reshape(sel.size, ncols).astype(np.int32)
+            if t in (1, 3):
+                woff = pre + 1 + ncols * bsz
+                widx = s0[:, None] + np.arange(woff, woff + 4, dtype=odt)
+                w0 = np.frombuffer(np.ascontiguousarray(raw[widx]), dtype="<f4").astype(np.float64)
+                weights[sel, 0] = w0
+                weights[sel, 1] = (1.0 - w0).astype(np.float32)
+            elif t in (2, 4):
+                woff = pre + 1 + 4 * bsz
+                widx = s0[:, None] + np.arange(woff, woff + 16, dtype=odt)
+                weights[sel, :] = np.frombuffer(
+                    np.ascontiguousarray(raw[widx]), dtype="<f4", count=sel.size * 4
+                ).reshape(sel.size, 4)
+            if t == 3:
+                soff = pre + 1 + 2 * bsz + 4
+                sidx = s0[:, None] + np.arange(soff, soff + 36, dtype=odt)
+                sdef[sel, :] = np.frombuffer(
+                    np.ascontiguousarray(raw[sidx]), dtype="<f4", count=sel.size * 9
+                ).reshape(sel.size, 9)
+
+        # BDEF1 只有一个骨骼，权重恒为 1
+        weights[wtype == 0, 0] = 1.0
+
+        # 末尾 edge 权重
+        eoff = starts + np.array(reclen, np.int64)[wtype] - 4
+        eidx = eoff[:, None] + np.arange(4, dtype=odt)
+        edge[:] = np.frombuffer(np.ascontiguousarray(raw[eidx]), dtype="<f4", count=nv)
 
     m.v_pos, m.v_nrm, m.v_uv, m.v_add = pos, nrm, uv, add
     m.v_edge, m.v_wtype, m.v_bones, m.v_weights, m.v_sdef = edge, wtype, bones, weights, sdef
 
     # ---- 面
-    nf = r.i32()
+    nf = _read_count(r, "面索引数 nf", m.vsz)
     dtype = {1: np.uint8, 2: np.uint16, 4: np.int32}[m.vsz]
     m.indices = np.frombuffer(d, dtype=dtype, count=nf, offset=r.o).astype(np.int32)
     r.o += nf * m.vsz
 
     # ---- 贴图表
-    nt = r.i32()
+    nt = _read_count(r, "贴图数", 4)
     m.textures = [r.text() for _ in range(nt)]
 
     # ---- 材质
-    nm = r.i32()
+    nm = _read_count(r, "材质数", 84 + 2 * m.tsz)
     for _ in range(nm):
         mt = Material()
         mt.name = r.text()
@@ -511,7 +590,7 @@ def load_pmx(path: str) -> PMXModel:
         m.materials.append(mt)
 
     # ---- 骨骼
-    nb = r.i32()
+    nb = _read_count(r, "骨骼数", 26 + m.bsz + min(m.bsz, 12))
     for _ in range(nb):
         b = Bone()
         b.name = r.text()
@@ -541,7 +620,7 @@ def load_pmx(path: str) -> PMXModel:
             ik.target = r.sindex(m.bsz)
             ik.loop = r.i32()
             ik.angle = r.f32()
-            n = r.i32()
+            n = _read_count(r, "IK 链接数", m.bsz + 1)
             for _ in range(n):
                 link = IKLink()
                 link.bone = r.sindex(m.bsz)
@@ -554,15 +633,20 @@ def load_pmx(path: str) -> PMXModel:
         m.bones.append(b)
 
     # ---- 形态
-    nmo = r.i32()
+    nmo = _read_count(r, "形态数", 14)
     for _ in range(nmo):
         mo = Morph()
         mo.name = r.text()
         mo.name_en = r.text()
         mo.panel = r.u8()
         mo.type = r.u8()
-        n = r.i32()
         t = mo.type
+        min_off = {0: m.mosz + 4, 1: m.vsz + 12, 2: m.bsz + 28,
+                   3: m.vsz + 16, 4: m.vsz + 16, 5: m.vsz + 16,
+                   6: m.vsz + 16, 7: m.vsz + 16,
+                   8: m.msz + 113, 9: m.mosz + 4,
+                   10: m.rsz + 25}.get(t, 1)
+        n = _read_count(r, "形态偏移数（类型 %d）" % t, min_off)
         for _ in range(n):
             if t == 0:
                 mo.offsets.append({"morph": r.sindex(m.mosz), "ratio": r.f32()})
@@ -598,13 +682,13 @@ def load_pmx(path: str) -> PMXModel:
         m.morphs.append(mo)
 
     # ---- 显示枠
-    nd = r.i32()
+    nd = _read_count(r, "显示枠数", 13)
     for _ in range(nd):
         f = DisplayFrame()
         f.name = r.text()
         f.name_en = r.text()
         f.special = r.u8()
-        n = r.i32()
+        n = _read_count(r, "显示枠项数", 1 + min(m.bsz, m.mosz))
         for _ in range(n):
             ty = r.u8()
             idx = r.sindex(m.bsz) if ty == 0 else r.sindex(m.mosz)
@@ -612,7 +696,7 @@ def load_pmx(path: str) -> PMXModel:
         m.frames.append(f)
 
     # ---- 刚体
-    nr = r.i32()
+    nr = _read_count(r, "刚体数", 69 + m.bsz)
     for _ in range(nr):
         rb = RigidBody()
         rb.name = r.text()
@@ -633,7 +717,8 @@ def load_pmx(path: str) -> PMXModel:
         m.rigid.append(rb)
 
     # ---- 关节
-    nj = r.i32()
+    # 关节最小记录：两个名称头 8 + 类型 1 + 两个刚体索引 + 8 个 vec3
+    nj = _read_count(r, "关节数", 105 + 2 * m.rsz)
     for _ in range(nj):
         j = Joint()
         j.name = r.text()
@@ -653,7 +738,7 @@ def load_pmx(path: str) -> PMXModel:
 
     # ---- 柔体（PMX 2.1）
     if m.version >= 2.1 and r.o < len(d):
-        nsoft = r.i32()
+        nsoft = _read_count(r, "柔体数", 141 + m.msz)
         for _ in range(nsoft):
             s = SoftBody()
             s.name = r.text()
@@ -672,10 +757,10 @@ def load_pmx(path: str) -> PMXModel:
             s.cluster = [r.f32() for _ in range(6)]
             s.iteration = [r.i32() for _ in range(4)]
             s.material_params = [r.f32() for _ in range(3)]
-            na = r.i32()
+            na = _read_count(r, "柔体锚点数", m.rsz + m.vsz + 1)
             for _ in range(na):
                 s.anchors.append((r.sindex(m.rsz), r.uindex(m.vsz), r.u8()))
-            npin = r.i32()
+            npin = _read_count(r, "柔体固定点数", m.vsz)
             for _ in range(npin):
                 s.pins.append(r.uindex(m.vsz))
             m.soft_bodies.append(s)
@@ -732,7 +817,6 @@ class _Writer:
 
 def _size_for(count: int, signed: bool, preferred: int) -> int:
     limit = {1: 127, 2: 32767, 4: 2147483647}[preferred]
-    low = -limit - 1 if signed else 0
     if count <= limit and count >= 0:
         return preferred
     if count <= 32767:
@@ -749,6 +833,98 @@ def _crlf(text: str) -> str:
     if not text:
         return text
     return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+
+
+def _pack_vertices(model: PMXModel, nv: int, add_uv: int, bsz: int) -> bytes:
+    """批量打包顶点块，字节与逐字段 struct.pack 完全一致。
+
+    所有记录先写入行宽为「最长记录」的字节矩阵，最后按每行有效长度做一次
+    布尔掩码拼接，避免逐顶点 Python 循环。
+    """
+    pre = 32 + add_uv * 16
+    wt = np.asarray(model.v_wtype).reshape(-1)[:nv].astype(np.int64)
+    bad = (wt < 0) | (wt > 4)
+    if bad.any():
+        raise ValueError("未知权重类型 %d" % int(wt[int(np.argmax(bad))]))
+
+    lens = (bsz, 2 * bsz + 4, 4 * bsz + 16, 2 * bsz + 4 + 36, 4 * bsz + 16)
+    rl = pre + 1 + np.array(lens, np.int64)[wt] + 4
+    rmax = int(rl.max())
+    mat = np.zeros((nv, rmax), np.uint8)
+
+    # 顶点前缀（pos/nrm/uv/附加 UV），按 float32 视图写入字节矩阵
+    fpre = np.empty((nv, pre // 4), "<f4")
+    fpre[:, 0:3] = np.asarray(model.v_pos, np.float32)[:nv]
+    fpre[:, 3:6] = np.asarray(model.v_nrm, np.float32)[:nv]
+    fpre[:, 6:8] = np.asarray(model.v_uv, np.float32)[:nv]
+    if add_uv:
+        fpre[:, 8:] = np.asarray(model.v_add, np.float32)[:nv, :add_uv * 4]
+    mat[:, :pre] = fpre.view(np.uint8).reshape(nv, pre)
+
+    bones = model.v_bones
+    weights = model.v_weights
+    sdef = model.v_sdef
+    edge = np.asarray(model.v_edge, np.float32)[:nv]
+    lo, hi = {1: (-128, 127), 2: (-32768, 32767)}.get(
+        bsz, (-2147483648, 2147483647))
+    sidt = _SI_DTYPE[bsz]
+
+    for t, ncols in ((0, 1), (1, 2), (2, 4), (3, 2), (4, 4)):
+        sel = np.nonzero(wt == t)[0]
+        if not sel.size:
+            continue
+        mat[sel, pre] = t
+        b = np.clip(np.asarray(bones[sel, :ncols], np.int64), lo, hi).astype(sidt)
+        mat[sel, pre + 1:pre + 1 + ncols * bsz] = b.view(np.uint8).reshape(
+            sel.size, ncols * bsz)
+        if t in (1, 3):
+            woff = pre + 1 + ncols * bsz
+            wv = np.ascontiguousarray(np.asarray(weights[sel, 0], np.float32))
+            mat[sel, woff:woff + 4] = wv.view(np.uint8).reshape(sel.size, 4)
+        elif t in (2, 4):
+            woff = pre + 1 + 4 * bsz
+            wv = np.ascontiguousarray(np.asarray(weights[sel, :4], np.float32))
+            mat[sel, woff:woff + 16] = wv.view(np.uint8).reshape(sel.size, 16)
+        if t == 3:
+            soff = pre + 1 + 2 * bsz + 4
+            sv = np.ascontiguousarray(np.asarray(sdef[sel, :9], np.float32))
+            mat[sel, soff:soff + 36] = sv.view(np.uint8).reshape(sel.size, 36)
+        eoff = pre + 1 + lens[t]
+        ev = np.ascontiguousarray(np.asarray(edge[sel], np.float32))
+        mat[sel, eoff:eoff + 4] = ev.view(np.uint8).reshape(sel.size, 4)
+
+    keep = np.arange(rmax, dtype=np.int64)[None, :] < rl[:, None]
+    return mat[keep].tobytes()
+
+
+def _write_file(path: str, data: bytes) -> None:
+    """原子写入：同目录临时文件 + os.replace；受限环境回退为直接覆盖。"""
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+        os.replace(tmp, path)
+        return
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    # 回退：受控文件夹/权限限制下仍沿用原有覆盖逻辑
+    try:
+        f = open(path, "r+b")
+    except FileNotFoundError:
+        f = open(path, "wb")
+    with f:
+        f.truncate(0)
+        f.write(data)
 
 
 def set_add_uv(model: PMXModel, count: int) -> None:
@@ -793,35 +969,8 @@ def save_pmx(model: PMXModel, path: str):
     # 顶点
     w.i32(nv)
     add_uv = model.add_uv
-    for i in range(nv):
-        w.f3(model.v_pos[i])
-        w.f3(model.v_nrm[i])
-        w.buf += struct.pack("<2f", float(model.v_uv[i, 0]), float(model.v_uv[i, 1]))
-        for k in range(add_uv):
-            w.buf += struct.pack("<4f", *[float(x) for x in model.v_add[i, k * 4:k * 4 + 4]])
-        wt = int(model.v_wtype[i])
-        w.u8(wt)
-        if wt == 0:
-            w.sindex(model.v_bones[i, 0], bsz)
-        elif wt == 1:
-            w.sindex(model.v_bones[i, 0], bsz)
-            w.sindex(model.v_bones[i, 1], bsz)
-            w.f32(model.v_weights[i, 0])
-        elif wt in (2, 4):
-            for k in range(4):
-                w.sindex(model.v_bones[i, k], bsz)
-            for k in range(4):
-                w.f32(model.v_weights[i, k])
-        elif wt == 3:
-            w.sindex(model.v_bones[i, 0], bsz)
-            w.sindex(model.v_bones[i, 1], bsz)
-            w.f32(model.v_weights[i, 0])
-            w.f3(model.v_sdef[i, 0:3])
-            w.f3(model.v_sdef[i, 3:6])
-            w.f3(model.v_sdef[i, 6:9])
-        else:
-            raise ValueError("未知权重类型 %d" % wt)
-        w.f32(model.v_edge[i])
+    if nv:
+        w.buf += _pack_vertices(model, nv, add_uv, bsz)
 
     # 面
     idx = np.ascontiguousarray(model.indices, dtype={1: np.uint8, 2: np.uint16, 4: np.int32}[vsz])
@@ -1016,13 +1165,7 @@ def save_pmx(model: PMXModel, path: str):
             for vid in s.pins:
                 w.uindex(vid, vsz)
 
-    try:
-        f = open(path, "r+b")
-    except FileNotFoundError:
-        f = open(path, "wb")
-    with f:
-        f.truncate(0)
-        f.write(w.buf)
+    _write_file(path, bytes(w.buf))
 
     model.path = path
     model.version = version

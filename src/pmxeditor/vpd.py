@@ -134,7 +134,7 @@ def _index_value(line: str, line_no: int, what: str) -> int:
     try:
         return int(parts[0])
     except ValueError:
-        raise VpdError("第 %d 行的%s不是整数" % (line_no, what))
+        raise VpdError("第 %d 行的%s不是整数" % (line_no, what)) from None
 
 
 def _numbers(line: str, count: int, what: str, line_no: int) -> List[float]:
@@ -145,7 +145,7 @@ def _numbers(line: str, count: int, what: str, line_no: int) -> List[float]:
     try:
         values = [float(part) for part in parts]
     except ValueError:
-        raise VpdError("第 %d 行的%s不是有效数字" % (line_no, what))
+        raise VpdError("第 %d 行的%s不是有效数字" % (line_no, what)) from None
     if not all(math.isfinite(value) for value in values):
         raise VpdError("第 %d 行的%s包含非有限数值" % (line_no, what))
     return values

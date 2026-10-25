@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 # -*- coding: utf-8 -*-
-import os
 from PyQt5.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 from ..doc import add_material, duplicate_material, remove_material
 from ..gl_names import material_zh
 from ..pmx import (MF_DOUBLE_SIDED, MF_EDGE, MF_GROUND_SHADOW, MF_SELF_SHADOW, MF_SHADOW_MAP)
 from ..theme import ACCENT, DANGER, TEXT_FAINT
-from ..ui_widgets import (Card, ColorButton, ColorSpins, ConfirmDialog, EntryList, Form, Segmented, Switch, SearchEdit, label, make_spin)
+from ..ui_widgets import (Card, ColorButton, ColorSpins, EntryList, Form, Segmented, Switch, SearchEdit, label, make_spin)
 from .base import _fill_combo, PageBase
 
 # ================================================================= 材质
@@ -170,8 +169,7 @@ class MaterialPage(PageBase):
     def _refresh_list(self, *_):
         m = self.doc.model
         if not m:
-            self.list.empty_text = "未载入模型"
-            self.list.set_entries([])
+            self._show_empty()
             self.detail.setEnabled(False)
             return
         kw = self.search.text().strip().lower()
@@ -191,13 +189,7 @@ class MaterialPage(PageBase):
                 "index": i,
                 "dim": mt.diffuse[3] < 0.5,
             })
-        prev = self.loading
-        self.loading = True
-        try:
-            self.list.empty_text = "无匹配结果"
-            self.list.set_entries(entries, self.idx)
-        finally:
-            self.loading = prev
+        self._show_entries(entries)
 
     def refresh(self):
         m = self.doc.model
@@ -207,11 +199,7 @@ class MaterialPage(PageBase):
         self._refresh_list()
         if m and m.materials and not (0 <= self.idx < len(m.materials)):
             self.idx = 0
-            self.loading = True
-            try:
-                self.list.select_data_index(0)
-            finally:
-                self.loading = False
+            self._select_row(0)
         if m and 0 <= self.idx < len(m.materials):
             self.detail.setEnabled(True)
             self._fill()
@@ -223,19 +211,13 @@ class MaterialPage(PageBase):
         if kind != "material":
             return
         self.idx = index
-        self.loading = True
-        try:
-            self.list.select_data_index(index)
-        finally:
-            self.loading = False
+        self._select_row(index)
         m = self.doc.model
         self.detail.setEnabled(bool(m and 0 <= index < len(m.materials)))
         self._fill()
 
     def _on_list(self, i):
-        if self.loading:
-            return
-        self.doc.select("material", i)
+        self._select_from_list("material", i)
 
     def _material(self):
         m = self.doc.model
@@ -254,14 +236,10 @@ class MaterialPage(PageBase):
     def _fill(self):
         m = self.doc.model
         mt = self._material()
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             if not m or not mt:
                 return
             self._fill_fields(m, mt)
-        finally:
-            self.loading = prev
 
     def _fill_fields(self, m, mt):
         self.set_hint("索引 %d · %d 个材质" % (self.idx, len(m.materials)))

@@ -163,7 +163,7 @@ python -X utf8 tests/parity/compare_all.py     # → tests/parity/compare_all.md
 python -X utf8 -c "import sys;sys.path.insert(0,r'tests/parity');import pmxsem as P;print(P.fmt(P.diff(r'tests/parity/work/B1_orig.pmx', r'tests/parity/work/B1_mod.pmx')))"
 ```
 
-工具文件：`tests/parity/{origlib,origui,uia,modern,pmxsem,side_orig,side_mod,cxrun,cxop,compare_all,make_pairs,regress}.py`、`cx/*.cs`（原版 CSScript 片段）、`uia/*.json`（各页控件坐标快照）、`work/*.pmx`（42 项操作的另存结果，含 `SB0_cx.pmx` 柔体基座）、`shots/*_orig.png`、`pairs/*_pair.png`。
+工具文件：`tests/parity/{origlib,origui,uia,modern,pmxsem,side_orig,side_mod,cxrun,cxop,compare_all,make_pairs,regress}.py`、`cx/*.cs`（原版 CSScript 片段）、`uia/*.json`（各页控件坐标快照）、`work/*.pmx`（42 项操作的另存结果，含 `SB0_cx.pmx` 柔体基座；**本地生成、不进版本库**，约 836 MB，缺失时按本文上一节重新生成）、`shots/*_orig.png`、`pairs/*_pair.png`。
 
 ## 八、后续建议落实情况
 

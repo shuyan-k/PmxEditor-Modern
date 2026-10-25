@@ -136,7 +136,7 @@ def verify_match_and_apply(model):
         pose.apply()
         pose.world_update()
     apply_vpd_pose(pose, match, solve_ik=False)
-    for (entry, target), (_index, name) in zip(match.pairs, selected):
+    for (entry, target), (_index, _name) in zip(match.pairs, selected):
         assert np.allclose(pose.base_rot[target], entry.rot, atol=1e-6)
         assert np.allclose(pose.base_trans[target], entry.pos, atol=1e-6)
     if pose.n > len(selected):

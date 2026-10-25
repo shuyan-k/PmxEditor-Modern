@@ -124,8 +124,7 @@ class MorphPage(PageBase):
     def _refresh_list(self, *_):
         m = self.doc.model
         if not m:
-            self.list.empty_text = "未载入模型"
-            self.list.set_entries([])
+            self._show_empty()
             self.detail.setEnabled(False)
             return
         kw = self.search.text().strip().lower()
@@ -143,13 +142,7 @@ class MorphPage(PageBase):
                 "color": ACCENT_2,
                 "index": i,
             })
-        prev = self.loading
-        self.loading = True
-        try:
-            self.list.empty_text = "无匹配结果"
-            self.list.set_entries(entries, self.idx)
-        finally:
-            self.loading = prev
+        self._show_entries(entries)
 
     def refresh(self):
         m = self.doc.model
@@ -159,11 +152,7 @@ class MorphPage(PageBase):
         self._refresh_list()
         if m and m.morphs and not (0 <= self.idx < len(m.morphs)):
             self.idx = 0
-            self.loading = True
-            try:
-                self.list.select_data_index(0)
-            finally:
-                self.loading = False
+            self._select_row(0)
         if m and 0 <= self.idx < len(m.morphs):
             self.detail.setEnabled(True)
             self._fill()
@@ -182,11 +171,7 @@ class MorphPage(PageBase):
         if kind != "morph":
             return
         self.idx = index
-        self.loading = True
-        try:
-            self.list.select_data_index(index)
-        finally:
-            self.loading = False
+        self._select_row(index)
         m = self.doc.model
         self.detail.setEnabled(bool(m and 0 <= index < len(m.morphs)))
         self._fill()
@@ -198,9 +183,7 @@ class MorphPage(PageBase):
         self.previewChanged.emit({})
 
     def _on_list(self, i):
-        if self.loading:
-            return
-        self.doc.select("morph", i)
+        self._select_from_list("morph", i)
 
     def _morph(self):
         m = self.doc.model
@@ -211,9 +194,7 @@ class MorphPage(PageBase):
     def _fill(self):
         m = self.doc.model
         mo = self._morph()
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             if not m or not mo:
                 return
             self.set_hint("索引 %d · %d 个形态" % (self.idx, len(m.morphs)))
@@ -226,8 +207,6 @@ class MorphPage(PageBase):
             self.panel_combo.setCurrentIndex(i if i >= 0 else 3)
             self.type_label.setText(MORPH_TYPE_NAMES.get(mo.type, "未知"))
             self._fill_offsets(m, mo)
-        finally:
-            self.loading = prev
 
     def _fill_offsets(self, m, mo):
         rows = mo.offsets
@@ -332,9 +311,7 @@ class MorphPage(PageBase):
         off = mo.offsets[row]
         spec = self._offset_spec(m, mo)
         form = Form(72)
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             for item in spec:
                 key, kind = item[0], item[1]
                 if kind == "combo":
@@ -383,8 +360,6 @@ class MorphPage(PageBase):
                     spins[0]._off_group = spins
                     form.add(key, box)
                     self._off_widgets[key] = spins
-        finally:
-            self.loading = prev
         self.off_lay.addWidget(form)
 
     def _off_value(self, key):
@@ -446,7 +421,6 @@ class MorphPage(PageBase):
                    "toon": [0.0] * 4}
         else:
             off = {"rigid": 0, "local": 0, "velocity": [0.0] * 3, "torque": [0.0] * 3}
-        idx = self.idx
         self.doc.push_undo("新建形态偏移")
         mo.offsets.append(off)
         self.doc.mark_dirty()
@@ -458,7 +432,6 @@ class MorphPage(PageBase):
         row = self.offset_table.currentRow()
         if not mo or not (0 <= row < len(mo.offsets)):
             return
-        idx = self.idx
         self.doc.push_undo("删除形态偏移")
         del mo.offsets[row]
         self.doc.mark_dirty()

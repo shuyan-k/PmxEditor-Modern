@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import traceback
 
 import numpy as np
@@ -11,7 +13,7 @@ import numpy as np
 from .native_backend import backend_label, unavailable_reason
 
 # Load the MSVC extension before Qt DLLs on Windows.
-from PyQt5.QtCore import QByteArray, QEvent, QSize, Qt
+from PyQt5.QtCore import QByteArray, QEvent, QSize, Qt, QTimer
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
                              QHBoxLayout, QLabel, QMainWindow, QMenuBar,
@@ -19,13 +21,13 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from . import theme
-from .config import Config
+from .config import Config, log_path
 from .doc import Document
 from .panels import (BonePage, FacePage, FramePage, InfoPage, MaterialPage,
                      MorphPage, PhysicsPage, SettingsPage, SoftPage,
                      VertexPage)
 from .theme import (ACCENT, ACCENT_2, BORDER, BORDER_SOFT, TEXT_DIM,
-                   build_qss, make_icon, mono_font, svg_assets, ui_font)
+                   build_qss, make_icon, mono_font, ui_font)
 from .ui_widgets import Switch, icon_button, label
 from .viewport import Viewport
 from .vpd import (apply_vpd_pose, build_vpd_text, load_vpd, match_vpd,
@@ -51,6 +53,10 @@ KIND_PAGE = {"bone": 1, "frame": 6, "vertex": 7, "material": 2, "morph": 3,
              "rigid": 4, "joint": 4, "soft": 9}
 # 只改姿态的编辑（压姿态快照即可，不必克隆整模型）
 POSE_EDIT_LABELS = ("调整骨骼姿态", "移动骨骼", "旋转骨骼")
+
+# 亮度滑杆拖动时每次 valueChanged 都原子写盘太费；合并成一次写入（ms）。
+# 视口与状态栏仍然即时刷新，只有配置文件落盘被推迟。
+SETTINGS_SAVE_DELAY = 80
 
 # ---------------------------------------------------------------- 无边框支持
 
@@ -155,6 +161,12 @@ class MainWindow(QMainWindow):
         # 偏好写在 settings.json 里（见 config.py），不再用注册表：
         # 改坏了可以直接打开文件改，删掉就是恢复出厂设置。
         self.config = Config.load()
+        # 高频设置（亮度滑杆）先改内存，再由这个单次定时器合并落盘。
+        self._settings_dirty = False
+        self._settings_timer = QTimer(self)
+        self._settings_timer.setSingleShot(True)
+        self._settings_timer.setInterval(SETTINGS_SAVE_DELAY)
+        self._settings_timer.timeout.connect(self._flush_settings)
         self._pages = []
         self._current_page = 0
 
@@ -1002,6 +1014,8 @@ class MainWindow(QMainWindow):
 
     def _reload_settings(self):
         """重新读磁盘上的 settings.json 并立即应用（手工改文件后免重启）。"""
+        # 先把待写的改动落盘，否则重载会把刚拖动的亮度覆盖回旧值。
+        self._flush_settings()
         cfg = Config.load(force=True)
         self.config = cfg
         want = "light" if str(cfg.get("theme", "dark")).lower() == "light" else "dark"
@@ -1009,10 +1023,28 @@ class MainWindow(QMainWindow):
         self._restore_view_settings()
         self._set_status("已重新载入设置：%s" % cfg.path)
 
+    def _flush_settings(self):
+        """把挂起的设置改动立即写盘（关窗、重载、定时器到点）。"""
+        self._settings_timer.stop()
+        if not self._settings_dirty:
+            return
+        self._settings_dirty = False
+        try:
+            self.config.save()
+        except Exception:
+            traceback.print_exc()
+
+    def _defer_settings_save(self):
+        """标记有改动待写，并（重新）启动防抖定时器。"""
+        self._settings_dirty = True
+        self._settings_timer.start()
+
     def _set_brightness(self, bg: float, model: float):
         self.viewport.set_brightness(bg, model)
+        # 视口与状态栏即时生效，只有落盘合并（拖动结束 80ms 内写一次）。
         self.config.update({"view/bg_brightness": float(bg),
-                            "view/model_brightness": float(model)})
+                            "view/model_brightness": float(model)}, save=False)
+        self._defer_settings_save()
         self._set_status("亮度：背景 %d%% · 模型 %d%%"
                          % (round(bg * 100), round(model * 100)))
 
@@ -1095,6 +1127,8 @@ class MainWindow(QMainWindow):
         if not self._maybe_save():
             e.ignore()
             return
+        # 先落盘挂起的亮度等改动，后面的 update 失败也不会丢数据。
+        self._flush_settings()
         try:
             self.config.update({
                 # 以"屏幕上实际生效的主题"为准落盘：切换过程中的任何异常都不会
@@ -1156,10 +1190,52 @@ KIND_NAMES = {"bone": "骨骼", "material": "材质", "morph": "形态",
 
 # ---------------------------------------------------------------- 启动
 
+def _append_crash_log(text: str):
+    try:
+        path = log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 只保留最近 1 MB：长期运行或反复崩溃时不至于无限增长。
+        if path.exists() and path.stat().st_size > 1024 * 1024:
+            os.replace(str(path), str(path) + ".1")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("[%s] %s %s\n%s\n"
+                     % (time.strftime("%Y-%m-%d %H:%M:%S"), APP_NAME,
+                        APP_VERSION, text))
+    except Exception:
+        pass
+
+
+def _install_excepthook():
+    """未捕获异常（含 Qt 槽与后台线程）写入日志。
+
+    打包版用 ``--windows-console-mode=disable``，stderr 不可见；崩溃后用户只能
+    看到窗口消失。这里同时保留 stderr 输出，并追加到配置文件同目录的
+    ``PmxStudio.log``。
+    """
+    def hook(exc_type, exc, tb):
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        try:
+            stream = sys.__stderr__
+            if stream is not None:
+                stream.write(text)
+                stream.flush()
+        except Exception:
+            pass
+        _append_crash_log(text)
+
+    sys.excepthook = hook
+    try:
+        threading.excepthook = lambda args: hook(
+            args.exc_type, args.exc_value, args.exc_traceback)
+    except Exception:
+        pass
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--verify-backend":
         from tools.verify_native_backend import run_cli
         return run_cli(sys.argv[2:], in_process=True, require_out=True)
+    _install_excepthook()
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)

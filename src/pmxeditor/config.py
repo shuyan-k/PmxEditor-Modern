@@ -6,10 +6,15 @@
 落在一个可读的 JSON 文件里：
 
     <仓库根>/settings.json           源码运行时
-    %APPDATA%/PmxEditorModern/settings.json     根目录不可写（打包到 Program Files）时
+    %APPDATA%/PmxEditorModern/settings.json     冻结运行（Nuitka onefile 等）或根目录不可写时
 
-启动时自动加载，任何一项改动立即写回；文件损坏会被改名成 ``settings.json.bak``
-并从默认值重建，不会让程序起不来。想恢复出厂设置，删掉这个文件即可。
+冻结运行时 ``ROOT`` 可能是临时解压目录（Nuitka onefile 落在 ``%TEMP%`` 下），
+写进去会被磁盘清理掉，因此打包版一律使用用户目录。``PMXE_CONFIG`` 环境变量
+优先级最高，源码与打包模式都会覆盖上面的选法。
+
+启动时自动加载，改动会写回（亮度拖动等高频操作会合并成一次写入）；文件损坏会
+被改名成 ``settings.json.bak`` 并从默认值重建，不会让程序起不来。想恢复出厂
+设置，删掉这个文件即可。
 
 键用 ``段/名字`` 的点路径访问（``theme``、``view/bg_brightness``），写进文件时
 按 ``/`` 展开成嵌套对象，方便手工编辑。
@@ -19,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +32,7 @@ from .paths import ROOT
 
 ENV_PATH = "PMXE_CONFIG"
 FILENAME = "settings.json"
+LOG_FILENAME = "PmxStudio.log"
 
 # 默认值也写进新文件，让用户一眼看到有哪些设置可调。
 DEFAULTS = {
@@ -53,17 +60,37 @@ DEFAULTS = {
 _INSTANCE = None
 
 
+def is_frozen() -> bool:
+    """是否运行在冻结产物里。
+
+    兼容两种打包器：PyInstaller 等会设置 ``sys.frozen``；Nuitka 编译后的模块
+    全局里带 ``__compiled__``（onefile 下 ``ROOT`` 指向 ``%TEMP%`` 的解压目录）。
+    """
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
 def default_path() -> Path:
-    """配置文件位置：环境变量 > 仓库根（可写）> 用户目录。"""
+    """配置文件位置：环境变量 > 源码仓库根 > 用户目录（冻结运行时）。"""
     env = os.environ.get(ENV_PATH)
     if env:
         return Path(env).expanduser()
+    if is_frozen():
+        return fallback_path()
     return ROOT / FILENAME
 
 
 def fallback_path() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
     return Path(base) / "PmxEditorModern" / FILENAME
+
+
+def log_path() -> Path:
+    """异常日志位置：与配置文件同目录。
+
+    源码运行时是仓库根（已被 ``*.log`` 忽略），打包版是
+    ``%APPDATA%/PmxEditorModern/``；``PMXE_CONFIG`` 指定别处时日志也跟着走。
+    """
+    return default_path().parent / LOG_FILENAME
 
 
 def _overlay(dst: dict, src: dict) -> dict:

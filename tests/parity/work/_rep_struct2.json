@@ -1,9 +1,0 @@
-{
- "log": [
-  "[boot] APP STARTED struct2 dark D:\\Project\\MMD\\02_模型库\\KARU式Rabbit Hole MIKU.ver 1.5_by_KR-SAM_141b6a51e3ad47ff26d0910dd71e3a71\\KARU式Rabbit Hole MIKU.ver 1.6.pmx",
-  "[boot]  最小   新建骨骼中位=13.2 ms 撤销中位=43.4 ms（adds=13,13,25 undos=34,43,44）",
-  "[boot]  全量   新建骨骼中位=74.5 ms 撤销中位=108.3 ms（adds=64,74,97 undos=100,108,110）",
-  "[boot]  提升：新建骨骼 74.5 -> 13.2 ms（5.64x），撤销 108.3 -> 43.4 ms（2.49x）"
- ],
- "anomalies": []
-}

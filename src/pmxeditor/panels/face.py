@@ -70,8 +70,7 @@ class FacePage(PageBase):
     def _refresh_list(self, *_):
         m = self.doc.model
         if not m:
-            self.list.empty_text = "未载入模型"
-            self.list.set_entries([])
+            self._show_empty()
             return
         kw = self.search.text().strip().lower()
         entries = []
@@ -90,13 +89,7 @@ class FacePage(PageBase):
                 "index": i,
                 "dim": int(mt.face_count) <= 0,
             })
-        prev = self.loading
-        self.loading = True
-        try:
-            self.list.empty_text = "无匹配结果"
-            self.list.set_entries(entries, self.idx)
-        finally:
-            self.loading = prev
+        self._show_entries(entries)
 
     def refresh(self):
         m = self.doc.model
@@ -107,11 +100,7 @@ class FacePage(PageBase):
         self._refresh_list()
         if m and m.materials and not (0 <= self.idx < len(m.materials)):
             self.idx = 0
-            self.loading = True
-            try:
-                self.list.select_data_index(0)
-            finally:
-                self.loading = False
+            self._select_row(0)
         self.panel.setEnabled(bool(m and 0 <= self.idx < len(m.materials)))
         if not m or not m.materials:
             self.idx = -1
@@ -125,11 +114,8 @@ class FacePage(PageBase):
         if self.loading:
             return
         self.idx = i
-        self.loading = True
-        try:
+        with self._suspend():
             _fill_combo(self.src_combo, self._material_items(), i)
-        finally:
-            self.loading = False
         self._sync_dst()
         self._update_ranges()
         self._update_note()
@@ -141,11 +127,7 @@ class FacePage(PageBase):
         if v is None:
             return
         self.idx = int(v)
-        self.loading = True
-        try:
-            self.list.select_data_index(self.idx)
-        finally:
-            self.loading = False
+        self._select_row(self.idx)
         self._sync_dst()
         self._update_ranges()
         self._update_note()
@@ -165,13 +147,8 @@ class FacePage(PageBase):
         return None
 
     def _fill(self):
-        m = self.doc.model
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             _fill_combo(self.src_combo, self._material_items(), self.idx)
-        finally:
-            self.loading = prev
         self._sync_dst()
         self._update_ranges()
         self._update_note()
@@ -183,12 +160,8 @@ class FacePage(PageBase):
         cur = self.dst_combo.currentData()
         if cur is None or cur == self.idx or not (0 <= cur < len(m.materials)):
             cur = (self.idx + 1) % len(m.materials) if len(m.materials) > 1 else -1
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             _fill_combo(self.dst_combo, self._material_items(), cur)
-        finally:
-            self.loading = prev
 
     def _update_ranges(self):
         mt = self._material()

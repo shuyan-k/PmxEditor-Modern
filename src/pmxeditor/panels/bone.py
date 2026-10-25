@@ -4,7 +4,6 @@ from __future__ import annotations
 # -*- coding: utf-8 -*-
 import math
 from PyQt5.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
-from ..config import Config
 from ..doc import add_bone, duplicate_bone, move_bone, remove_bone
 from ..gl_names import bone_zh
 from ..pmx import (BF_AFTER_PHYSICS, BF_ENABLED, BF_FIXED_AXIS, BF_IK, BF_INHERIT_MOV, BF_INHERIT_ROT, BF_LOCAL_APPEND, BF_LOCAL_AXIS, BF_ROTATABLE, BF_TAIL_INDEX, BF_TRANSLATABLE, BF_VISIBLE, IKLink, shift_bone_vertices)
@@ -249,8 +248,7 @@ class BonePage(PageBase):
 
     def refresh(self):
         m = self.doc.model
-        self.loading = True
-        try:
+        with self._suspend():
             if not m:
                 self.idx = -1
             self.tree.set_model_data(m, self.search.text(), self.doc.sel_index
@@ -259,29 +257,21 @@ class BonePage(PageBase):
                 self.idx = 0
                 self.tree.select_bone(0)
             self._fill()
-        finally:
-            self.loading = False
 
     def select(self, kind: str, index: int):
         if kind != "bone":
             return
         self.idx = index
-        self.loading = True
-        try:
+        with self._suspend():
             self.tree.select_bone(index)
             self._fill()
-        finally:
-            self.loading = False
 
     def _search(self, text: str):
         m = self.doc.model
         if not m:
             return
-        self.loading = True
-        try:
+        with self._suspend():
             self.tree.set_model_data(m, text, self.idx)
-        finally:
-            self.loading = False
 
     def _on_tree(self, index: int):
         if self.loading:

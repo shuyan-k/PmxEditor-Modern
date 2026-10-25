@@ -236,8 +236,7 @@ class PhysicsPage(PageBase):
         self._list_kind = self.kind
         m = self.doc.model
         if not m:
-            self.list.empty_text = "未载入模型"
-            self.list.set_entries([])
+            self._show_empty()
             self._set_enabled(False)
             return
         kw = self.search.text().strip().lower()
@@ -272,13 +271,7 @@ class PhysicsPage(PageBase):
                     "index": i,
                 })
             self.set_hint("关节 %d 个" % len(m.joints))
-        prev = self.loading
-        self.loading = True
-        try:
-            self.list.empty_text = "无匹配结果"
-            self.list.set_entries(entries, self.idx)
-        finally:
-            self.loading = prev
+        self._show_entries(entries)
 
     def refresh(self):
         m = self.doc.model
@@ -300,11 +293,7 @@ class PhysicsPage(PageBase):
         count = len(m.rigid) if self.kind == "rigid" else len(m.joints)
         if not (0 <= self.idx < count):
             self.idx = 0
-            self.loading = True
-            try:
-                self.list.select_data_index(0)
-            finally:
-                self.loading = False
+            self._select_row(0)
         if self.kind == "rigid" and 0 <= self.idx < len(m.rigid):
             self._set_enabled(True)
             self._fill_rigid()
@@ -319,8 +308,7 @@ class PhysicsPage(PageBase):
         if kind not in ("rigid", "joint"):
             return
         self.kind = "rigid" if kind == "rigid" else "joint"
-        self.loading = True
-        try:
+        with self._suspend():
             self.seg.set_value(self.kind)
             self.stack.setCurrentIndex(0 if kind == "rigid" else 1)
             # 同类型选中时列表内容不变；重建会清掉模型里的条目，
@@ -328,8 +316,6 @@ class PhysicsPage(PageBase):
             if self._list_kind != self.kind:
                 self._refresh_list()
             self.list.select_data_index(index)
-        finally:
-            self.loading = False
         self.idx = index
         self._set_enabled(True)
         if kind == "rigid":
@@ -338,9 +324,7 @@ class PhysicsPage(PageBase):
             self._fill_joint()
 
     def _on_list(self, i):
-        if self.loading:
-            return
-        self.doc.select(self.kind, i)
+        self._select_from_list(self.kind, i)
 
     def _rigid(self):
         m = self.doc.model
@@ -359,9 +343,7 @@ class PhysicsPage(PageBase):
         rb = self._rigid()
         if not m or not rb:
             return
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             self.rb_name.setText(rb.name)
             self.rb_name_en.setText(rb.name_en)
             _fill_combo(self.rb_bone, _bone_combo_items(m), rb.bone, empty=(-1, "（未关联）"))
@@ -380,8 +362,6 @@ class PhysicsPage(PageBase):
                 cb.setChecked(bool(rb.mask & (1 << g)))
             dims = {0: "半径", 1: "半宽 X / 高 Y / 深 Z", 2: "半径 / 总高 / -"}
             self.rb_size.setToolTip(dims.get(int(rb.shape), ""))
-        finally:
-            self.loading = prev
         warns = []
         if int(rb.mode) == 0 and float(rb.mass) > 0:
             warns.append("骨骼跟随模式的刚体质量为 0，导出时可能被修正")
@@ -394,9 +374,7 @@ class PhysicsPage(PageBase):
         jt = self._joint()
         if not m or not jt:
             return
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             self.jt_name.setText(jt.name)
             self.jt_name_en.setText(jt.name_en)
             self.jt_type.set_value(str(int(jt.type)))
@@ -420,8 +398,6 @@ class PhysicsPage(PageBase):
             self.jt_max_rot.set_value(_deg(jt.max_rot))
             self.jt_spr_loc.set_value(jt.spring_loc)
             self.jt_spr_rot.set_value(jt.spring_rot)
-        finally:
-            self.loading = prev
         warns = []
         for i, ax in enumerate("XYZ"):
             if jt.min_rot[i] > jt.max_rot[i]:
@@ -550,12 +526,9 @@ class PhysicsPage(PageBase):
     def _set_mask(self, mask):
         self.edit("修改碰撞掩码",
                   lambda m: setattr(m.rigid[self.idx], "mask", mask), "physics")
-        self.loading = True
-        try:
+        with self._suspend():
             for g, cb in enumerate(self.mask_checks):
                 cb.setChecked(bool(mask & (1 << g)))
-        finally:
-            self.loading = False
 
     # ------------------------------------------------------------ 关节编辑
     def _jt_name_changed(self):

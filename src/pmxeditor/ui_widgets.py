@@ -14,10 +14,10 @@ from PyQt5.QtWidgets import (QAbstractButton, QAction, QButtonGroup,
                              QStyleOptionViewItem, QTreeView, QVBoxLayout, QWidget,
                              QAbstractItemView)
 
-from .theme import (ACCENT, BORDER, BORDER_SOFT, CHESS_A, CHESS_B, CHESS_BG,
+from .theme import (ACCENT, BORDER, CHESS_A, CHESS_B, CHESS_BG,
                    KNOB, OVERLAY_HOVER, SWATCH_BORDER, SWITCH_OFF, TEXT,
                    TEXT_DIM, TEXT_FAINT, TREE_DOT, TREE_DOT_DIM, TREE_DOT_SEL,
-                   make_icon, register_icon, ui_font)
+                   register_icon, ui_font)
 
 # ---------------------------------------------------------------- 基础
 

@@ -58,7 +58,6 @@ class OrbitCamera:
         return self.view()[1, :3].copy()
 
     def project(self, p, width, height):
-        eye = self.eye()
         v = self.view()
         proj = self.projection(max(0.01, width / max(1, height)))
         clip = proj @ v @ np.array([p[0], p[1], p[2], 1.0], dtype=np.float32)

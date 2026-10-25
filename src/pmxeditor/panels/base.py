@@ -3,6 +3,8 @@ from __future__ import annotations
 
 # -*- coding: utf-8 -*-
 import math
+from contextlib import contextmanager
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from ..gl_names import bone_zh
@@ -101,6 +103,36 @@ class PageBase(QWidget):
         self.tools = head
 
     # ------------------------------------------------------------ 工具
+    @contextmanager
+    def _suspend(self):
+        """块内的程序化赋值不触发控件回调（保留进入前的 loading 状态）。"""
+        prev = self.loading
+        self.loading = True
+        try:
+            yield
+        finally:
+            self.loading = prev
+
+    # ------------------------------------------------------------ 列表
+    def _show_entries(self, entries, empty_text: str = "无匹配结果"):
+        """重建列表项；EntryList 内部已屏蔽选中信号，不需要再切 loading。"""
+        self.list.empty_text = empty_text
+        self.list.set_entries(entries, self.idx)
+
+    def _show_empty(self, empty_text: str = "未载入模型"):
+        self.list.empty_text = empty_text
+        self.list.set_entries([])
+
+    def _select_row(self, index: int):
+        """程序化选中列表行，避免触发 _on_list 里的文档选中。"""
+        with self._suspend():
+            self.list.select_data_index(index)
+
+    def _select_from_list(self, kind: str, index: int):
+        """列表行被用户点击：转成文档选中；程序化刷新期间忽略。"""
+        if not self.loading:
+            self.doc.select(kind, index)
+
     def add_tool(self, kind: str, tip: str, slot, color: str = TEXT_DIM):
         b = icon_button(kind, tip, color, 15)
         b.clicked.connect(slot)

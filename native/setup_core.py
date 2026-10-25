@@ -3,7 +3,7 @@
 
 用法（仓库根目录）：
     build\\python\\python.exe native\\setup_core.py build_ext --inplace
-产物 _pmx_core.cp310-win_amd64.pyd 落在 src/pmxeditor/ 下。
+产物 _pmx_core.cp312-win_amd64.pyd 落在 src/pmxeditor/ 下。
 """
 from pathlib import Path
 

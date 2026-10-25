@@ -10,11 +10,10 @@ PMXEditor 里也会标红的那种权重。
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QLineEdit, QSpinBox,
+from PyQt5.QtWidgets import (QComboBox, QHBoxLayout, QSpinBox,
                              QVBoxLayout, QWidget)
 
-from ..ui_widgets import AxisSpin, Card, Form, label, make_spin, text_button
+from ..ui_widgets import AxisSpin, Form, label, make_spin, text_button
 from .base import PageBase
 
 WEIGHT_TYPES = ((0, "BDEF1"), (1, "BDEF2"), (2, "BDEF4"), (3, "SDEF"), (4, "QDEF"))
@@ -130,7 +129,6 @@ class VertexPage(PageBase):
         return int(len(m.v_pos)) if m else 0
 
     def refresh(self):
-        m = self.doc.model
         n = self._vertex_count()
         self.index_spin.blockSignals(True)
         self.index_spin.setRange(0, max(0, n - 1))
@@ -182,9 +180,7 @@ class VertexPage(PageBase):
             self.index_spin.setValue(self.idx)
             self.index_spin.blockSignals(False)
         i = self.idx
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             self.pos_hint.setText("顶点 %d / %d" % (i, n))
             self.pos_spin.set_value([float(x) for x in m.v_pos[i]])
             self.nrm_spin.set_value([float(x) for x in m.v_nrm[i]])
@@ -202,8 +198,6 @@ class VertexPage(PageBase):
             self.center_spin.set_value([float(x) for x in sd[0:3]])
             self.r0_spin.set_value([float(x) for x in sd[3:6]])
             self.r1_spin.set_value([float(x) for x in sd[6:9]])
-        finally:
-            self.loading = prev
         self._sync_wtype()
 
     def _fill_bone_combo(self, combo, items, cur):

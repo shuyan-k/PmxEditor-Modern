@@ -31,6 +31,9 @@ tests/*.pmx
 tests/*.vpd
 tests/onefiletmp/
 tests/tmproot/
+# parity 比对中间产物（由 side_orig/side_mod/cxop 在原版 PmxEditor 上运行生成）
+# 单向约 836 MB，不入库；compare_all.py 需要它们时按 tests/parity/REPORT.md 重新生成
+tests/parity/work/
 
 # 编辑器 / 系统
 .vscode/

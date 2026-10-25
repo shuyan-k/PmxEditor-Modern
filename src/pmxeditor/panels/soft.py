@@ -252,8 +252,7 @@ class SoftPage(PageBase):
     def _refresh_list(self, *_):
         m = self.doc.model
         if not m:
-            self.list.empty_text = "未载入模型"
-            self.list.set_entries([])
+            self._show_empty()
             return
         entries = []
         for i, s in enumerate(m.soft_bodies):
@@ -264,13 +263,7 @@ class SoftPage(PageBase):
                 "color": ACCENT_2,
                 "index": i,
             })
-        prev = self.loading
-        self.loading = True
-        try:
-            self.list.empty_text = "无柔体（PMX 2.1 才能保存）"
-            self.list.set_entries(entries, self.idx)
-        finally:
-            self.loading = prev
+        self._show_entries(entries, "无柔体（PMX 2.1 才能保存）")
 
     def refresh(self):
         m = self.doc.model
@@ -285,11 +278,7 @@ class SoftPage(PageBase):
         self._refresh_list()
         if m.soft_bodies and not (0 <= self.idx < len(m.soft_bodies)):
             self.idx = 0
-            self.loading = True
-            try:
-                self.list.select_data_index(0)
-            finally:
-                self.loading = False
+            self._select_row(0)
         self.set_hint("柔体 %d 个 · PMX %s" % (len(m.soft_bodies), "2.1" if m.version >= 2.1 else "2.0"))
         if 0 <= self.idx < len(m.soft_bodies):
             self.detail.setEnabled(True)
@@ -302,19 +291,13 @@ class SoftPage(PageBase):
         if kind != "soft":
             return
         self.idx = index
-        self.loading = True
-        try:
-            self.list.select_data_index(index)
-        finally:
-            self.loading = False
+        self._select_row(index)
         m = self.doc.model
         self.detail.setEnabled(bool(m and 0 <= index < len(m.soft_bodies)))
         self._fill()
 
     def _on_list(self, i):
-        if self.loading:
-            return
-        self.doc.select("soft", i)
+        self._select_from_list("soft", i)
 
     def _soft(self):
         m = self.doc.model
@@ -328,9 +311,7 @@ class SoftPage(PageBase):
         s = self._soft()
         if not m or not s:
             return
-        prev = self.loading
-        self.loading = True
-        try:
+        with self._suspend():
             self.name_edit.setText(s.name)
             self.name_en_edit.setText(s.name_en)
             self.shape_seg.set_value(str(int(s.shape)))
@@ -364,8 +345,6 @@ class SoftPage(PageBase):
             _fill_combo(self.anchor_rigid, rigid_items)
             self._fill_anchors(m, s)
             self._fill_pins(s)
-        finally:
-            self.loading = prev
         self._sync_buttons()
 
     def _fill_anchors(self, m, s):
@@ -468,12 +447,9 @@ class SoftPage(PageBase):
     def _set_mask(self, value: int):
         if not self._soft():
             return
-        self.loading = True
-        try:
+        with self._suspend():
             for g, cb in enumerate(self.mask_checks):
                 cb.setChecked(bool(value & (1 << g)))
-        finally:
-            self.loading = False
         self._set_field("mask", int(value), "修改柔体碰撞组")
 
     def _array_changed(self, field: str, i: int, value: float):

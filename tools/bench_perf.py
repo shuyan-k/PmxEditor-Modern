@@ -12,8 +12,6 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pmxeditor.pmx import load_pmx
@@ -31,6 +29,11 @@ class _OverlayProbe:
     _build_rigid_lines = Viewport._build_rigid_lines
     _build_joint_lines = Viewport._build_joint_lines
     _rigid_shape_segments = staticmethod(Viewport._rigid_shape_segments)
+    _pose_delta_matrix = Viewport._pose_delta_matrix
+    _rigid_rest_matrix = Viewport._rigid_rest_matrix
+    _global_pose_delta = Viewport._global_pose_delta
+    _rigid_current_matrix = Viewport._rigid_current_matrix
+    _joint_current_matrix = Viewport._joint_current_matrix
 
     def __init__(self, model):
         self.model = model
@@ -40,6 +43,9 @@ class _OverlayProbe:
         self._rb_world = []
         self._perf_enabled = False
         self._bone_static = None
+        # 叠加层要乘上骨骼相对静止姿态的增量，视口的这套计算依赖 self.pose；
+        # 基准只关心 CPU 几何，构造一个中性姿态即可，不涉及 GL 上下文。
+        self.pose = Pose(model)
         self._prepare_bone_cache()
 
 

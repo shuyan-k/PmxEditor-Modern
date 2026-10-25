@@ -52,7 +52,7 @@
 .\run.bat "D:\MMD\模型.pmx"     # 直接打开模型
 ```
 
-`run.bat` 优先使用 `build\python\pythonw.exe`，缺失时才回退到系统的 `pythonw.exe`。`build\python` 是 `tools\make_portable_python.ps1` 生成的便携 CPython 3.10（含 PyQt5 / PyOpenGL / NumPy / pybind11），重建方式见 [开发与构建](#开发与构建)。
+`run.bat` 优先使用 `build\python\pythonw.exe`，缺失时才回退到系统的 `pythonw.exe`。`build\python` 是 `tools\make_portable_python.ps1` 生成的便携 CPython 3.12（含 PyQt5 / PyOpenGL / NumPy / pybind11），重建方式见 [开发与构建](#开发与构建)。
 
 ### 方式二：自有 Python 环境
 
@@ -61,7 +61,7 @@ python -m pip install -r requirements.txt
 python main.py "测试模型.pmx"
 ```
 
-要求 64 位 CPython 3.10（原生扩展按 cp310 编译），依赖见 `requirements.txt`：PyQt5 5.15.11、PyOpenGL 3.1.10、NumPy 1.23.1、pybind11 >= 2.11, < 4。
+要求 64 位 CPython 3.12（原生扩展按 cp312 编译），依赖见 `requirements.txt`：PyQt5 5.15.11、PyOpenGL 3.1.10、NumPy 2.2.6、pybind11 3.0.4；开发工具（ruff、Pillow）见 `requirements-dev.txt`，静态检查规则在 `ruff.toml`。
 
 ## Code signing policy
 
@@ -102,7 +102,7 @@ PmxStudio/
 │  ├─ gl_names.py           # 日文骨骼/材质/形态名的中文对照
 │  ├─ native_backend.py     # 加载 _pmx_core 扩展并报告后端状态
 │  ├─ paths.py              # 资源/原生库路径锚点
-│  └─ _pmx_core.cp310-win_amd64.pyd   # pybind11 计算后端（构建产物）
+│  └─ _pmx_core.cp312-win_amd64.pyd   # pybind11 计算后端（构建产物）
 ├─ assets/                  # 图标等静态资源
 ├─ native/                  # Bullet 与 pybind11 后端源码及构建脚本
 │  ├─ pmx_core.cpp          # C++ 计算后端源码
@@ -115,7 +115,7 @@ PmxStudio/
 ├─ tools/                   # 命令行工具（数值对拍、VPD 校验、性能基准、便携 Python）
 ├─ tests/                   # GUI 自动化测试（真实点击驱动）+ 测试模型
 │  └─ parity/               # 与原版 PmxEditor 的同操作语义比对（.cx 通道 / 总表 / 报告）
-├─ build/python/            # 便携 CPython 3.10（编译与回归统一使用）
+├─ build/python/            # 便携 CPython 3.12（编译与回归统一使用）
 ├─ requirements.txt
 ├─ run.bat
 └─ .gitignore
@@ -228,13 +228,13 @@ powershell -ExecutionPolicy Bypass -File native\build.ps1
 
 ### 便携 Python 运行时
 
-`build/python` 是精简的 CPython 3.10.9（约 210 MB，含 PyQt5 / PyOpenGL / NumPy / pybind11 / setuptools / pip，已剔除测试套件、tkinter、翻译与 `.pyi/.pdb`）。重建：
+`build/python` 是精简的 CPython 3.12.10（约 251 MB，含 PyQt5 / PyOpenGL / NumPy / pybind11 / setuptools / pip / Nuitka，已剔除测试套件、tkinter、翻译与 `.pyi/.pdb`；NumPy 2.x 的 `numpy.libs` OpenBLAS DLL 一并保留）。重建：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source "C:\Python310\python.exe"
+powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source "C:\Python312\python.exe"
 ```
 
-源码解释器必须是 **3.10**（原生扩展是 cp310），且路径应保持纯 ASCII —— 构建解释器装在含中文的路径下时，Qt 会把插件路径编码成 `05_??`，Nuitka 报 `failed to detect PyQt5 plugin directories`。
+源码解释器必须是 **3.12**（原生扩展是 cp312），且路径应保持纯 ASCII —— 构建解释器装在含中文的路径下时，Qt 会把插件路径编码成 `05_??`，Nuitka 报 `failed to detect PyQt5 plugin directories`。
 
 ### 代码约定
 
@@ -251,7 +251,7 @@ powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source 
 
 ### 本地设置
 
-所有可记忆的状态写在仓库根目录的 `settings.json`（不进版本库），启动时自动读取、改动即时写回，不落到模型文件里：
+所有可记忆的状态写在一份 `settings.json` 里（不进版本库）：源码运行放在仓库根目录，打包版放在 `%APPDATA%\PmxEditorModern\settings.json`。启动时自动读取、改动写回（亮度滑杆等高频操作合并成一次写入），不落到模型文件里：
 
 ```json
 {
@@ -283,8 +283,10 @@ powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source 
 - 写文件是先写 `.tmp` 再 `os.replace` 的原子替换；文件损坏时会自动备份成 `settings.json.bak` 并回落到默认值（设置页「配置文件」卡片会显示错误）。
 - 想恢复出厂状态：关掉程序，删掉 `settings.json`。
 - 用环境变量 `PMXE_CONFIG=<路径>` 可以指定另一份配置（便携模式 / 多套环境）。
-- 设置为根目录写不进去时（只读安装位置）自动退到 `%APPDATA%/PmxEditorModern/settings.json`。
+- 冻结运行（Nuitka onefile 等）时 `paths.ROOT` 可能是 `%TEMP%` 下的临时解压目录，设置会随磁盘清理消失，因此打包版一律用 `%APPDATA%\PmxEditorModern\settings.json`；源码运行仍用仓库根，根目录写不进去时也退到用户目录。
+- 亮度滑杆拖动时视口与状态栏即时刷新，配置文件按 80 ms 防抖合并写入；关窗与「重新载入文件」前会先 flush。
 - 旧版的注册表配置（`HKCU\Software\PmxEditorModern\editor`）在首次启动、且 `settings.json` 不存在时会被一次性搬迁过来；之后以文件为准，注册表不再读写。
+- 未捕获异常（含 Qt 槽与后台线程）会同时写 stderr 和配置目录下的 `PmxStudio.log`（超过 1 MB 轮换为 `.1`）；打包版没有控制台时也能事后排查。
 
 ## 测试与验证
 
@@ -347,7 +349,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 
 其余场景（`core*`、`sel*`、`grid_*`、`real*`、`flag2–flag7`、`combo*`、`bgprobe`、`optc`、`dbg2` 等）是当时的取证探针，保留在 `tests/run.py` 中便于复现历史问题，不在常规回归里执行。
 
-结果统一写入 `tests/report.json`（键 `log` / `anomalies`），截图在 `tests/shots/`。测试夹具 `tests/test_model.pmx` 由 `tests/gen_model.py` 生成；该脚本依赖 Pillow（便携运行时未安装，需用系统 Python 3.10 运行）。
+结果统一写入 `tests/report.json`（键 `log` / `anomalies`），截图在 `tests/shots/`。测试夹具 `tests/test_model.pmx` 由 `tests/gen_model.py` 生成；该脚本依赖 Pillow（便携运行时未安装，需用系统 Python 3.12 运行）。
 
 像素验证有两个坑：
 
@@ -367,6 +369,8 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 ```
 
 原版侧执行器 `side_orig.py` / `cxop.py` 依赖 pywin32 与原版编辑器窗口，需用系统 Python；新版侧 `side_mod.py` 用仓库便携运行时。字段级结果见 `tests/parity/compare_all.md`，方法、差异根因与修复记录见 `tests/parity/REPORT.md`。
+
+`tests/parity/work/` 是两侧操作后的另存产物（约 836 MB），**不入库**（见 `.gitignore`）；`compare_all.py` 在缺少它时会直接提示并按 `REPORT.md` 的步骤重新生成，不会覆盖已提交的 `compare_all.md`。`shots/` 与 `pairs/`（截图与并排对照图）仍保留在仓库中作为比对证据。
 
 ### 数值与工具校验
 
@@ -404,7 +408,8 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 
 | 项目 | 数值 |
 | --- | --- |
-| 加载 / 保存 / 回读 | 0.67 s / 0.15 s / 0.16 s（保存后字节数与源文件一致） |
+| 加载 / 保存 / 回读 | 0.67 s / 0.15 s / 0.16 s（向量化前的旧基线；保存后字节数与源文件一致） |
+| 加载 / 保存（11.6 万顶点 parity 夹具） | **0.06–0.10 s / 0.04–0.06 s**（向量化后；保存与源文件逐字节一致） |
 | 静态重绘一帧 | 9.5 ms（约 105 FPS） |
 | 物理演算 | 45.9 FPS（183 刚体 + 8 万顶点） |
 | 切换页面 | 28–45 ms（首次含懒构建）；单页 `refresh()` 2–7 ms |
@@ -426,6 +431,11 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 - **骨骼权重表向量化**：`SkinDeformer` 的「顶点→权重槽」展开由双重 Python 循环改为 `np.repeat` + `np.cumsum` 向量化，大模型（79848 顶点 / 10.6 万条蒙皮项）构造 **33.2 ms → 7.5 ms（4.4 倍）**，与旧实现逐项 `array_equal` 一致。
 - **撤销快照快速深拷贝**：`pmx._FastCopy` 按字段类型手写复制规则（数组 `copy()`、列表逐项、嵌套 dataclass 递归），绕开通用 `deepcopy` 的 `__reduce_ex__` 协议；大模型整模型快照 **44 ms → 18 ms（2.4 倍）→ 12.8 ms**（形态偏移改为专用快路径），撤销一次结构编辑 81 → 46 → **34.8 ms**。撤销后另存文件的字节与编辑前完全一致。
 - **结构重建分项**：`_reload_structure()` 先由 `Viewport.rebuild_structure()` 判断能否就地重建 —— 只增删骨骼/刚体/关节时复用网格 VBO、贴图像素缓存与相机，仅重建 Pose/Deformer/物理；顶点/索引/UV/材质区间变化才回落到完整 `set_model()`。大模型「新建骨骼」**130.7 → 75.2 ms（1.74 倍）**、撤销 **126.3 → 80.7 ms（1.57 倍）**。
+- **PMX 顶点块读写向量化**：加载改为「一次只读权重类型字节的轻量扫描 + 结构化 dtype/分组 gather」，保存改为「行宽为最长记录的字节矩阵 + 掩码拼接」，彻底去掉每个顶点的 `struct` 调用与 `add_uv` 列表推导。11.6 万顶点夹具：加载 **约 0.39 s → 0.06–0.10 s**，保存 **约 0.33–0.54 s → 0.04–0.06 s**（`add_uv=2` 的保存从 0.53 s 降到 0.05 s）；对 107 个现网/合成 PMX 比对，加载数组逐项相等、保存字节逐字节相同。
+- **PMX 读取边界校验 + 原子保存**：各计数字段先校验非负与剩余字节，`_Reader` 每次读取做截断检查，损坏文件给出中文 `ValueError` 而不是 OOM/`struct.error`；保存改为同目录 `.tmp` + `os.replace`，权限受限时自动回退到原来的直接覆盖，写到一半失败不再毁掉原文件。
+- **IK 回退与原生对齐**：NumPy 回退的 CCD 链接遍历改为与原生一致的「父→子逆序」，限位跳过阈值统一为 1e-6；真实模型（11.6 万顶点）两后端末态差从 **2.3e-2 降到约 1e-9**。
+- **高频设置落盘防抖**：亮度滑杆仍即时刷新视口/状态栏，配置文件按 80 ms 合并写入；打包版（冻结运行）配置改存 `%APPDATA%\PmxEditorModern\settings.json`，不再落在 `%TEMP%` 的解压目录。
+- **性能基准与 CI 冒烟**：修复 `tools/bench_perf.py` 缺失的刚体/关节叠加层方法；CI 在打包前增加 `compileall`、基准冒烟与 `verify_native_backend`（`tests/test_model.pmx`）三道门禁。
 
 ### 后续优化方向
 
@@ -444,7 +454,7 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
   --output-dir=dist\release --output-filename=PmxStudio.exe `
   --include-data-dir=assets=assets `
   --include-data-files=native/bullet_phys.dll=native/bullet_phys.dll `
-  --include-data-files=src/pmxeditor/_pmx_core.cp310-win_amd64.pyd=pmxeditor/_pmx_core.cp310-win_amd64.pyd `
+  --include-data-files=src/pmxeditor/_pmx_core.cp312-win_amd64.pyd=pmxeditor/_pmx_core.cp312-win_amd64.pyd `
   --include-module=pmxeditor._pmx_core --include-module=tools.verify_native_backend `
   --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
   --company-name="PmxStudio" --product-name="PmxStudio" `
@@ -457,10 +467,10 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 - 数据文件映射按包内布局写：`assets` 与 `native` 落在发行根目录，`_pmx_core*.pyd` 落在 `pmxeditor/` 内（`paths.py` 的 `_locate()` 会自动找到它们）。
 - 通过 PowerShell 传参时带空格的参数必须整体加引号（如 `'--company-name="My App Name"'`），否则 Nuitka 报 `specify only one positional argument`。
 - **onefile 每次启动都会把运行时解压到 `%TEMP%`**。若解压目录不可用（策略受限、残留被强杀进程占用的 `onefile_*`、路径异常），exe 会立即退出且不显示窗口，退出码 2。排查顺序：清理 `%TEMP%\onefile_*` → 把 `TEMP`/`TMP` 指向普通可写目录 → 用 `--onefile-tempdir-spec` 固定解压目录重建；冒烟脚本结束时按进程名清理子进程，否则解压目录会被长期占用。
-- CI 构建：`.github/workflows/build.yml` 在 `windows-latest` 上重复上述流程（拉取 Bullet 3.25 源码 → 编译 `bullet_phys.dll` → 编译原生后端 → Nuitka 打包），校验 exe 的 `ProductName`/`ProductVersion` 后作为构建产物上传；发布用的 exe 以该产物为准。
+- CI 构建：`.github/workflows/build.yml` 在 `windows-latest` 上重复上述流程（拉取 Bullet 3.25 源码 → 编译 `bullet_phys.dll` → 编译原生后端 → 语法检查 → 性能基准冒烟 → 原生/NumPy 对拍 → Nuitka 打包），校验 exe 的 `ProductName`/`ProductVersion` 后作为构建产物上传；发布用的 exe 以该产物为准。
 - 构建产物不入库：`dist/` 是构建时生成的输出目录（已在 `.gitignore` 里），仓库不保留 exe。发布前用上面的命令重新生成，再按下列方式验收：
   - 隔离环境（`PATH` 只留 `C:\Windows\System32` 等系统目录、私有 `TEMP`）启动 → 窗口正常、模型与贴图正常、骨骼叠加正常、stderr 为空；
-  - `PmxStudio.exe --verify-backend --runs 1 --out dist\be.json 模型.pmx` → 包内 `pmxeditor\_pmx_core.pyd` 被正确加载、10 项对拍出报告；其中第 3 条 IK 链的 `IK rotations` 差 1.25e-4（已知的源码级容差问题，见「已知限制与技术债」），因此整体 `ok=false`、退出码 1，其余 9 项均在容差内。
+  - `PmxStudio.exe --verify-backend --runs 1 --out dist\be.json tests\test_model.pmx` → 包内 `pmxeditor\_pmx_core.pyd` 被正确加载、26 项对拍出报告，整体 `ok=true`。IK 链接遍历顺序与限位阈值已与 NumPy 回退对齐，真实模型差异约 1e-9；「不限轮次」合成长链保留约 1.25e-4 的 float32 量化差（该项容差 2e-4 / 5e-4）。真实大模型上只剩 NumPy 回退的 `physics world` 约 1.1e-3（见「已知限制与技术债」）。
 - 上一次完整构建验收针对 `448af3c`（移除 VMD 与 SDEF 降级开关之前）；当前源码改动后需重新构建并复测。
 
 发布前检查：exe 复制到无关目录可独立启动、状态栏显示 `C++ / Bullet`、模型/贴图/物理库正常、VPD 导入导出回读一致、界面无缺字错位、记录对应源码版本。
@@ -482,7 +492,8 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 | 低 | `viewport/core.py` 仍是单文件（约 2.2k 行） | 渲染、拾取、HUD 仍耦合在同一个类里 | 继续拆 mixin 前先把回归场景按渲染/交互分组 |
 | 低 | 发行包尚未在无开发工具环境与其它 GPU 驱动上验收 | 目标机 DLL 搜索路径与 VC 运行库仍需确认 | 在目标环境执行发布检查清单 |
 | 低 | `tests/` 需要交互桌面 | CI 上需虚拟显示器（如 Xvfb / 远程会话）才能跑 GUI 场景 | 增加无头模式或用 Qt offscreen 平台跑纯逻辑场景 |
-| 低 | `verify_native_backend` 第 3 条 IK 链 `IK rotations` 差 1.25e-4，略超 1e-4 容差 | 打包后的 `--verify-backend` 整体 `ok=false`、退出码 1；CI 不以此作为门禁 | 定位 CCD 求解的浮点实现差异，或按项放宽容差 |
+| 低 | `verify_native_backend` 的「不限轮次」IK 用例仍有约 1.25e-4 量化差 | 原生用 float32、NumPy 参考用 float64，跑到合成链的 40 次迭代后累积；真实模型（11.6 万顶点）实测约 1e-9，属精度而非语义差异 | 该用例容差已按项设为 2e-4 / 5e-4；如需完全消除，可让参考解也按 float32 迭代 |
+| 低 | NumPy 回退的物理回写与原生不一致 | `verify_native_backend` 在 11.6 万顶点模型上 `physics world` 差约 1.1e-3（仅 `native_core` 缺失时的回退路径；原生路径不受影响） | 回退分支的骨骼覆盖/付与求值改为复用 `Pose` 的世界行计算 |
 
 ## 路线图
 
@@ -507,6 +518,11 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 
 ## 更新记录
 
+- **2026-10-25 迁移到 Python 3.12**：① 便携运行时由 CPython 3.10.9 重建为 **3.12.10**（约 251 MB，Nuitka / PyQt5 / NumPy 等一并内置），`make_portable_python.ps1` 改为按解释器版本拼 DLL 名并额外携带 NumPy 2.x 的 `numpy.libs`（OpenBLAS DLL，缺失时 `import numpy` 报 DLL load failed）；② `native/build_core.ps1` 新增 `-Python` 参数并优先使用仓库内 `build\python`，原生后端重建为 `_pmx_core.cp312-win_amd64.pyd`（旧的 cp310 产物已删除）；③ CI 的 `PYTHON_VERSION` 与 Nuitka 打包的 pyd 路径同步改为 3.12 / cp312；④ 回归：`verify_native_backend` 26/26、PMX 往返字节一致（含 11.6 万顶点真实模型，加载 0.054 s / 保存 0.036 s）、`skin/frame/morph_edit/vertex_edit/sel/config/view/menu` 与真实模型 `face_edit/softbody_edit` 全部 anomalies=0，`verify_vpd`、`bench_perf`、`compileall` 通过，`main.py --verify-backend` 输出 `ok=true`。3.12 移除标准库 `distutils` 不影响本项目：构建走 setuptools 的兼容层。
+- **2026-10-25 依赖升级与静态检查**：① `requirements.txt` 把 NumPy 1.23.1 升到 **2.2.6**（cp310 可用的最新版，2.3+ 要求 ≥3.11），pybind11 由 `>=2.11,<4` 收紧为 `3.0.4`；实测 11.6 万顶点真实模型加载 0.065 s / 保存 0.041 s、保存字节一致（2774 B 夹具与 8.4 MB 真实模型均逐字节相同），`verify_native_backend` 26/26、`skin/frame/morph_edit/vertex_edit/sel`、`verify_vpd`、`bench_perf` 全部通过。② 新增 `ruff.toml`（E4/E7/E9/F/B，忽略 E741/B905；`theme.py` 因 `globals().update()` 动态色板按文件忽略 F821）与 `requirements-dev.txt`（ruff 0.17.2、Pillow）；修掉 `tests/run.py` 缺失的 `dump` 导入，以及 `src`/`tools` 的未使用导入与局部变量、`vpd.py` 两处 B904（`raise ... from None`）；CI 增加非阻断的 ruff 步骤，pip 缓存同时覆盖两份 requirements。③ Python 3.10 的安全支持在 2026-10 底结束，3.12 迁移见上一条。
+
+- **2026-10-25 异常日志与面板列表去重**：① `main()` 安装 `sys.excepthook` / `threading.excepthook`，把未捕获异常追加到配置目录的 `PmxStudio.log`（超过 1 MB 轮换为 `.1`），打包版（无控制台）崩溃后仍能拿到堆栈；`--verify-backend` CLI 不受影响。② `PageBase` 新增 `_suspend()`、`_show_entries()`、`_show_empty()`、`_select_row()`、`_select_from_list()`，材质/面/物理/柔体/表示枠/形态/顶点/骨骼页的列表刷新、程序化选中与 loading 守卫统一收敛（`EntryList` 本身已屏蔽选中信号，不再重复包一层）；③ 顺带修正物理页刚体衰减被写成不存在的 `rb_damp`/`rb.damp`（应为 `rb_mdamp`/`rb_rdamp` 与 `mov_damp`/`rot_damp`），否则选中刚体会抛 `AttributeError`；④ 回归 `sel/sel2/sel6/click_rigid/frame/morph_edit/vertex_edit/softbody_edit/struct3/struct4/config/view/menu/inventory/optim` 全部 anomalies=0，`face_edit` 在真实模型上 0 异常。
+- **2026-10-25 性能与一致性专项**：① PMX 顶点块读写全面向量化，11.6 万顶点夹具加载 0.39 s → 0.06–0.10 s、保存 0.33–0.54 s → 0.04–0.06 s，107 个 PMX 的加载数组与保存字节逐一比对无差异；② 加载器补齐计数/截断/编码/索引宽度校验，损坏文件改抛中文 `ValueError`；③ 保存改为 `.tmp` + `os.replace` 原子替换，权限受限时回退直写；④ NumPy 回退的 IK 链接遍历改为与原生一致的逆序（父→子存储、子→父迭代），限位跳过阈值统一为 1e-6，真实模型两后端差从 2.3e-2 降到约 1e-9；`verify_native_backend` 仅对「不限轮次」合成长链保留 float32 量化差（容差按项设为 2e-4 / 5e-4）；⑤ 打包版配置改存 `%APPDATA%`（原落在 `%TEMP%` 解压目录），亮度滑杆写入按 80 ms 防抖；⑥ 修复 `tools/bench_perf.py` 缺失的刚体/关节叠加层方法，CI 新增 `compileall`、基准冒烟与原生对拍三步。
 - **2026-10-25 修复膝部鼓包（付与参考系）与物理叠加层跟随**：膝部鼓包的根因不在 Roll/坐标系，而在「非ローカル付与」取了**目标骨骼父级**的世界旋转。`膝` 这类骨骼的 `append_parent` 就是自己的父级，这样算出的相对旋转恒为单位阵，反向付与率 −0.75 完全失效（小腿弯 60° 时 `膝` 也转 60°，正确值应为 15°），膝周大片权重给到 `膝` 的顶点因此被过度拧转。改为按源骨骼**自身父级**求本地旋转（与 Blender `mmd_tools` 的 shadow-bone 语义一致），Python 与 `native/pmx_core.cpp` 同步修改并重建原生后端；新增回归场景 `append`（60° 弯曲时 `膝` 世界角 = 15.00°，native/NumPy 差 0）。另外，刚体/关节叠加层、视口拾取与「定位选中」现在使用**当前姿态/物理变换**而不是 PMX 静止坐标，整体移动或摆姿后标记不再留在原地；`bone = -1` 的无骨骼刚体（本模型的 8 个胸部物理体及其关节）按「子树最大的根骨骼」的整体增量跟随，不会掉队。
 - **2026-10-25 补齐「面」与「柔体」两个检查器页**：原版 PmxEditor 有「面」页（按材质把三角面重新分配）和 SoftBody 编辑，新版此前只能读写、不能编辑，属平铺比对里的两项能力差异（FA1/SB2）。新增 `panels/face.py`：材质列表显示三角面数，选源材质 / 起始面 / 数量 / 目标材质后「移动这些面」，`doc.reassign_faces()` 按材质顺序切分并重建扁平 `indices`，走结构编辑撤销栈；新增 `panels/soft.py`：柔体列表 + 新建/删除，编辑名称、形状、材质、所属组、16 位碰撞组、生成选项、质量/碰撞余量/气动模型、config/cluster/iteration/material_params 全部参数，以及锚点与固定点的增删。`PAGES` 增至 10 页（`RAIL_ORDER` 把「面」放在材质后、「柔体」放在物理后），`theme.make_icon` 新增两枚图标。比对复核：`FA1_cx` vs `FA1_mod`、`SB2_cx` vs `SB2_mod` 均 **0 差异**，总表变为 **42 项 = 36 一致 / 5 差异 / 1 单侧**；新增回归场景 `face_edit` / `softbody_edit`，`regress.py` 复核 anomalies=0。
 - **2026-10-25 同操作比对补完 ② 剩余三项**：新增面页材质重分配（FA1）、复制骨骼/材质（N3/N4）、PMX 2.1 柔体（SB1/SB2）共 5 条比对，总表 42 项 = 34 一致 / 7 差异 / 1 单侧（其中 FA1/SB2 的两项能力差异已由上一行补齐）。原版侧经 CSScript（`.cx`）定义语义，新增 `op_FA1/op_N3/op_N4/op_SB0/op_SB2` 样例与 `PARITY_MODEL/SUF` 支持；`SB0_cx.pmx` 由原版追加 1 个柔体后另存，作为 SB1/SB2 基座。副产物：`duplicate_material` 只复制 `face_count` 不复制面索引（材质面数之和大于索引总数），已修为连面一起复制，N4 两侧 0 差异。

@@ -73,6 +73,17 @@ PAIR = {"I3": ("I3_cx.pmx", "I3_mod.pmx"),
 
 
 def main():
+    # work/ 是本地方案产物（约 836 MB），不入库：没有它就先按 REPORT.md 重新生成，
+    # 避免在缺少夹具时把 compare_all.md 覆盖成 42 项「未双侧完成」。
+    if not os.path.exists(BASE):
+        raise SystemExit(
+            "缺少 tests/parity/work/00_orig.pmx。\n"
+            "work/ 是原版/新版两侧操作后的另存产物，不进版本库；请先在装有原版\n"
+            "PmxEditor（及 pywin32）的 Windows 环境按 tests/parity/REPORT.md 运行\n"
+            "  python tests/parity/side_orig.py <OP...>\n"
+            "  .\\build\\python\\python.exe tests/parity/side_mod.py <OP...>\n"
+            "  python tests/parity/cxop.py <OP>   # I3/FA1/N3/N4/SB2 的 .cx 通道\n"
+            "生成结果后再运行本脚本。")
     NOTE = {
         "E5": "（新版真正落盘，原版 UI 无效）",
         "S1": "（有意：新骨骼挂到原父 87，原版挂到前一根 99）",

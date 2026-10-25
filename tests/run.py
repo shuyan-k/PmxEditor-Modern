@@ -3,7 +3,7 @@
 import os, sys, json, time, traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
-from harness import log, anomaly, desc, click, pump, shot, STATE
+from harness import log, anomaly, desc, click, dump, pump, shot, STATE
 
 from PyQt5.QtCore import Qt, QPoint, QPointF, QTimer, QRect, QEvent
 from PyQt5.QtGui import QColor, QFontMetrics, QMouseEvent

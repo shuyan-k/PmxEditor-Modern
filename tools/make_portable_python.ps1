@@ -9,8 +9,8 @@ function Find-SourcePython {
     param([string]$Explicit)
     if ($Explicit) { return (Resolve-Path $Explicit).Path }
     $cand = @(
-        "D:\APP\Python\python.exe",
-        "C:\Python310\python.exe",
+        "D:\APP\Python312\python.exe",
+        "C:\Python312\python.exe",
         (Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     ) | Where-Object { $_ -and (Test-Path $_) }
     if (-not $cand) { throw "no python.exe found; pass -Source <path>" }
@@ -19,17 +19,18 @@ function Find-SourcePython {
 $srcExe = Find-SourcePython -Explicit $Source
 $srcRoot = Split-Path -Parent $srcExe
 $ver = & $srcExe -c "import sys;print('%d.%d'%sys.version_info[:2])"
-if ($ver -ne "3.10") { throw "need CPython 3.10 (native core is cp310), got $ver" }
+if ($ver -ne "3.12") { throw "need CPython 3.12 (native core is cp312), got $ver" }
+$verTag = $ver.Replace(".", "")   # 3.12 -> 312
 if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
 New-Item -ItemType Directory -Force $Dest | Out-Null
 Write-Host "source : $srcRoot ($ver)"
 Write-Host "dest   : $Dest"
 # 1) interpreter + runtime dlls
-foreach ($f in @("python.exe","pythonw.exe","python3.dll","python310.dll","vcruntime140.dll","vcruntime140_1.dll","LICENSE.txt")) {
+foreach ($f in @("python.exe","pythonw.exe","python3.dll","python$verTag.dll","vcruntime140.dll","vcruntime140_1.dll","LICENSE.txt")) {
     Copy-Item (Join-Path $srcRoot $f) $Dest -Force
 }
 # 2) stdlib without the heavy/unused parts
-# distutils 不能裁：Nuitka 的 anti-bloat 会 import numpy.distutils.misc_util。
+# 3.12 起标准库不再自带 distutils，setuptools 的 _distutils_hack 提供兼容层。
 $skipDirs = @("test","tests","idlelib","ensurepip","tkinter","turtledemo","lib2to3","venv","site-packages","__pycache__","Tools","tcl")
 & robocopy (Join-Path $srcRoot "Lib") (Join-Path $Dest "Lib") /E /NFL /NDL /NJH /NJS /NP /XD @skipDirs /XF *.pyc | Out-Null
 & robocopy (Join-Path $srcRoot "DLLs") (Join-Path $Dest "DLLs") /E /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -42,9 +43,11 @@ foreach ($d in @("include","libs")) {
 $sp = Join-Path $Dest "Lib\site-packages"
 New-Item -ItemType Directory -Force $sp | Out-Null
 $srcSp = Join-Path $srcRoot "Lib\site-packages"
-$pkgs = @("PyQt5","OpenGL","numpy","pybind11","setuptools","pkg_resources","_distutils_hack","pip",
+$pkgs = @("PyQt5","OpenGL","numpy","numpy.libs","pybind11","setuptools","pkg_resources","_distutils_hack","pip",
+          "nuitka","zstandard","zstandard.libs",
           "PyQt5-*.dist-info","PyQt5_Qt5-*.dist-info","pyqt5_sip-*.dist-info","pyopengl-*.dist-info",
-          "numpy-*.dist-info","pybind11-*.dist-info","setuptools-*.dist-info","pip-*.dist-info")
+          "numpy-*.dist-info","pybind11-*.dist-info","setuptools-*.dist-info","pip-*.dist-info",
+          "nuitka-*.dist-info","zstandard-*.dist-info")
 foreach ($p in $pkgs) {
     $items = @(Get-Item -Path (Join-Path $srcSp $p) -ErrorAction SilentlyContinue)
     foreach ($it in $items) {

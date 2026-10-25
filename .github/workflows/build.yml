@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.12"
   NUITKA_VERSION: "4.3.1"
   BULLET_TAG: "3.25"
 
@@ -22,12 +22,21 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt "nuitka==$env:NUITKA_VERSION"
+
+      # 静态检查仅供参考：规则集见 ruff.toml，偶发误报不阻断打包。
+      - name: Lint (ruff)
+        continue-on-error: true
+        run: |
+          python -m pip install -r requirements-dev.txt
+          ruff check src tools tests --output-format concise
 
       - name: Fetch Bullet sources
         run: |
@@ -41,6 +50,17 @@ jobs:
 
       - name: Build native compute backend
         run: powershell -ExecutionPolicy Bypass -File native\build_core.ps1
+
+      - name: Syntax check
+        run: python -m compileall -q src tools tests main.py
+
+      - name: Performance benchmark smoke test
+        run: python tools\bench_perf.py tests\test_model.pmx --runs 1
+
+      # 原生后端与 NumPy 参考路径的数值对拍（姿态/蒙皮/形态/物理，26 项）。
+      # tests/test_model.pmx 是仓库自带夹具，CI 不依赖 tests/parity/work。
+      - name: Verify native backend
+        run: python tools\verify_native_backend.py tests\test_model.pmx --in-process --runs 1
 
       - name: Prepare UI assets
         run: |
@@ -57,7 +77,7 @@ jobs:
             --output-dir=dist\release --output-filename=PmxStudio.exe `
             --include-data-dir=assets=assets `
             --include-data-files=native/bullet_phys.dll=native/bullet_phys.dll `
-            --include-data-files=src/pmxeditor/_pmx_core.cp310-win_amd64.pyd=pmxeditor/_pmx_core.cp310-win_amd64.pyd `
+            --include-data-files=src/pmxeditor/_pmx_core.cp312-win_amd64.pyd=pmxeditor/_pmx_core.cp312-win_amd64.pyd `
             --include-module=pmxeditor._pmx_core --include-module=tools.verify_native_backend `
             --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
             --company-name=PmxStudio --product-name=PmxStudio `

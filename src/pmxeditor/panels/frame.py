@@ -140,7 +140,7 @@ class FramePage(PageBase):
             self._refresh_list()
             if m and m.frames and not (0 <= self.idx < len(m.frames)):
                 self.idx = 0
-                self.list.select_data_index(0)
+                self._select_row(0)
             self._set_enabled(bool(m and 0 <= self.idx < len(m.frames)))
             self._fill()
         finally:
@@ -149,8 +149,7 @@ class FramePage(PageBase):
     def _refresh_list(self, *_):
         m = self.doc.model
         if not m:
-            self.list.empty_text = "未载入模型"
-            self.list.set_entries([])
+            self._show_empty()
             self._set_enabled(False)
             return
         kw = self.search.text().strip().lower()
@@ -165,25 +164,18 @@ class FramePage(PageBase):
                 "color": ACCENT if f.special else ACCENT_2,
                 "index": i,
             })
-        self.list.empty_text = "无匹配结果"
-        self.list.set_entries(entries, self.idx)
+        self._show_entries(entries)
 
     def select(self, kind: str, index: int):
         if kind != "frame":
             return
         self.idx = index
-        self.loading = True
-        try:
-            self.list.select_data_index(index)
-        finally:
-            self.loading = False
+        self._select_row(index)
         self._set_enabled(bool(self._frame()))
         self._fill()
 
     def _on_list(self, i):
-        if self.loading:
-            return
-        self.doc.select("frame", i)
+        self._select_from_list("frame", i)
 
     def _fill(self):
         m = self.doc.model

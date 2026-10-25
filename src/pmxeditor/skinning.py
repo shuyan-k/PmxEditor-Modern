@@ -733,7 +733,10 @@ class Pose:
                 if np.linalg.norm(goal - eff) < 1e-3:
                     break
                 moved = False
-                for link in links:
+                # PMX 的 IK 链接按「父→子」存储（如 足→ひざ），CCD 要从靠近
+                # 末端效应的子侧开始收缩，因此这里逆序遍历；与 native
+                # solver（pmx_core.cpp 的 link_end-1 → link_start）保持一致。
+                for link in reversed(links):
                     if link.limited and all(
                             abs(float(link.hi[k]) - float(link.lo[k])) < 1e-6
                             for k in range(3)):
@@ -772,7 +775,10 @@ class Pose:
                             self.ik_clamp_hits += 1
                             # 增量钳制：本轮的钳制结果与上一轮一致，说明这一轴
                             # 已经顶在限制上，继续累计只会来回抖动，直接放弃本轮。
-                            if prev is not None and euler_distance((cx, cy, cz), prev) < 1e-12:
+                            # 与 native 的 1e-6f 阈值保持一致：float32 下
+                            # 1e-12 实际等价于「完全相等」，会让回退实现比原生
+                            # 更少触发“顶在限位就跳过本轮”的分支。
+                            if prev is not None and euler_distance((cx, cy, cz), prev) < 1e-6:
                                 continue
                             self._ik_euler[link.bone] = (cx, cy, cz)
                             new_local = quat_to_mat(euler_to_quat(cx, cy, cz))
@@ -968,7 +974,6 @@ class SkinDeformer:
         nout = np.zeros_like(base_nrm)
         ev = self.entries_vi
         ew = self.entries_w
-        eb = self.entries_bone
         # 按骨骼批量处理，避免逐顶点 Python 循环
         for bi in range(len(self.offsets)):
             st, cnt = int(self.offsets[bi, 0]), int(self.offsets[bi, 1])
