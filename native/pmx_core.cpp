@@ -914,12 +914,19 @@ void compute_world_rows(
                     std::copy_n(rotations + source * 4, 4,
                                 source_rotation.begin());
                 } else {
+                    // 非ローカル付与：取「源骨骼相对其自身父级的本地旋转」。
+                    // 目标父级与源父级通常一致；但「膝」这类反向付与骨骼的
+                    // append_parent 就是自己的父级，用目标父级会恒为单位旋转。
+                    const int source_parent = parents[source];
+                    const float* source_parent_world =
+                        source_parent >= 0 && source_parent < bone_count
+                        ? world + source_parent * 16 : identity;
                     float relative[16] = {};
                     for (int row = 0; row < 3; ++row) {
                         for (int col = 0; col < 3; ++col) {
                             for (int k = 0; k < 3; ++k) {
                                 relative[row * 4 + col] +=
-                                    parent_world[k * 4 + row] *
+                                    source_parent_world[k * 4 + row] *
                                     world[source * 16 + k * 4 + col];
                             }
                         }

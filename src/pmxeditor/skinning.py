@@ -501,9 +501,14 @@ class Pose:
                         if b.flags & BF_LOCAL_APPEND:
                             q_src = self.rot[src]
                         else:
-                            # 付与源的世界旋转转换到当前骨骼的父空间
-                            Rs = W[src][:3, :3]
-                            q_src = mat_to_quat(Wp[:3, :3].T @ Rs)
+                            # 非ローカル付与：mmd_tools 的 shadow bone 复制「源骨骼
+                            # 相对其自身父骨骼的本地旋转」，而不是源相对目标父级。
+                            # 两者在常见 D 骨骼链上等价；但「膝」这类
+                            # append_parent == 自身父级的反向付与骨骼，用目标父级
+                            # 会恒等于单位旋转，导致膝部不反向补偿而鼓包。
+                            p_src = self.parent[src]
+                            Wp_src = W[p_src] if p_src >= 0 else eye4
+                            q_src = mat_to_quat(Wp_src[:3, :3].T @ W[src][:3, :3])
                         # 付与率允许为负（右肩C 等骨骼用 -1 表示反向旋转）
                         q = normalize_quat(quat_mul(
                             slerp_quat(IDENTITY_Q, q_src, ratio), q))
@@ -536,7 +541,12 @@ class Pose:
             b = bones[j]
             if (b.flags & (BF_INHERIT_ROT | BF_INHERIT_MOV)) \
                     and 0 <= b.append_parent < self.n:
-                stack.append(int(b.append_parent))
+                src = int(b.append_parent)
+                stack.append(src)
+                # 非ローカル付与要用「源骨骼的父级」求源骨骼的本地旋转，
+                # 这个父级也必须出现在 need 里（base 为空时不会被顺带算出）。
+                if not (b.flags & BF_LOCAL_APPEND) and self.parent[src] >= 0:
+                    stack.append(int(self.parent[src]))
         return self._world_rows(need)
 
     def changed_subtrees(self, changed) -> Set[int]:
