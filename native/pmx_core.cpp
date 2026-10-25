@@ -1421,7 +1421,7 @@ void physics_step(
 }
 
 PYBIND11_MODULE(_pmx_core, module) {
-    module.doc() = "PmxEditor Modern native compute backend";
+    module.doc() = "PmxStudio native compute backend";
     module.def("deform", &deform, "CPU skinning over zero-copy NumPy inputs");
     module.def("deform_subset", &deform_subset,
                "Incremental CPU skinning over zero-copy NumPy inputs");

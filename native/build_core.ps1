@@ -13,7 +13,7 @@ if (-not (Test-Path (Join-Path $PSScriptRoot "bullet_phys.lib"))) {
 
 $python = (Get-Command python.exe -ErrorAction Stop).Source
 $command = 'call "{0}" -no_logo -arch=amd64 -host_arch=amd64 && cd /d "{1}" && "{2}" setup_core.py build_ext --inplace' -f `
-    $vsDevCmd, $root, $python
+    $vsDevCmd, $PSScriptRoot, $python
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) {
     throw "pybind11 extension build failed with exit code $LASTEXITCODE"

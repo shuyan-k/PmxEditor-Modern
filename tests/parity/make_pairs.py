@@ -26,7 +26,7 @@ for op in OPS:
     d = ImageDraw.Draw(canvas)
     f = label(20)
     d.text((pad + 6, 6), "原版 PmxEditor — %s" % op, font=f, fill=(20, 20, 20))
-    d.text((pad * 2 + ia.width + 6, 6), "新版 PmxEditor_Modern — %s" % op, font=f, fill=(20, 20, 20))
+    d.text((pad * 2 + ia.width + 6, 6), "PmxStudio — %s" % op, font=f, fill=(20, 20, 20))
     d.line([(pad + ia.width + pad // 2, 0), (pad + ia.width + pad // 2, H + bar)], fill=(180, 180, 180), width=2)
     canvas.save(os.path.join(OUT, "%s_pair.png" % op))
     print("ok", op, canvas.size)

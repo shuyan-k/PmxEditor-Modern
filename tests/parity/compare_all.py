@@ -118,7 +118,7 @@ def main():
     summary = ("**共 %d 项：%d 项一致、%d 项差异、%d 项未双侧完成。**"
                % (len(ORDER), counts["一致"], counts["差异"], counts["未双侧完成"]))
 
-    out = ["# 原版 PmxEditor vs 新版 PmxEditor_Modern — 同操作语义比对总表", "",
+    out = ["# 原版 PmxEditor vs PmxStudio — 同操作语义比对总表", "",
            "基准模型：`KARU式Rabbit Hole MIKU.ver 1.6.pmx`（116036 顶点 / 204919 面 / 21 材质 / 168 骨骼 / 22 表情 / 10 贴图 / 82 刚体 / 74 关节）。"
            "柔体两项（SB1/SB2）的基座为 `SB0_cx.pmx`：由原版 .cx 在基准模型上追加 1 个柔体后另存，PMX 2.1。", "",
            "比对方式：两侧各自操作后「另存为」，再用 `pmxsem` 按 1e-5 容差逐字段比对两个另存文件。原版侧通常用真实鼠标键盘（GUI）；I3（IK 链）、FA1（面材质重分配）、N3/N4（复制骨骼/材质）、SB2（柔体参数）等原版无 GUI 入口或难以自动化的操作，改由 `tests/parity/cxop.py` 驱动原版自带 CSScript 插件（`.cx`）写入，落盘仍走 PmxEditor 自身的另存；其中 FA1 与 SB2 的新版侧已改为「面」页 / 「柔体」页的真实 GUI 操作。", "",

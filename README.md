@@ -1,4 +1,4 @@
-# PmxEditor Modern
+# PmxStudio
 
 用 **Python + PyQt5 + OpenGL + Bullet** 重写的 PMX 模型编辑器，目标是在保留 MMD 语义（付与、IK、物理、形态）的前提下，提供一个跨平台、可脚本化、可自动回归测试的 PMX 工具链。
 
@@ -66,7 +66,7 @@ python main.py "测试模型.pmx"
 ## 目录结构
 
 ```
-PmxEditor_Modern/
+PmxStudio/
 ├─ main.py                  # 启动入口：把 src 加入 sys.path 后调用 pmxeditor.app.main
 ├─ src/pmxeditor/           # 应用包（全部业务代码）
 │  ├─ app.py                # 主窗口、菜单、工具栏、物理开关、文件操作、主题切换
@@ -430,13 +430,13 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，否则报 failed to locate module 'pmxeditor._pmx_core'
 .\build\python\python.exe -m nuitka --standalone --onefile --enable-plugin=pyqt5 `
   --windows-console-mode=disable --msvc=latest --assume-yes-for-downloads `
-  --output-dir=dist\release --output-filename=PmxEditor_Modern.exe `
+  --output-dir=dist\release --output-filename=PmxStudio.exe `
   --include-data-dir=assets=assets `
   --include-data-files=native/bullet_phys.dll=native/bullet_phys.dll `
   --include-data-files=src/pmxeditor/_pmx_core.cp310-win_amd64.pyd=pmxeditor/_pmx_core.cp310-win_amd64.pyd `
   --include-module=pmxeditor._pmx_core --include-module=tools.verify_native_backend `
   --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
-  --company-name="PmxEditor Modern" --product-name="PmxEditor Modern" `
+  --company-name="PmxStudio" --product-name="PmxStudio" `
   --file-version=1.0.0.0 --product-version=1.0.0.0 main.py
 ```
 
@@ -444,11 +444,11 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 
 - 只打包实际用到的 OpenGL 子模块，`--include-package=OpenGL` 会把全部扩展塞进去。
 - 数据文件映射按包内布局写：`assets` 与 `native` 落在发行根目录，`_pmx_core*.pyd` 落在 `pmxeditor/` 内（`paths.py` 的 `_locate()` 会自动找到它们）。
-- 通过 PowerShell 传参时带空格的参数必须整体加引号（`'--company-name="PmxEditor Modern"'`），否则 Nuitka 报 `specify only one positional argument`。
+- 通过 PowerShell 传参时带空格的参数必须整体加引号（如 `'--company-name="My App Name"'`），否则 Nuitka 报 `specify only one positional argument`。
 - **onefile 每次启动都会把运行时解压到 `%TEMP%`**。若解压目录不可用（策略受限、残留被强杀进程占用的 `onefile_*`、路径异常），exe 会立即退出且不显示窗口，退出码 2。排查顺序：清理 `%TEMP%\onefile_*` → 把 `TEMP`/`TMP` 指向普通可写目录 → 用 `--onefile-tempdir-spec` 固定解压目录重建；冒烟脚本结束时按进程名清理子进程，否则解压目录会被长期占用。
 - 构建产物不入库：`dist/` 是构建时生成的输出目录（已在 `.gitignore` 里），仓库不保留 exe。发布前用上面的命令重新生成，再按下列方式验收：
   - 隔离环境（`PATH` 只留 `C:\Windows\System32` 等系统目录、私有 `TEMP`）启动 → 窗口正常、模型与贴图正常、骨骼叠加正常、stderr 为空；
-  - `PmxEditor_Modern.exe --verify-backend --runs 1 --out dist\be.json 模型.pmx` → 退出码 0、`ok=true`、26 项检查全过、包内 `pmxeditor\_pmx_core.pyd` 被正确加载。
+  - `PmxStudio.exe --verify-backend --runs 1 --out dist\be.json 模型.pmx` → 退出码 0、`ok=true`、26 项检查全过、包内 `pmxeditor\_pmx_core.pyd` 被正确加载。
 - 上一次完整构建验收针对 `448af3c`（移除 VMD 与 SDEF 降级开关之前）；当前源码改动后需重新构建并复测。
 
 发布前检查：exe 复制到无关目录可独立启动、状态栏显示 `C++ / Bullet`、模型/贴图/物理库正常、VPD 导入导出回读一致、界面无缺字错位、记录对应源码版本。

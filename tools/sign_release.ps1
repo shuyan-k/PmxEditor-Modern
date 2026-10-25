@@ -1,4 +1,4 @@
-# Sign the release exe: dist\release\PmxEditor_Modern.exe
+# Sign the release exe: dist\release\PmxStudio.exe
 #
 # Usage (repo root):
 #   powershell -ExecutionPolicy Bypass -File tools\sign_release.ps1
@@ -11,7 +11,7 @@
 # without BOM as ANSI and mangles non-ASCII text.
 [CmdletBinding()]
 param(
-    [string]$ExePath = "dist\release\PmxEditor_Modern.exe",
+    [string]$ExePath = "dist\release\PmxStudio.exe",
     [string]$PfxPath = "code_sign.pfx",
     [string]$Password,
     [string]$Subject = "CN=shuyan-k",

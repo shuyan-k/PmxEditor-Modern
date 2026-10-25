@@ -416,7 +416,7 @@ def _default_exe():
         path = Path(override)
         return path if path.is_file() else None
     dist = Path(__file__).resolve().parents[1] / "dist"
-    candidates = [path for path in dist.glob("release-*/PmxEditor_Modern.exe")
+    candidates = [path for path in dist.glob("release-*/PmxStudio.exe")
                   if path.is_file()]
     if not candidates:
         return None
@@ -445,7 +445,7 @@ def run_checks(model_path, runs):
     try:
         if core is None:
             raise RuntimeError(
-                "C++ backend unavailable; use the packaged PmxEditor_Modern.exe "
+                "C++ backend unavailable; use the packaged PmxStudio.exe "
                 "or build native\\build_core.ps1")
         model = load_pmx(str(model_path))
         report["model_info"] = {
@@ -489,7 +489,7 @@ def _print_report(report):
 
 def run_cli(argv=None, in_process=False, require_out=False):
     parser = argparse.ArgumentParser(
-        description="用打包后的 PmxEditor_Modern.exe 对拍 C++/NumPy 后端")
+        description="用打包后的 PmxStudio.exe 对拍 C++/NumPy 后端")
     parser.add_argument("model", type=Path)
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--out", type=Path, help="JSON 报告输出路径")
@@ -517,7 +517,7 @@ def run_cli(argv=None, in_process=False, require_out=False):
     if exe is None or not exe.is_file():
         if core is None:
             print("未找到打包后的程序，且当前解释器没有 C++ 后端。"
-                  "请用 --exe 指定包含对拍入口的 PmxEditor_Modern.exe。")
+                  "请用 --exe 指定包含对拍入口的 PmxStudio.exe。")
             return 2
         print("未找到打包后的程序，改在当前解释器内对拍。")
         return run_cli(argv, in_process=True, require_out=require_out)
