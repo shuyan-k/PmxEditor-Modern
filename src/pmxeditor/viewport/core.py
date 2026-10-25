@@ -16,7 +16,9 @@ from .. import gl_names
 from ..physics import MMDPhysics
 from ..pmx import (BF_ENABLED, BF_ROTATABLE, BF_TRANSLATABLE, BF_VISIBLE,
                    MF_DOUBLE_SIDED, MF_EDGE, SHAPE_NAMES)
-from ..skinning import (Pose, SkinDeformer, apply_vertex_morphs, active_ik_indices, material_morph_colors, resolve_morph_weights, transform_to_mat4)
+from ..skinning import (Pose, SkinDeformer, apply_vertex_morphs, active_ik_indices,
+                        material_morph_colors, resolve_morph_weights,
+                        transform_to_mat4, mat4_inverse)
 from ..theme import (ACCENT, BONE_RGB, GRID_MAJOR_RGB, GRID_MINOR_RGB, GRID_X_RGB, GRID_Z_RGB, GROUP_COLORS, RIGID_STATIC_RGB, TEX_MISS_BG, TEX_MISS_CELL, TEXT, TEXT_DIM, TEXT_FAINT, VIEW_BG_RGB, mono_font, ui_font)
 from .camera import OrbitCamera
 from .shaders import LINE_FS, LINE_VS, MESH_FS, MESH_VS, _compile
@@ -902,6 +904,10 @@ class Viewport(QOpenGLWidget):
         for k, v in kwargs.items():
             if hasattr(self, k):
                 setattr(self, k, bool(v))
+                if v and k == "show_rigid":
+                    self._rb_dirty = True
+                elif v and k == "show_joints":
+                    self._joint_dirty = True
         self.update()
 
     def frame_all(self):
@@ -1010,6 +1016,12 @@ class Viewport(QOpenGLWidget):
             self._skin_force_full = False
             self._skin_dirty_bones.clear()
         self._pose_dirty = False
+        # 刚体/关节叠加层挂在骨骼上，摆姿后要按新姿态重建；
+        # 隐藏时先记脏，等用户打开显示开关再建。
+        if self.show_rigid:
+            self._rb_dirty = True
+        if self.show_joints:
+            self._joint_dirty = True
 
     def _refresh_static_overlays(self):
         if self._rb_dirty:
@@ -1181,6 +1193,80 @@ class Viewport(QOpenGLWidget):
                              np.array([0.35, 0.6, 1.0], np.float32)))
         self._bone_geom = _line_geom(segs)
 
+    def _pose_delta_matrix(self, bone: int):
+        """骨骼从静止位置到当前姿态的 4×4 变换；无姿态或索引无效时返回 None。
+
+        刚体/关节在 PMX 里存的是静止世界坐标，但 MMD 语义上它们挂在骨骼上；
+        摆姿或整体位移后叠加层必须乘上同一个骨骼增量，否则会像"漂"在原地。
+        """
+        if self.pose is None or not self.model:
+            return None
+        if not (0 <= bone < len(self.model.bones)):
+            return None
+        world = self.pose.world()
+        if not (0 <= bone < len(world)):
+            return None
+        R = world[bone][:3, :3]
+        rest = np.asarray(self.model.bones[bone].pos, np.float32)
+        M = np.eye(4, dtype=np.float32)
+        M[:3, :3] = R
+        M[:3, 3] = world[bone][:3, 3] - R @ rest
+        return M
+
+    def _rigid_rest_matrix(self, index: int):
+        rb = self.model.rigid[index]
+        return transform_to_mat4(rb.pos, _deg_quat(rb.rot))
+
+    def _global_pose_delta(self):
+        """模型的整体姿态增量：取子树最大的根骨骼（通常是「全ての親」）。
+
+        没有关联骨骼的刚体（bone = -1，例如本模型的胸部物理体）在 MMD 里
+        不跟骨骼走；但编辑视口里整体平移/旋转模型时，它们也应当跟着模型走，
+        否则会像截图中那样留在原地。
+        """
+        if self.pose is None or not self.model or not self.model.bones:
+            return None
+        best, best_n = -1, 0
+        n = len(self.model.bones)
+        for i, b in enumerate(self.model.bones):
+            p = b.parent
+            if p < 0 or p >= n or p == i:
+                count = len(self.pose.subtrees[i])
+                if count > best_n:
+                    best, best_n = i, count
+        return self._pose_delta_matrix(best) if best >= 0 else None
+
+    def _rigid_current_matrix(self, index: int):
+        """刚体叠加层当前矩阵：物理演算中取模拟变换，否则跟随所属骨骼姿态。"""
+        index = int(index)
+        if self.physics.enabled and self.physics._ready \
+                and index < len(self.physics.body_map):
+            bi = self.physics.body_map[index]
+            if (bi >= 0 and index < len(self.physics._body_positions)
+                    and index < len(self.physics._body_rotations)):
+                return transform_to_mat4(
+                    self.physics._body_positions[index],
+                    self.physics._body_rotations[index])
+        M = self._rigid_rest_matrix(index)
+        rb = self.model.rigid[index]
+        if 0 <= rb.bone < len(self.model.bones):
+            D = self._pose_delta_matrix(rb.bone)
+        else:
+            # 无骨骼刚体：只跟随模型的整体变换（根骨骼增量）
+            D = self._global_pose_delta()
+        return M if D is None else D @ M
+
+    def _joint_current_matrix(self, index: int):
+        """关节跟随它引用的第一个刚体（无骨骼引用时退回第二个）。"""
+        j = self.model.joints[int(index)]
+        M = transform_to_mat4(j.pos, _deg_quat(j.rot))
+        for ri in (j.rigid_a, j.rigid_b):
+            if 0 <= ri < len(self.model.rigid):
+                D = (self._rigid_current_matrix(ri)
+                     @ mat4_inverse(self._rigid_rest_matrix(ri)))
+                return D @ M
+        return M
+
     def _build_rigid_lines(self):
         if self._perf_enabled:
             self._perf_stats["rigid_lines"] += 1
@@ -1191,16 +1277,7 @@ class Viewport(QOpenGLWidget):
         segs = []
         self._rb_world = []
         for i, rb in enumerate(m.rigid):
-            M = None
-            if self.physics.enabled and self.physics._ready and i < len(self.physics.body_map):
-                bi = self.physics.body_map[i]
-                if (bi >= 0 and i < len(self.physics._body_positions)
-                        and i < len(self.physics._body_rotations)):
-                    M = transform_to_mat4(
-                        self.physics._body_positions[i],
-                        self.physics._body_rotations[i])
-            if M is None:
-                M = transform_to_mat4(rb.pos, _deg_quat(rb.rot))
+            M = self._rigid_current_matrix(i)
             self._rb_world.append(M)
             color = QColor(GROUP_COLORS[rb.group % len(GROUP_COLORS)])
             col = np.array([color.redF(), color.greenF(), color.blueF()], np.float32)
@@ -1277,7 +1354,7 @@ class Viewport(QOpenGLWidget):
             return
         segs = []
         for i, j in enumerate(m.joints):
-            M = transform_to_mat4(j.pos, _deg_quat(j.rot))
+            M = self._joint_current_matrix(i)
             R = M[:3, :3]
             t = M[:3, 3]
             sel = (i == self.selection_index and self.selection_kind == "joint")
