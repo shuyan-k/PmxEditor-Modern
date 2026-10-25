@@ -24,8 +24,13 @@ foreach ($base in $candidates) {
 if (-not $vsDevCmd) {
     throw "Visual Studio (with C++ tools) not found; set VSINSTALLDIR or install VS2022 Build Tools"
 }
-if (-not (Test-Path (Join-Path $PSScriptRoot "bullet_phys.lib"))) {
-    throw "Missing native\bullet_phys.lib; build Bullet first."
+# build.ps1 把导入库写在 native\obj\ 下；老的本机构建可能在 native\ 根目录留一份，两处都接受。
+$libCandidates = @(
+    (Join-Path $PSScriptRoot "obj\bullet_phys.lib"),
+    (Join-Path $PSScriptRoot "bullet_phys.lib")
+)
+if (-not ($libCandidates | Where-Object { Test-Path $_ })) {
+    throw "Missing bullet_phys.lib in native\obj or native\; build Bullet first (native\build.ps1)."
 }
 
 $python = (Get-Command python.exe -ErrorAction Stop).Source
