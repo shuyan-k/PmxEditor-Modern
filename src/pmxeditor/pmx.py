@@ -46,6 +46,11 @@ MF_VERTEX_COLOR = 0x20
 MF_POINT = 0x40
 MF_LINE = 0x80
 
+# 柔体标志
+SB_BEND_LINK = 0x01        # 生成弯曲链接
+SB_CLUSTER = 0x02          # 生成簇
+SB_RANDOMIZE = 0x04        # 随机化约束
+
 SHAPE_NAMES = {0: "球", 1: "箱", 2: "胶囊"}
 SPHERE_MODE_NAMES = {0: "无", 1: "乘法 (sph)", 2: "加法 (spa)", 3: "子纹理"}
 RB_MODE_NAMES = {0: "骨骼跟随", 1: "物理演算", 2: "物理演算 + 骨骼对齐"}
@@ -1011,10 +1016,13 @@ def save_pmx(model: PMXModel, path: str):
             for vid in s.pins:
                 w.uindex(vid, vsz)
 
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
+    try:
+        f = open(path, "r+b")
+    except FileNotFoundError:
+        f = open(path, "wb")
+    with f:
+        f.truncate(0)
         f.write(w.buf)
-    os.replace(tmp, path)
 
     model.path = path
     model.version = version
