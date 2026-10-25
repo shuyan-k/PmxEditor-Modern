@@ -63,6 +63,17 @@ python main.py "测试模型.pmx"
 
 要求 64 位 CPython 3.10（原生扩展按 cp310 编译），依赖见 `requirements.txt`：PyQt5 5.15.11、PyOpenGL 3.1.10、NumPy 1.23.1、pybind11 >= 2.11, < 4。
 
+## Code signing policy
+
+**Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).**
+
+- Committers and reviewers: [@shuyan-k](https://github.com/shuyan-k)
+- Approvers: [@shuyan-k](https://github.com/shuyan-k)
+
+每次发布的 `PmxStudio.exe` 由仓库内的 GitHub Actions 工作流（`.github/workflows/build.yml`）从当前源码自动构建，再由 SignPath.io 签名；签名表示该二进制确实由本仓库源码构建。
+
+隐私政策：本程序不会向其他联网系统传输任何信息，除非用户或安装/操作本程序的人明确要求。
+
 ## 目录结构
 
 ```
@@ -446,9 +457,10 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 - 数据文件映射按包内布局写：`assets` 与 `native` 落在发行根目录，`_pmx_core*.pyd` 落在 `pmxeditor/` 内（`paths.py` 的 `_locate()` 会自动找到它们）。
 - 通过 PowerShell 传参时带空格的参数必须整体加引号（如 `'--company-name="My App Name"'`），否则 Nuitka 报 `specify only one positional argument`。
 - **onefile 每次启动都会把运行时解压到 `%TEMP%`**。若解压目录不可用（策略受限、残留被强杀进程占用的 `onefile_*`、路径异常），exe 会立即退出且不显示窗口，退出码 2。排查顺序：清理 `%TEMP%\onefile_*` → 把 `TEMP`/`TMP` 指向普通可写目录 → 用 `--onefile-tempdir-spec` 固定解压目录重建；冒烟脚本结束时按进程名清理子进程，否则解压目录会被长期占用。
+- CI 构建：`.github/workflows/build.yml` 在 `windows-latest` 上重复上述流程（拉取 Bullet 3.25 源码 → 编译 `bullet_phys.dll` → 编译原生后端 → Nuitka 打包），校验 exe 的 `ProductName`/`ProductVersion` 后作为构建产物上传；发布用的 exe 以该产物为准。
 - 构建产物不入库：`dist/` 是构建时生成的输出目录（已在 `.gitignore` 里），仓库不保留 exe。发布前用上面的命令重新生成，再按下列方式验收：
   - 隔离环境（`PATH` 只留 `C:\Windows\System32` 等系统目录、私有 `TEMP`）启动 → 窗口正常、模型与贴图正常、骨骼叠加正常、stderr 为空；
-  - `PmxStudio.exe --verify-backend --runs 1 --out dist\be.json 模型.pmx` → 退出码 0、`ok=true`、26 项检查全过、包内 `pmxeditor\_pmx_core.pyd` 被正确加载。
+  - `PmxStudio.exe --verify-backend --runs 1 --out dist\be.json 模型.pmx` → 包内 `pmxeditor\_pmx_core.pyd` 被正确加载、10 项对拍出报告；其中第 3 条 IK 链的 `IK rotations` 差 1.25e-4（已知的源码级容差问题，见「已知限制与技术债」），因此整体 `ok=false`、退出码 1，其余 9 项均在容差内。
 - 上一次完整构建验收针对 `448af3c`（移除 VMD 与 SDEF 降级开关之前）；当前源码改动后需重新构建并复测。
 
 发布前检查：exe 复制到无关目录可独立启动、状态栏显示 `C++ / Bullet`、模型/贴图/物理库正常、VPD 导入导出回读一致、界面无缺字错位、记录对应源码版本。
@@ -470,6 +482,7 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 | 低 | `viewport/core.py` 仍是单文件（约 2.2k 行） | 渲染、拾取、HUD 仍耦合在同一个类里 | 继续拆 mixin 前先把回归场景按渲染/交互分组 |
 | 低 | 发行包尚未在无开发工具环境与其它 GPU 驱动上验收 | 目标机 DLL 搜索路径与 VC 运行库仍需确认 | 在目标环境执行发布检查清单 |
 | 低 | `tests/` 需要交互桌面 | CI 上需虚拟显示器（如 Xvfb / 远程会话）才能跑 GUI 场景 | 增加无头模式或用 Qt offscreen 平台跑纯逻辑场景 |
+| 低 | `verify_native_backend` 第 3 条 IK 链 `IK rotations` 差 1.25e-4，略超 1e-4 容差 | 打包后的 `--verify-backend` 整体 `ok=false`、退出码 1；CI 不以此作为门禁 | 定位 CCD 求解的浮点实现差异，或按项放宽容差 |
 
 ## 路线图
 

@@ -1,0 +1,81 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.10"
+  NUITKA_VERSION: "4.3.1"
+  BULLET_TAG: "3.25"
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt "nuitka==$env:NUITKA_VERSION"
+
+      - name: Fetch Bullet sources
+        run: |
+          curl.exe -sSL -o "$env:RUNNER_TEMP\bullet.zip" "https://github.com/bulletphysics/bullet3/archive/refs/tags/$env:BULLET_TAG.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\bullet.zip" -DestinationPath "$env:RUNNER_TEMP\bullet" -Force
+          New-Item -ItemType Directory -Force native\bullet_src | Out-Null
+          Copy-Item -Recurse -Force "$env:RUNNER_TEMP\bullet\bullet3-$env:BULLET_TAG\src" native\bullet_src\src
+
+      - name: Build Bullet physics DLL
+        run: powershell -ExecutionPolicy Bypass -File native\build.ps1
+
+      - name: Build native compute backend
+        run: powershell -ExecutionPolicy Bypass -File native\build_core.ps1
+
+      - name: Prepare UI assets
+        run: |
+          python -c "import sys; sys.path.insert(0, 'src'); from pmxeditor import theme; theme.svg_assets()"
+          if ($LASTEXITCODE -ne 0) { Write-Warning "svg_assets() failed; icons are regenerated at first launch" }
+          if (-not (Test-Path assets)) { New-Item -ItemType Directory -Force assets | Out-Null }
+
+      - name: Package onefile executable
+        env:
+          PYTHONPATH: ${{ github.workspace }}\src
+        run: |
+          python -m nuitka --standalone --onefile --enable-plugin=pyqt5 `
+            --windows-console-mode=disable --msvc=latest --assume-yes-for-downloads `
+            --output-dir=dist\release --output-filename=PmxStudio.exe `
+            --include-data-dir=assets=assets `
+            --include-data-files=native/bullet_phys.dll=native/bullet_phys.dll `
+            --include-data-files=src/pmxeditor/_pmx_core.cp310-win_amd64.pyd=pmxeditor/_pmx_core.cp310-win_amd64.pyd `
+            --include-module=pmxeditor._pmx_core --include-module=tools.verify_native_backend `
+            --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
+            --company-name=PmxStudio --product-name=PmxStudio `
+            --file-description="PMX model editor" `
+            --file-version=1.0.0.0 --product-version=1.0.0.0 main.py
+
+      # SignPath metadata requirements: product name must match the project and
+      # product version must be identical across builds.
+      - name: Verify executable metadata
+        run: |
+          $vi = (Get-Item dist\release\PmxStudio.exe).VersionInfo
+          "ProductName=$($vi.ProductName) ProductVersion=$($vi.ProductVersion)"
+          if ($vi.ProductName -ne "PmxStudio") { throw "unexpected ProductName: $($vi.ProductName)" }
+          if ($vi.ProductVersion -ne "1.0.0.0") { throw "unexpected ProductVersion: $($vi.ProductVersion)" }
+          if (-not (Test-Path dist\release\PmxStudio.exe)) { throw "executable not produced" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PmxStudio-windows-x64
+          path: dist/release/PmxStudio.exe
+          if-no-files-found: error
