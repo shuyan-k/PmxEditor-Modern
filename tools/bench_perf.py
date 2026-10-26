@@ -28,12 +28,21 @@ class _OverlayProbe:
     _build_bone_lines_reference = Viewport._build_bone_lines_reference
     _build_rigid_lines = Viewport._build_rigid_lines
     _build_joint_lines = Viewport._build_joint_lines
-    _rigid_shape_segments = staticmethod(Viewport._rigid_shape_segments)
+    _pose_delta_from = Viewport._pose_delta_from
     _pose_delta_matrix = Viewport._pose_delta_matrix
     _rigid_rest_matrix = Viewport._rigid_rest_matrix
+    _rigid_rest_matrices = Viewport._rigid_rest_matrices
+    _rigid_rest_inverses = Viewport._rigid_rest_inverses
+    _joint_rest_matrices = Viewport._joint_rest_matrices
+    _global_pose_delta_from = Viewport._global_pose_delta_from
     _global_pose_delta = Viewport._global_pose_delta
     _rigid_current_matrix = Viewport._rigid_current_matrix
     _joint_current_matrix = Viewport._joint_current_matrix
+    _solid_mesh = Viewport._solid_mesh
+    _build_solid_template = Viewport._build_solid_template
+    _solid_static_geometry = Viewport._solid_static_geometry
+    _bone_solid_geometry = Viewport._bone_solid_geometry
+    _build_solid_geometry = Viewport._build_solid_geometry
 
     def __init__(self, model):
         self.model = model
@@ -41,8 +50,23 @@ class _OverlayProbe:
         self.selection_index = -1
         self.physics = SimpleNamespace(enabled=False, _ready=False, body_map=[])
         self._rb_world = []
+        self._joint_world = []
+        self._rb_dirty = False
         self._perf_enabled = False
         self._bone_static = None
+        self._rb_rest_cache = None
+        self._rb_rest_inv_cache = None
+        self._joint_rest_cache = None
+        self._solid_template = None
+        self._solid_tpl_dirty = True
+        self._solid_mesh_cache = {}
+        self._solid_geom = None
+        self.show_bones = True
+        self.show_rigid = True
+        self.show_joints = True
+        self.bone_opacity = 0.16
+        self.rigid_opacity = 0.22
+        self.joint_opacity = 0.33
         # 叠加层要乘上骨骼相对静止姿态的增量，视口的这套计算依赖 self.pose；
         # 基准只关心 CPU 几何，构造一个中性姿态即可，不涉及 GL 上下文。
         self.pose = Pose(model)
@@ -147,14 +171,21 @@ def run_benchmarks(model_path, runs):
     def solve_full():
         pose.solve_ik()
 
+    def solid_geometry():
+        # 完整叠加层：刚体/关节矩阵 → 批量变换实体网格 → 骨骼实体
+        probe._build_rigid_lines()
+        probe._build_joint_lines()
+        probe._build_solid_geometry()
+
     benchmarks = {
         "load": lambda: load_pmx(str(model_path)),
         "world_full": world_full,
         "deform_full": deform_full,
         "deform_subset": deform_subset,
         "bone_lines": lambda: probe._build_bone_lines(world),
-        "rigid_lines": lambda: probe._build_rigid_lines(),
-        "joint_lines": lambda: probe._build_joint_lines(),
+        "rigid_matrices": lambda: probe._build_rigid_lines(),
+        "joint_matrices": lambda: probe._build_joint_lines(),
+        "solid_geometry": solid_geometry,
         "solve_idle": solve_idle,
         "solve_drag_6": solve_drag,
         "solve_drag_3": solve_drag_3,

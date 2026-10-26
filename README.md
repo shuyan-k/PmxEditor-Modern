@@ -419,6 +419,16 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | 材质类编辑（改色/换贴图） | 约 58 ms（旧版 460 ms，其中重绘 419 ms） |
 | 整模型深拷贝 / 压一次撤销栈 | 18 ms / 18 ms（快速深拷贝前为 44 ms；形态偏移 dict 列表仍是最大项） |
 
+叠加层与物理（另一模型：`残虹.pmx` 98404 顶点 / 843 骨骼 / 718 刚体 / 930 关节，1141×782、4×MSAA、描边开）：
+
+| 项目 | 优化前 | 优化后 |
+| --- | --- | --- |
+| 脏帧 CPU（全量蒙皮 + 骨骼/刚体/关节全开） | 348.7 ms | **33.3 ms** |
+| 静态帧 CPU / GPU | 1.4 / 3.8 ms | 4.4 / 6.0 ms（实体叠加层；不含时约 2.5 / 5 ms） |
+| 物理演算 + 全部叠加层 | 2.9 FPS | **18.9 FPS** |
+| 约 1600 个叠加物体的几何装配 | 292.5 ms | **8.5 ms** |
+| 旧刚体线框（已删除） | 37.4 ms | 0 |
+
 ### 已落地的优化
 
 - 贴图缓存键改为 `(贴图路径, 是否球面)`，`set_model` 与 `refresh_textures` 不再整体清空缓存 —— 旧版每次结构/材质编辑都会重新解码 12 张贴图（单次约 290 ms）。
@@ -438,10 +448,11 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 - **IK 回退与原生对齐**：NumPy 回退的 CCD 链接遍历改为与原生一致的「父→子逆序」，限位跳过阈值统一为 1e-6；真实模型（11.6 万顶点）两后端末态差从 **2.3e-2 降到约 1e-9**。
 - **高频设置落盘防抖**：亮度滑杆仍即时刷新视口/状态栏，配置文件按 80 ms 合并写入；打包版（冻结运行）配置改存 `%APPDATA%\PmxEditorModern\settings.json`，不再落在 `%TEMP%` 的解压目录。
 - **性能基准与 CI 冒烟**：修复 `tools/bench_perf.py` 缺失的刚体/关节叠加层方法；CI 在打包前增加 `compileall`、基准冒烟与 `verify_native_backend`（`tests/test_model.pmx`）三道门禁。
+- **叠加层实体化后的 CPU 收尾**：刚体/关节已只用实体表示，删除旧线框的构建与绘制（-37 ms/帧）；实体几何改为「按（类别, 顶点数）分桶的局部模板 + 一次批量 matmul」，约 1600 个物体从 **292.5 → 8.5 ms**；模板只在显示开关/不透明度/选中变化时重建，物理帧里刚体矩阵先算一次供关节复用；物理每步改用 `deform_subset` 增量蒙皮。实测脏帧 **348.7 → 33.3 ms**，物理+全部叠加层 **2.9 → 18.9 FPS**，剩余 33 ms 中蒙皮占 11.6 ms（`_pmx_core` 原生路径，已是硬底）。
 
 ### 后续优化方向
 
-1. **姿态交互**：静态叠加层缓存、骨骼线向量化、鼠标事件合并、增量蒙皮均已落地（见上）；只有在实测仍超 20 ms/帧时才考虑 GPU 蒙皮或原生内核。
+1. **姿态交互**：静态叠加层缓存、骨骼线向量化、鼠标事件合并、增量蒙皮、叠加层批量变换均已落地（见上）；脏帧剩余 33 ms 中蒙皮 11.6 ms 是原生内核的硬底，除非降低物理 tick 频率或做 GPU 蒙皮，否则不会再有大改观。
 2. **结构编辑剩余开销**：一次结构编辑约 15 ms（物理世界已改惰性构建、页面已改懒刷新），大头是首帧重绘（83k 顶点 + 描边第二遍 + 4×MSAA，约 10–15 ms）与 `Pose`/`SkinDeformer` 重建；撤销约 35 ms，因为撤销后首帧同样要重绘。下一步可做物理世界增量更新，或把形态偏移换成 ndarray 以继续压缩撤销快照（当前 12.8 ms）。
 3. GPU/Vulkan 渲染路线的评估结论是**暂不迁移**：当前瓶颈在 CPU 侧几何准备，先按分项计时数据推进。
 
@@ -520,6 +531,10 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 3. 视需要把渲染几何准备迁到原生层（当前实测不需要）。
 
 ## 更新记录
+
+- **2026-10-26 叠加层 CPU 收尾（评估结论：暂不需要 GPU 优化）**：实测 `残虹.pmx`（98404 顶点 / 718 刚体 / 930 关节，1141×782、4×MSAA）静态帧 GPU 仅 3.8–8 ms，脏帧 CPU 348.7 ms——瓶颈全在 CPU。① 刚体已实体化，删除残留的刚体线框构建与绘制（-37 ms/帧）；② 实体几何改为「按（类别, 顶点数）分桶的局部模板 + 批量 `matmul`」，约 1600 个物体的每帧装配 **292.5 → 8.5 ms**（逐顶点 `einsum` 13.6 ms → 分桶 `matmul` 4.99 ms；`matmul` 比 `einsum` 快约 8 倍）；③ 模板只在显示开关/不透明度/选中/结构变化时重建，关节复用刚体当前矩阵（`_build_joint_lines` 先补一次 `_build_rigid_lines`）；④ 物理每步改用 `physics.dynamic_bones()` 做增量蒙皮（本模型动态刚体挂在根附近，子树覆盖 99%，会回落到全量）。结果：脏帧 **348.7 → 33.3 ms**，物理+全部叠加层 **2.9 → 18.9 FPS**，其中蒙皮 11.6 ms（`_pmx_core` 原生）是剩余硬底。`vp`/`fix2`/`mouse`/`overlay_pose`/`flagguard`/`physlive`/`bright` 全部 0 异常。
+
+- **2026-10-26 选中后才允许骨骼变换**：`_bone_drag_allowed()` 要求 `selection_kind == "bone"` 且索引一致，未选中时左键回落为旋转视角、右键回落为平移视角，并在状态栏提示「未选中」；`_begin_bone_drag` 不再隐式选中，悬停手型只对已选中骨骼显示。新增回归断言：未选中拖动骨骼姿态不变、相机 yaw 改变、状态栏出现提示。
 
 - **2026-10-25 迁移到 Python 3.12**：① 便携运行时由 CPython 3.10.9 重建为 **3.12.10**（约 251 MB，Nuitka / PyQt5 / NumPy 等一并内置），`make_portable_python.ps1` 改为按解释器版本拼 DLL 名并额外携带 NumPy 2.x 的 `numpy.libs`（OpenBLAS DLL，缺失时 `import numpy` 报 DLL load failed）；② `native/build_core.ps1` 新增 `-Python` 参数并优先使用仓库内 `build\python`，原生后端重建为 `_pmx_core.cp312-win_amd64.pyd`（旧的 cp310 产物已删除）；③ CI 的 `PYTHON_VERSION` 与 Nuitka 打包的 pyd 路径同步改为 3.12 / cp312；④ 回归：`verify_native_backend` 26/26、PMX 往返字节一致（含 11.6 万顶点真实模型，加载 0.054 s / 保存 0.036 s）、`skin/frame/morph_edit/vertex_edit/sel/config/view/menu` 与真实模型 `face_edit/softbody_edit` 全部 anomalies=0，`verify_vpd`、`bench_perf`、`compileall` 通过，`main.py --verify-backend` 输出 `ok=true`。3.12 移除标准库 `distutils` 不影响本项目：构建走 setuptools 的兼容层。
 - **2026-10-25 依赖升级与静态检查**：① `requirements.txt` 把 NumPy 1.23.1 升到 **2.2.6**（cp310 可用的最新版，2.3+ 要求 ≥3.11），pybind11 由 `>=2.11,<4` 收紧为 `3.0.4`；实测 11.6 万顶点真实模型加载 0.065 s / 保存 0.041 s、保存字节一致（2774 B 夹具与 8.4 MB 真实模型均逐字节相同），`verify_native_backend` 26/26、`skin/frame/morph_edit/vertex_edit/sel`、`verify_vpd`、`bench_perf` 全部通过。② 新增 `ruff.toml`（E4/E7/E9/F/B，忽略 E741/B905；`theme.py` 因 `globals().update()` 动态色板按文件忽略 F821）与 `requirements-dev.txt`（ruff 0.17.2、Pillow）；修掉 `tests/run.py` 缺失的 `dump` 导入，以及 `src`/`tools` 的未使用导入与局部变量、`vpd.py` 两处 B904（`raise ... from None`）；CI 增加非阻断的 ruff 步骤，pip 缓存同时覆盖两份 requirements。③ Python 3.10 的安全支持在 2026-10 底结束，3.12 迁移见上一条。

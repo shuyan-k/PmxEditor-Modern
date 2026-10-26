@@ -23,7 +23,7 @@ from ..theme import (ACCENT, BONE_RGB, GRID_MAJOR_RGB, GRID_MINOR_RGB, GRID_X_RG
 from .camera import OrbitCamera
 from .shaders import LINE_FS, LINE_VS, MESH_FS, MESH_VS, SOLID_FS, SOLID_VS, _compile
 from .geom import (_rigid_quat, _line_geom, _point_segment_dist, box_mesh,
-                   capsule_mesh, octahedron_mesh, sphere_mesh)
+                   capsule_mesh, sphere_mesh)
 from .hud import _HudOverlay
 
 
@@ -115,13 +115,10 @@ class Viewport(QOpenGLWidget):
         self._bone_geom = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32))
         self._bone_geom_r = None
         self._bone_static = None
-        self._rb_geom = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32))
-        self._joint_geom = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32))
+        # 刚体/关节不再画线框，只保留当前矩阵（_rb_world/_joint_world）
         self._vbo_lines = {}
-        self._line_counts = {"bone": 0, "rigid": 0, "joint": 0}
-        self._line_sizes = {
-            name: [0, 0] for name in ("bone", "rigid", "joint")
-        }
+        self._line_counts = {"bone": 0}
+        self._line_sizes = {"bone": [0, 0]}
         # 实体叠加层：所有可见的刚体/关节/选中骨骼合并成一个 VBO
         self._solid_geom = (np.zeros((0, 3), np.float32),
                             np.zeros((0, 3), np.float32),
@@ -131,7 +128,17 @@ class Viewport(QOpenGLWidget):
         self._solid_sizes = [0, 0, 0, 0]
         self._vbo_solid = None
         self._solid_mesh_cache = {}
+        # 刚体/关节的静止矩阵（含逆）与当前矩阵；静止矩阵随结构变化重建，
+        # 当前矩阵每帧更新，供实体叠加层批量变换使用
+        self._rb_rest_cache = None
+        self._rb_rest_inv_cache = None
+        self._joint_rest_cache = None
         self._rb_world = []
+        self._joint_world = []
+        # 叠加层静态部分（刚体+关节）的合并模板：显示开关/不透明度/选中/结构
+        # 不变时复用，避免每帧重复拼接顶点
+        self._solid_template = None
+        self._solid_tpl_dirty = True
         self._skin_pos = None
         self._skin_nrm = None
         self._skin_force_full = True
@@ -145,8 +152,8 @@ class Viewport(QOpenGLWidget):
         self._perf_stats = {
             "refresh_geometry": 0,
             "bone_lines": 0,
-            "rigid_lines": 0,
-            "joint_lines": 0,
+            "rigid_matrices": 0,
+            "joint_matrices": 0,
             "line_uploads": 0,
             "line_upload_bytes": 0,
             "solid_builds": 0,
@@ -268,14 +275,11 @@ class Viewport(QOpenGLWidget):
             GL.glDepthMask(GL.GL_FALSE)
             try:
                 self._draw_solids(mvp)
-                # 线框保持不透明，避免半透明线条在浅色模型上发灰
+                # 线框保持不透明，避免半透明线条在浅色模型上发灰。
+                # 刚体/关节已完全由实体表示，不再叠线框。
                 GL.glDisable(GL.GL_BLEND)
                 if self.show_bones and self._bone_geom[0].size:
                     self._draw_lines("bone", mvp, 0.5, width=1.1)
-                if self.show_rigid and self._rb_geom[0].size:
-                    self._draw_lines("rigid", mvp, 0.6, width=1.2)
-                if self.show_joints and self._joint_geom[0].size:
-                    self._draw_lines("joint", mvp, 0.7, width=1.2)
             finally:
                 GL.glDepthMask(GL.GL_TRUE)
                 GL.glEnable(GL.GL_DEPTH_TEST)
@@ -360,16 +364,17 @@ class Viewport(QOpenGLWidget):
         self._bone_geom = (np.zeros((0, 3), np.float32),
                            np.zeros((0, 3), np.float32))
         self._bone_geom_r = None
-        self._rb_geom = (np.zeros((0, 3), np.float32),
-                         np.zeros((0, 3), np.float32))
-        self._joint_geom = (np.zeros((0, 3), np.float32),
-                            np.zeros((0, 3), np.float32))
+        self._rb_world = []
+        self._solid_template = None
+        self._solid_tpl_dirty = True
+        self._rb_rest_cache = None
+        self._rb_rest_inv_cache = None
+        self._joint_rest_cache = None
         self._solid_geom = (np.zeros((0, 3), np.float32),
                             np.zeros((0, 3), np.float32),
                             np.zeros((0, 4), np.float32),
                             np.zeros((0,), np.int32))
         self._solid_count = 0
-        self._rb_world = []
         self._tex_cache.clear()
         self._tick.stop()
         try:
@@ -631,7 +636,18 @@ class Viewport(QOpenGLWidget):
         self._pose_dirty = True
         self._rb_dirty = True
         self._joint_dirty = True
+        self._reset_overlay_caches()
         self._mark_full_skin_dirty()
+
+    def _reset_overlay_caches(self):
+        """结构/显示状态变化后丢弃叠加层的派生缓存（静止矩阵与合并模板）。"""
+        self._rb_rest_cache = None
+        self._rb_rest_inv_cache = None
+        self._joint_rest_cache = None
+        self._solid_template = None
+        self._solid_tpl_dirty = True
+        self._rb_world = []
+        self._joint_world = []
 
     def _mark_full_skin_dirty(self):
         self._skin_force_full = True
@@ -646,13 +662,20 @@ class Viewport(QOpenGLWidget):
             self._mark_full_skin_dirty()
 
     def _mark_selection_geometry_dirty(self, *kinds):
+        # 选中会改颜色/高亮尺寸；实体层整体重建需要走一次 _refresh_geometry，
+        # 所以这里统一把 _pose_dirty 也置上（骨骼额外换了高亮几何）。
         for kind in kinds:
             if kind == "bone":
                 self._pose_dirty = True
             elif kind == "rigid":
                 self._rb_dirty = True
+                # 选中刚体会改颜色与高亮半径，合并模板需要重建
+                self._solid_tpl_dirty = True
             elif kind == "joint":
                 self._joint_dirty = True
+                self._solid_tpl_dirty = True
+        if kinds:
+            self._pose_dirty = True
 
     def _prepare_bone_cache(self):
         model = self.model
@@ -839,6 +862,8 @@ class Viewport(QOpenGLWidget):
         self._pose_dirty = True
         self._rb_dirty = True
         self._joint_dirty = True
+        # 刚体/关节参数改动会影响静止矩阵，缓存必须作废
+        self._reset_overlay_caches()
         self._mark_full_skin_dirty()
         self.update()
 
@@ -854,7 +879,10 @@ class Viewport(QOpenGLWidget):
                           self.morph_weights, self.model.morphs)
         self._pose_dirty = True
         self._rb_dirty = True
-        self._mark_full_skin_dirty()
+        self._joint_dirty = True
+        # 物理只覆盖动态刚体所在的骨骼；按这些骨骼的子树做增量蒙皮，
+        # 避免每步全量重算 8 万个顶点。
+        self._mark_incremental_skin_dirty(self.physics.dynamic_bones())
         self.update()
 
     def reset_pose(self):
@@ -957,6 +985,7 @@ class Viewport(QOpenGLWidget):
         # 实体层按当前可见集合整体重建，关闭任一开关也必须刷新，
         # 否则隐藏的刚体/关节/骨骼实体还会残留在叠加层里。
         if overlay_changed:
+            self._solid_tpl_dirty = True
             self._pose_dirty = True
         self.update()
 
@@ -1072,20 +1101,21 @@ class Viewport(QOpenGLWidget):
             self._skin_dirty_bones.clear()
         self._pose_dirty = False
         # 刚体/关节叠加层挂在骨骼上，摆姿后要按新姿态重建；
-        # 隐藏时先记脏，等用户打开显示开关再建。
-        if self.show_rigid:
+        # 隐藏时先记脏，等用户打开显示开关再建。关节依赖刚体矩阵，
+        # 只显示关节时也要一并刷新刚体。
+        if self.show_rigid or self.show_joints:
             self._rb_dirty = True
         if self.show_joints:
             self._joint_dirty = True
 
     def _refresh_static_overlays(self):
+        # 刚体/关节只用实体表示：这里仅刷新它们跟随骨骼/物理后的当前矩阵，
+        # 实体几何在 _build_solid_geometry 里批量生成，不再维护线框。
         if self._rb_dirty:
             self._build_rigid_lines()
-            self._upload_line_geom("rigid", self._rb_geom)
             self._rb_dirty = False
         if self._joint_dirty:
             self._build_joint_lines()
-            self._upload_line_geom("joint", self._joint_geom)
             self._joint_dirty = False
 
     def _solve_ik(self, max_loops: int = 0, only: Optional[Set[int]] = None):
@@ -1279,18 +1309,9 @@ class Viewport(QOpenGLWidget):
                              np.array([0.35, 0.6, 1.0], np.float32)))
         self._bone_geom = _line_geom(segs)
 
-    def _pose_delta_matrix(self, bone: int):
-        """骨骼从静止位置到当前姿态的 4×4 变换；无姿态或索引无效时返回 None。
-
-        刚体/关节在 PMX 里存的是静止世界坐标，但 MMD 语义上它们挂在骨骼上；
-        摆姿或整体位移后叠加层必须乘上同一个骨骼增量，否则会像"漂"在原地。
-        """
-        if self.pose is None or not self.model:
-            return None
-        if not (0 <= bone < len(self.model.bones)):
-            return None
-        world = self.pose.world()
-        if not (0 <= bone < len(world)):
+    def _pose_delta_from(self, world, bone: int):
+        """从给定 world 缓存算骨骼的静止→当前变换，供批量更新共用。"""
+        if world is None or not self.model or not (0 <= bone < len(world)):
             return None
         R = world[bone][:3, :3]
         rest = np.asarray(self.model.bones[bone].pos, np.float32)
@@ -1299,18 +1320,54 @@ class Viewport(QOpenGLWidget):
         M[:3, 3] = world[bone][:3, 3] - R @ rest
         return M
 
+    def _pose_delta_matrix(self, bone: int):
+        """骨骼从静止位置到当前姿态的 4×4 变换；无姿态或索引无效时返回 None。
+
+        刚体/关节在 PMX 里存的是静止世界坐标，但 MMD 语义上它们挂在骨骼上；
+        摆姿或整体位移后叠加层必须乘上同一个骨骼增量，否则会像"漂"在原地。
+        """
+        if self.pose is None:
+            return None
+        return self._pose_delta_from(self.pose.world(), bone)
+
     def _rigid_rest_matrix(self, index: int):
         rb = self.model.rigid[index]
         return transform_to_mat4(rb.pos, _rigid_quat(rb.rot))
 
-    def _global_pose_delta(self):
+    def _rigid_rest_matrices(self):
+        """刚体静止矩阵缓存；结构/刚体参数变化时由 _reset_overlay_caches 作废。"""
+        cache = self._rb_rest_cache
+        rigid = self.model.rigid
+        if cache is None or len(cache) != len(rigid):
+            cache = [self._rigid_rest_matrix(i) for i in range(len(rigid))]
+            self._rb_rest_cache = cache
+        return cache
+
+    def _rigid_rest_inverses(self):
+        cache = self._rb_rest_inv_cache
+        rigid = self.model.rigid
+        if cache is None or len(cache) != len(rigid):
+            cache = [mat4_inverse(M) for M in self._rigid_rest_matrices()]
+            self._rb_rest_inv_cache = cache
+        return cache
+
+    def _joint_rest_matrices(self):
+        cache = self._joint_rest_cache
+        joints = self.model.joints
+        if cache is None or len(cache) != len(joints):
+            cache = [transform_to_mat4(j.pos, _rigid_quat(j.rot))
+                     for j in joints]
+            self._joint_rest_cache = cache
+        return cache
+
+    def _global_pose_delta_from(self, world):
         """模型的整体姿态增量：取子树最大的根骨骼（通常是「全ての親」）。
 
         没有关联骨骼的刚体（bone = -1，例如本模型的胸部物理体）在 MMD 里
         不跟骨骼走；但编辑视口里整体平移/旋转模型时，它们也应当跟着模型走，
         否则会像截图中那样留在原地。
         """
-        if self.pose is None or not self.model or not self.model.bones:
+        if world is None or self.pose is None or not self.model or not self.model.bones:
             return None
         best, best_n = -1, 0
         n = len(self.model.bones)
@@ -1320,161 +1377,137 @@ class Viewport(QOpenGLWidget):
                 count = len(self.pose.subtrees[i])
                 if count > best_n:
                     best, best_n = i, count
-        return self._pose_delta_matrix(best) if best >= 0 else None
+        return self._pose_delta_from(world, best) if best >= 0 else None
+
+    def _global_pose_delta(self):
+        if self.pose is None:
+            return None
+        return self._global_pose_delta_from(self.pose.world())
 
     def _rigid_current_matrix(self, index: int):
         """刚体叠加层当前矩阵：物理演算中取模拟变换，否则跟随所属骨骼姿态。"""
         index = int(index)
-        if self.physics.enabled and self.physics._ready \
-                and index < len(self.physics.body_map):
-            bi = self.physics.body_map[index]
-            if (bi >= 0 and index < len(self.physics._body_positions)
-                    and index < len(self.physics._body_rotations)):
+        physics = self.physics
+        if physics.enabled and physics._ready \
+                and index < len(physics.body_map):
+            bi = physics.body_map[index]
+            if (bi >= 0 and index < len(physics._body_positions)
+                    and index < len(physics._body_rotations)):
                 return transform_to_mat4(
-                    self.physics._body_positions[index],
-                    self.physics._body_rotations[index])
-        M = self._rigid_rest_matrix(index)
+                    physics._body_positions[index],
+                    physics._body_rotations[index])
+        M = self._rigid_rest_matrices()[index]
         rb = self.model.rigid[index]
+        world = self.pose.world() if self.pose else None
         if 0 <= rb.bone < len(self.model.bones):
-            D = self._pose_delta_matrix(rb.bone)
+            D = self._pose_delta_from(world, rb.bone)
         else:
             # 无骨骼刚体：只跟随模型的整体变换（根骨骼增量）
-            D = self._global_pose_delta()
+            D = self._global_pose_delta_from(world)
         return M if D is None else D @ M
 
     def _joint_current_matrix(self, index: int):
         """关节跟随它引用的第一个刚体（无骨骼引用时退回第二个）。"""
-        j = self.model.joints[int(index)]
-        M = transform_to_mat4(j.pos, _rigid_quat(j.rot))
+        index = int(index)
+        m = self.model
+        j = m.joints[index]
+        M = self._joint_rest_matrices()[index]
+        inv = self._rigid_rest_inverses()
         for ri in (j.rigid_a, j.rigid_b):
-            if 0 <= ri < len(self.model.rigid):
-                D = (self._rigid_current_matrix(ri)
-                     @ mat4_inverse(self._rigid_rest_matrix(ri)))
-                return D @ M
+            if 0 <= ri < len(m.rigid):
+                if not self._rb_dirty and ri < len(self._rb_world):
+                    cur = self._rb_world[ri]
+                else:
+                    cur = self._rigid_current_matrix(ri)
+                return (cur @ inv[ri]) @ M
         return M
 
     def _build_rigid_lines(self):
+        """刷新刚体当前矩阵（实体叠加层用）；刚体已不再画线框。
+
+        名字保留是因为测试/基准按它取矩阵。逐对象调用 _rigid_current_matrix
+        在 700+ 刚体时会有数十毫秒的 Python 开销，这里按骨骼增量缓存，
+        每个刚体只做一次矩阵乘。
+        """
         if self._perf_enabled:
-            self._perf_stats["rigid_lines"] += 1
+            self._perf_stats["rigid_matrices"] += 1
         m = self.model
         if not m or not m.rigid:
-            self._rb_geom = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32))
+            self._rb_world = []
             return
-        segs = []
-        self._rb_world = []
+        rests = self._rigid_rest_matrices()
+        physics = self.physics
+        world = self.pose.world() if self.pose else None
+        simulate = (physics.enabled and physics._ready
+                    and len(physics.body_map) >= len(m.rigid)
+                    and len(physics._body_positions) >= len(m.rigid)
+                    and len(physics._body_rotations) >= len(m.rigid))
+        deltas = {}
+        global_delta = None
+        out = []
         for i, rb in enumerate(m.rigid):
-            M = self._rigid_current_matrix(i)
-            self._rb_world.append(M)
-            color = QColor(GROUP_COLORS[rb.group % len(GROUP_COLORS)])
-            col = np.array([color.redF(), color.greenF(), color.blueF()], np.float32)
-            sel = i == self.selection_index and self.selection_kind == "rigid"
-            if sel:
-                col = np.array([0.31, 0.72, 1.0], np.float32)
-            elif rb.mode == 0:
-                col = np.array(RIGID_STATIC_RGB, np.float32)
-            if sel:
-                segs.extend(self._rigid_shape_segments(rb, M, col))
-                segs.extend(self._axis_segments(
-                    M[:3, 3], M[:3, :3], 0.5,
-                    np.array(((0.92, 0.34, 0.34), (0.4, 0.88, 0.5),
-                              (0.35, 0.6, 1.0)), np.float32),
-                    both=True, arrow=True))
+            if simulate and physics.body_map[i] >= 0:
+                out.append(transform_to_mat4(
+                    physics._body_positions[i],
+                    physics._body_rotations[i]))
+                continue
+            bone = rb.bone
+            if 0 <= bone < len(m.bones):
+                if bone in deltas:
+                    D = deltas[bone]
+                else:
+                    D = self._pose_delta_from(world, bone)
+                    deltas[bone] = D
             else:
-                t = M[:3, 3]
-                R = M[:3, :3]
-                d = 0.22
-                for k in range(3):
-                    v = np.eye(3, dtype=np.float32)[k] * d
-                    segs.append((tuple(t - R @ v), tuple(t + R @ v), col))
-        self._rb_geom = _line_geom(segs)
-
-    @staticmethod
-    def _axis_segments(t, R, length, colors, both=False, arrow=True):
-        """带箭头的局部坐标轴；用于选中刚体和关节的朝向提示。"""
-        segs = []
-        perps = ((1, 2), (0, 2), (0, 1))
-        eye = np.eye(3, dtype=np.float32)
-        for k in range(3):
-            col = np.asarray(colors[k] if np.ndim(colors) > 1 else colors,
-                             np.float32)
-            for sign in ((1.0, -1.0) if both else (1.0,)):
-                v = R @ eye[k] * (length * sign)
-                tip = t + v
-                segs.append((tuple(t), tuple(tip), col))
-                if not arrow:
-                    continue
-                back = tip - v * 0.22
-                for p in perps[k]:
-                    off = R @ (eye[p] * 0.07)
-                    segs.append((tuple(back + off), tuple(tip), col * 0.85))
-                    segs.append((tuple(back - off), tuple(tip), col * 0.85))
-        return segs
-
-    @staticmethod
-    def _rigid_shape_segments(rb, M, col):
-        segs = []
-        sx, sy, sz = rb.size
-        R = M[:3, :3]
-        t = M[:3, 3]
-
-        def pt(x, y, z):
-            return tuple(t + R @ np.array([x, y, z], np.float32))
-
-        if rb.shape == 0:
-            r = abs(sx)
-            for axis in (0, 1, 2):
-                ring = []
-                for k in range(17):
-                    a = k * math.pi * 2 / 16
-                    if axis == 0:
-                        ring.append(pt(0, math.cos(a) * r, math.sin(a) * r))
-                    elif axis == 1:
-                        ring.append(pt(math.cos(a) * r, 0, math.sin(a) * r))
-                    else:
-                        ring.append(pt(math.cos(a) * r, math.sin(a) * r, 0))
-                for k in range(16):
-                    segs.append((ring[k], ring[k + 1], col))
-        elif rb.shape == 1:
-            hx, hy, hz = abs(sx), abs(sy), abs(sz)
-            corners = [pt(x, y, z) for x in (-hx, hx) for y in (-hy, hy) for z in (-hz, hz)]
-            edges = [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3),
-                     (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)]
-            for a, b in edges:
-                segs.append((corners[a], corners[b], col))
-        else:
-            # PMX 胶囊的 sy 是圆柱段高度，总长为 sy + 2r
-            r = abs(sx)
-            hh = abs(sy) * 0.5
-            for yy in (-hh, hh):
-                ring = []
-                for k in range(17):
-                    a = k * math.pi * 2 / 16
-                    ring.append(pt(math.cos(a) * r, yy, math.sin(a) * r))
-                for k in range(16):
-                    segs.append((ring[k], ring[k + 1], col))
-            for k in (0, 4, 8, 12):
-                a = k * math.pi * 2 / 16
-                x, z = math.cos(a) * r, math.sin(a) * r
-                segs.append((pt(x, -hh, z), pt(x, hh, z), col))
-        return segs
+                if global_delta is None:
+                    global_delta = self._global_pose_delta_from(world)
+                D = global_delta
+            out.append(rests[i] if D is None else D @ rests[i])
+        self._rb_world = out
 
     def _build_joint_lines(self):
+        """刷新关节的当前矩阵（实体球用）；关节已不再画线框。"""
         if self._perf_enabled:
-            self._perf_stats["joint_lines"] += 1
-        # 关节只用实体球表示：不再画坐标轴、包围盒或弹簧螺旋线，
-        # 弹簧关节与普通关节通过球体颜色区分。
-        self._joint_geom = (np.zeros((0, 3), np.float32),
-                            np.zeros((0, 3), np.float32))
+            self._perf_stats["joint_matrices"] += 1
+        m = self.model
+        if not m or not m.joints:
+            self._joint_world = []
+            return
+        rests = self._joint_rest_matrices()
+        inv = self._rigid_rest_inverses()
+        rigid = m.rigid
+        rb_world = self._rb_world
+        stale = self._rb_dirty or len(rb_world) != len(rigid)
+        if stale and rigid:
+            # 关节依赖刚体当前矩阵：先补一次，避免每个关节重复算
+            self._build_rigid_lines()
+            rb_world = self._rb_world
+            stale = len(rb_world) != len(rigid)
+        out = []
+        for i, j in enumerate(m.joints):
+            M = rests[i]
+            for ri in (j.rigid_a, j.rigid_b):
+                if 0 <= ri < len(rigid):
+                    cur = (self._rigid_current_matrix(ri) if stale
+                           else rb_world[ri])
+                    M = (cur @ inv[ri]) @ M
+                    break
+            out.append(M)
+        self._joint_world = out
 
     # ------------------------------------------------------------ 实体叠加
     def _solid_mesh(self, shape, sx, sy, sz):
-        """按尺寸缓存局部网格，摆姿拖动时只做矩阵变换，不重复建几何。"""
+        """按尺寸缓存局部网格，摆姿拖动时只做矩阵变换，不重复建几何。
+
+        叠加层每帧都要批量变换所有顶点，细分度直接决定 CPU 开销；
+        刚体和关节都是几厘米的小物件，用低细分球/胶囊即可，肉眼看不出差别。
+        """
         if shape == 0:
             r = max(0.004, abs(float(sx)))
             key = (0, round(r, 6))
             cached = self._solid_mesh_cache.get(key)
             if cached is None:
-                cached = sphere_mesh(r, 16, 10)
+                cached = sphere_mesh(r, 12, 6)
                 self._solid_mesh_cache[key] = cached
             return cached
         if shape == 1:
@@ -1490,53 +1523,53 @@ class Viewport(QOpenGLWidget):
         key = (2, round(r, 6), round(height, 6))
         cached = self._solid_mesh_cache.get(key)
         if cached is None:
-            cached = capsule_mesh(r, height, 16, 4)
+            cached = capsule_mesh(r, height, 12, 3)
             self._solid_mesh_cache[key] = cached
         return cached
 
-    def _build_solid_geometry(self):
+    def _build_solid_template(self):
+        """刚体 + 关节的合并局部模板（含颜色与槽位）。
+
+        显示开关/不透明度/选中项不变时这份模板可以一直复用；每帧只做
+        一次批量矩阵变换，不再逐个对象调用 numpy 小数组。
+        """
         m = self.model
-        empty = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32),
-                 np.zeros((0, 4), np.float32), np.zeros((0,), np.int32))
+        self._solid_template = None
         if not m:
-            self._solid_geom = empty
-            return
-        parts_pos, parts_nrm, parts_col, parts_idx = [], [], [], []
-        offset = 0
+            return None
         accent = QColor(ACCENT)
         accent_rgb = (accent.redF(), accent.greenF(), accent.blueF())
+        selected = self.selection_index
+        # 同形状的刚体顶点数一致，按（类别, 顶点数）分桶后每个桶可以做成
+        # 一个 (物体数, 顶点数, 3) 的三维数组，批量变换只需几次 einsum。
+        buckets = {}
+        order = []
 
-        def add(mesh, M, rgb, alpha):
-            nonlocal offset
+        def append(mesh, rgb, alpha, slot):
             p, n, idx = mesh
             if not len(idx):
                 return
-            M = np.asarray(M, np.float32)
-            R = M[:3, :3]
-            world_pos = p @ R.T + M[:3, 3]
-            world_nrm = n @ R.T
-            lengths = np.linalg.norm(world_nrm, axis=1)
-            world_nrm /= np.maximum(1e-6, lengths)[:, None]
-            color = np.tile(
-                np.array([rgb[0], rgb[1], rgb[2], alpha], np.float32),
-                (len(p), 1))
-            parts_pos.append(world_pos.astype(np.float32, copy=False))
-            parts_nrm.append(world_nrm.astype(np.float32, copy=False))
-            parts_col.append(color)
-            parts_idx.append((idx + offset).astype(np.int32, copy=False))
-            offset += len(p)
+            key = (slot[0], len(p))
+            bucket = buckets.get(key)
+            if bucket is None:
+                bucket = {"pos": [], "nrm": [], "col": [], "slots": [],
+                          "idx": [], "count": len(p)}
+                buckets[key] = bucket
+                order.append(key)
+            bucket["pos"].append(p)
+            bucket["nrm"].append(n)
+            bucket["col"].append((rgb[0], rgb[1], rgb[2], alpha))
+            bucket["slots"].append(slot)
+            bucket["idx"].append(idx)
 
-        selected = self.selection_index
         rigid_op = float(self.rigid_opacity)
         if self.show_rigid and m.rigid and rigid_op > 0.0:
-            order = [i for i in range(len(m.rigid))
-                     if not (i == selected and self.selection_kind == "rigid")]
+            order_rigid = [i for i in range(len(m.rigid))
+                           if not (i == selected and self.selection_kind == "rigid")]
             if 0 <= selected < len(m.rigid) and self.selection_kind == "rigid":
-                order.append(selected)
-            for i in order:
+                order_rigid.append(selected)
+            for i in order_rigid:
                 rb = m.rigid[i]
-                M = (self._rb_world[i] if i < len(self._rb_world)
-                     else self._rigid_current_matrix(i))
                 sel = i == selected and self.selection_kind == "rigid"
                 if sel:
                     rgb, alpha = accent_rgb, min(1.0, rigid_op + 0.3)
@@ -1546,85 +1579,208 @@ class Viewport(QOpenGLWidget):
                     color = QColor(GROUP_COLORS[rb.group % len(GROUP_COLORS)])
                     rgb = (color.redF(), color.greenF(), color.blueF())
                     alpha = rigid_op
-                add(self._solid_mesh(rb.shape, *rb.size), M, rgb, alpha)
+                append(self._solid_mesh(rb.shape, *rb.size), rgb, alpha,
+                       ("rigid", i))
 
         joint_op = float(self.joint_opacity)
         if self.show_joints and m.joints and joint_op > 0.0:
-            order = [i for i in range(len(m.joints))
-                     if not (i == selected and self.selection_kind == "joint")]
+            order_joint = [i for i in range(len(m.joints))
+                           if not (i == selected and self.selection_kind == "joint")]
             if 0 <= selected < len(m.joints) and self.selection_kind == "joint":
-                order.append(selected)
-            for i in order:
+                order_joint.append(selected)
+            for i in order_joint:
                 j = m.joints[i]
                 sel = i == selected and self.selection_kind == "joint"
                 radius = 0.055 if sel else 0.048
-                mesh = self._solid_mesh(0, radius, radius, radius)
-                M = self._joint_current_matrix(i)
                 if sel:
                     rgb, alpha = accent_rgb, min(1.0, joint_op + 0.32)
                 elif j.type == 1:
                     rgb, alpha = (0.62, 0.72, 0.95), joint_op
                 else:
                     rgb, alpha = (0.95, 0.72, 0.33), joint_op
-                add(mesh, M, rgb, alpha)
+                append(self._solid_mesh(0, radius, radius, radius),
+                       rgb, alpha, ("joint", i))
 
-        # 骨骼也用低透明度实体，保留线框轮廓；选中骨骼高亮，
-        # 是否可操作 / IK / 付与后仍在颜色上可区分。
-        if self.show_bones and self.pose and m.bones and self.bone_opacity > 0.0:
-            bone_op = float(self.bone_opacity)
-            world = self.pose.world()
-            for i, b in enumerate(m.bones):
-                if not (b.flags & 0x0008):
-                    continue
-                if not (0 <= i < len(world)):
-                    continue
-                head = world[i][:3, 3]
-                if (b.flags & 0x0001) and 0 <= b.tail_bone < len(m.bones):
-                    tail = world[b.tail_bone][:3, 3]
-                else:
-                    tail = head + np.asarray(b.tail_offset, np.float32)
-                direction = tail - head
-                length = float(np.linalg.norm(direction))
-                if length < 1e-5:
-                    direction = np.array([0.0, 1.0, 0.0], np.float32)
-                    length = 0.4
-                    tail = head + direction * length
-                sel = i == selected and self.selection_kind == "bone"
-                if sel:
-                    rgb, alpha = accent_rgb, min(1.0, bone_op + 0.29)
-                else:
-                    if b.flags & 0x0020:
-                        rgb = (0.98, 0.75, 0.35)
-                    elif b.flags & 0x1000:
-                        rgb = (0.35, 0.85, 0.78)
-                    else:
-                        rgb = BONE_RGB
-                    alpha = bone_op
-                side = world[i][:3, 0].copy()
-                up2 = world[i][:3, 2].copy()
-                if (np.linalg.norm(side) < 1e-6
-                        or np.linalg.norm(up2) < 1e-6):
-                    d = direction / max(1e-6, length)
-                    up = np.array([0.0, 1.0, 0.0], np.float32)
-                    if abs(float(d[1])) > 0.98:
-                        up = np.array([0.0, 0.0, 1.0], np.float32)
-                    side = np.cross(d, up)
-                    up2 = np.cross(side, d)
-                side /= max(1e-6, float(np.linalg.norm(side)))
-                up2 /= max(1e-6, float(np.linalg.norm(up2)))
-                width = max(0.008, length * (0.05 if sel else 0.035))
-                mesh = octahedron_mesh(head, tail, side, up2, width)
-                add(mesh, np.eye(4, dtype=np.float32), rgb, alpha)
+        if not order:
+            return None
+        groups = []
+        pos_parts, nrm_parts, col_parts, idx_parts, slots = [], [], [], [], []
+        vbase = 0
+        for key in order:
+            bucket = buckets[key]
+            n = bucket["count"]
+            rows = len(bucket["pos"])
+            pos = np.concatenate(bucket["pos"], axis=0).astype(np.float32, copy=False)
+            nrm = np.concatenate(bucket["nrm"], axis=0).astype(np.float32, copy=False)
+            cols = np.asarray(bucket["col"], np.float32)
+            idx = np.concatenate([a + k * n
+                                  for k, a in enumerate(bucket["idx"])])
+            pos_parts.append(pos)
+            nrm_parts.append(nrm)
+            col_parts.append(np.repeat(cols, n, axis=0))
+            idx_parts.append(idx.astype(np.int32, copy=False) + vbase)
+            groups.append({
+                "n": n,
+                "start": vbase,
+                "body": np.arange(len(slots), len(slots) + rows, dtype=np.int32),
+            })
+            slots.extend(bucket["slots"])
+            vbase += len(pos)
 
-        if not parts_pos:
+        self._solid_template = {
+            "groups": groups,
+            "pos": np.concatenate(pos_parts, axis=0),
+            "nrm": np.concatenate(nrm_parts, axis=0),
+            "col": np.concatenate(col_parts, axis=0),
+            "idx": np.concatenate(idx_parts, axis=0),
+            "slots": slots,
+        }
+        return self._solid_template
+
+    def _solid_static_geometry(self):
+        """按模板批量变换刚体/关节；每帧只做一次 gather + einsum。"""
+        if self._solid_tpl_dirty or self._solid_template is None:
+            self._build_solid_template()
+            self._solid_tpl_dirty = False
+        tpl = self._solid_template
+        if not tpl:
+            return None
+        rb_world = self._rb_world
+        joint_world = self._joint_world
+        mats = []
+        for kind, i in tpl["slots"]:
+            if kind == "rigid":
+                mats.append(rb_world[i] if i < len(rb_world)
+                            else self._rigid_current_matrix(i))
+            else:
+                mats.append(joint_world[i] if i < len(joint_world)
+                            else self._joint_current_matrix(i))
+        M = np.stack(mats).astype(np.float32, copy=False)
+        tpl_pos = tpl["pos"]
+        tpl_nrm = tpl["nrm"]
+        out_pos = np.empty_like(tpl_pos)
+        out_nrm = np.empty_like(tpl_nrm)
+        for g in tpl["groups"]:
+            Mb = M[g["body"]]
+            R = Mb[:, :3, :3]
+            t = Mb[:, :3, 3]
+            n = g["n"]
+            a = g["start"]
+            b = a + n * len(g["body"])
+            P = tpl_pos[a:b].reshape(-1, n, 3)
+            N = tpl_nrm[a:b].reshape(-1, n, 3)
+            # 用 matmul（BLAS 批量乘）比 einsum 快约 8 倍；点按 (3, n) 转置传入
+            out_pos[a:b] = (np.matmul(R, P.transpose(0, 2, 1)).transpose(0, 2, 1)
+                            + t[:, None, :]).reshape(-1, 3)
+            nr = np.matmul(R, N.transpose(0, 2, 1)).transpose(0, 2, 1)
+            nr /= np.maximum(np.linalg.norm(nr, axis=2), 1e-6)[..., None]
+            out_nrm[a:b] = nr.reshape(-1, 3)
+        return out_pos, out_nrm, tpl["col"], tpl["idx"]
+
+    def _bone_solid_geometry(self):
+        """骨骼实体（低透明度八面体）：整批向量化，避免逐骨骼建几何。"""
+        m = self.model
+        static = self._bone_static
+        if not (self.show_bones and self.pose and m and m.bones
+                and self.bone_opacity > 0.0 and static
+                and static["indices"].size):
+            return None
+        world = self.pose.world()
+        indices = static["indices"]
+        if not (0 <= int(indices.max()) < len(world)):
+            return None
+        heads = world[indices, :3, 3].copy()
+        tails = heads + static["tail_offsets"]
+        use_tail = static["tail_bones"] >= 0
+        if use_tail.any():
+            tails[use_tail] = world[static["tail_bones"][use_tail], :3, 3]
+        directions = tails - heads
+        lengths = np.linalg.norm(directions, axis=1)
+        degenerate = lengths < 1e-5
+        if degenerate.any():
+            directions[degenerate] = (0.0, 1.0, 0.0)
+            lengths[degenerate] = 0.4
+            tails[degenerate] = heads[degenerate] + 0.4 * np.array(
+                [0.0, 1.0, 0.0], np.float32)
+        side = world[indices, :3, 0].copy()
+        up2 = world[indices, :3, 2].copy()
+        bad = ((np.linalg.norm(side, axis=1) < 1e-6)
+               | (np.linalg.norm(up2, axis=1) < 1e-6))
+        if bad.any():
+            d = directions[bad] / np.maximum(1e-6, lengths[bad])[:, None]
+            up = np.tile(np.array([0.0, 1.0, 0.0], np.float32), (int(bad.sum()), 1))
+            near_y = np.abs(d[:, 1]) > 0.98
+            up[near_y] = (0.0, 0.0, 1.0)
+            s = np.cross(d, up)
+            s /= np.maximum(np.linalg.norm(s, axis=1), 1e-6)[:, None]
+            u = np.cross(s, d)
+            u /= np.maximum(np.linalg.norm(u, axis=1), 1e-6)[:, None]
+            side[bad] = s
+            up2[bad] = u
+        side /= np.maximum(np.linalg.norm(side, axis=1), 1e-6)[:, None]
+        up2 /= np.maximum(np.linalg.norm(up2, axis=1), 1e-6)[:, None]
+
+        sel = np.zeros(len(indices), bool)
+        if self.selection_kind == "bone" and 0 <= self.selection_index < len(m.bones):
+            sel = indices == self.selection_index
+        width = np.maximum(0.008, lengths * np.where(sel, 0.05, 0.035))
+        width = width.astype(np.float32)
+        side_w = side * width[:, None]
+        up_w = up2 * width[:, None]
+        mid = heads + (tails - heads) * 0.22
+        ring = np.stack((mid + side_w, mid + up_w,
+                         mid - side_w, mid - up_w), axis=1)      # (N,4,3)
+        nxt = np.roll(ring, -1, axis=1)
+        head_b = np.broadcast_to(heads[:, None, :], ring.shape)
+        tail_b = np.broadcast_to(tails[:, None, :], nxt.shape)
+        tris = np.stack((
+            np.stack((head_b, ring, nxt), axis=2),
+            np.stack((tail_b, nxt, ring), axis=2),
+        ), axis=1)                                              # (N,2,4,3,3)
+        tri_pos = tris.reshape(-1, 3, 3)
+        face = np.cross(tri_pos[:, 1] - tri_pos[:, 0],
+                        tri_pos[:, 2] - tri_pos[:, 0])
+        face /= np.maximum(np.linalg.norm(face, axis=1), 1e-9)[:, None]
+        pos = tri_pos.reshape(-1, 3).astype(np.float32, copy=False)
+        nrm = np.repeat(face, 3, axis=0).astype(np.float32, copy=False)
+        idx = np.arange(len(pos), dtype=np.int32)
+
+        accent = QColor(ACCENT)
+        accent_rgb = np.array([accent.redF(), accent.greenF(), accent.blueF()],
+                              np.float32)
+        bone_op = float(self.bone_opacity)
+        rgb = np.tile(np.array(BONE_RGB, np.float32), (len(indices), 1))
+        rgb[static["after_physics"]] = (0.35, 0.85, 0.78)
+        rgb[static["ik"]] = (0.98, 0.75, 0.35)
+        rgb[sel] = accent_rgb
+        alpha = np.full(len(indices), bone_op, np.float32)
+        alpha[sel] = min(1.0, bone_op + 0.29)
+        color = np.concatenate((rgb, alpha[:, None]), axis=1)
+        col = np.repeat(color, 24, axis=0).astype(np.float32, copy=False)
+        return pos, nrm, col, idx
+
+    def _build_solid_geometry(self):
+        m = self.model
+        empty = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32),
+                 np.zeros((0, 4), np.float32), np.zeros((0,), np.int32))
+        if not m:
             self._solid_geom = empty
             return
-        self._solid_geom = (
-            np.concatenate(parts_pos, axis=0),
-            np.concatenate(parts_nrm, axis=0),
-            np.concatenate(parts_col, axis=0),
-            np.concatenate(parts_idx, axis=0),
-        )
+        parts = []
+        static = self._solid_static_geometry()
+        if static is not None:
+            parts.append(static)
+        bones = self._bone_solid_geometry()
+        if bones is not None:
+            parts.append(bones)
+        if not parts:
+            self._solid_geom = empty
+            return
+        if len(parts) == 1:
+            self._solid_geom = parts[0]
+        else:
+            self._solid_geom = tuple(
+                np.concatenate([p[k] for p in parts], axis=0) for k in range(4))
         if self._perf_enabled:
             self._perf_stats["solid_builds"] += 1
 
@@ -2091,11 +2247,10 @@ class Viewport(QOpenGLWidget):
             self._perf_stats["line_uploads"] += 1
 
     def _ensure_line_vbos(self):
-        for name in ("bone", "rigid", "joint"):
-            if name not in self._vbo_lines:
-                self._vbo_lines[name] = (
-                    GL.glGenBuffers(1), GL.glGenBuffers(1)
-                )
+        if "bone" not in self._vbo_lines:
+            self._vbo_lines["bone"] = (
+                GL.glGenBuffers(1), GL.glGenBuffers(1)
+            )
 
     def _paint_hud_done(self):
         """GL 场景绘制结束后刷新文字层（文字由子控件用 raster 引擎绘制）。"""

@@ -102,6 +102,21 @@ class MMDPhysics:
         self._ready = False
 
     # ------------------------------------------------------------ 构建
+    def dynamic_bones(self):
+        """物理会覆盖的骨骼集合（动态刚体挂在骨骼上的那些）。
+
+        每步都全量重算蒙皮很贵；视口用这份集合做增量蒙皮，只更新受影响的
+        骨骼子树。
+        """
+        out = set()
+        for i, bi in enumerate(self.body_map):
+            if bi < 0 or i >= len(self.modes) or self.modes[i] != 0:
+                continue
+            bone = self.bone_of_body[i]
+            if bone >= 0:
+                out.add(bone)
+        return out
+
     def build(self, model) -> bool:
         self.release()
         self.model = model
