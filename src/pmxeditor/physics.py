@@ -110,7 +110,8 @@ class MMDPhysics:
         """
         out = set()
         for i, bi in enumerate(self.body_map):
-            if bi < 0 or i >= len(self.modes) or self.modes[i] != 0:
+            # mode 0 是「骨骼跟随」的运动学体；其余才是物理演算接管骨骼的
+            if bi < 0 or i >= len(self.modes) or self.modes[i] == 0:
                 continue
             bone = self.bone_of_body[i]
             if bone >= 0:

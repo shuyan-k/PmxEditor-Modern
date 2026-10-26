@@ -4525,7 +4525,7 @@ def scen_overlay_pose():
     d = float(_np.linalg.norm(after - before))
     if abs(d - 1.5) > 1e-4:
         anomaly("overlay-rigid", "刚体标记位移 %.4f != 1.5" % d)
-    if vp._rb_world and float(_np.linalg.norm(vp._rb_world[0][:3, 3] - after)) > 1e-4:
+    if len(vp._rb_world) and float(_np.linalg.norm(vp._rb_world[0][:3, 3] - after)) > 1e-4:
         anomaly("overlay-build", "叠加层几何没有跟随当前姿态")
     if jb is not None:
         ja = vp._joint_current_matrix(0)[:3, 3]

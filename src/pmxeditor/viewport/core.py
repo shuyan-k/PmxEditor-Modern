@@ -119,26 +119,32 @@ class Viewport(QOpenGLWidget):
         self._vbo_lines = {}
         self._line_counts = {"bone": 0}
         self._line_sizes = {"bone": [0, 0]}
-        # 实体叠加层：所有可见的刚体/关节/选中骨骼合并成一个 VBO
-        self._solid_geom = (np.zeros((0, 3), np.float32),
-                            np.zeros((0, 3), np.float32),
-                            np.zeros((0, 4), np.float32),
-                            np.zeros((0,), np.int32))
+        # 实体叠加层：刚体/关节（静态部分）与骨骼分成两段独立缓冲，
+        # 静态部分只重传变化的行，骨骼段每帧重传（数据量很小）
+        self._solid_parts = []
+        self._solid_vbo_parts = []
         self._solid_count = 0
-        self._solid_sizes = [0, 0, 0, 0]
-        self._vbo_solid = None
+        self._solid_attr_sig = None
+        self._solid_attr_sig_uploaded = None
+        self._solid_tpl_serial = 0
         self._solid_mesh_cache = {}
         # 刚体/关节的静止矩阵（含逆）与当前矩阵；静止矩阵随结构变化重建，
         # 当前矩阵每帧更新，供实体叠加层批量变换使用
         self._rb_rest_cache = None
         self._rb_rest_inv_cache = None
         self._joint_rest_cache = None
-        self._rb_world = []
-        self._joint_world = []
-        # 叠加层静态部分（刚体+关节）的合并模板：显示开关/不透明度/选中/结构
-        # 不变时复用，避免每帧重复拼接顶点
+        # 上面三份静止矩阵的 numpy 堆叠版 + 骨骼绑定/全局根，供批量计算复用
+        self._overlay_arrays_cache = None
+        self._rb_world = np.zeros((0, 4, 4), np.float32)
+        self._joint_world = np.zeros((0, 4, 4), np.float32)
+        # 上一帧到这一帧真正发生变化的物体：实体层只重算这些
+        self._rb_changed = None
+        self._joint_changed = None
+        # 叠加层静态部分（刚体+关节）的合并模板与持久输出缓冲
         self._solid_template = None
         self._solid_tpl_dirty = True
+        self._solid_out_pos = None
+        self._solid_out_nrm = None
         self._skin_pos = None
         self._skin_nrm = None
         self._skin_force_full = True
@@ -231,6 +237,10 @@ class Viewport(QOpenGLWidget):
             raise
         # 新上下文里的纹理 id 全部失效，缓存必须清空（键为路径，重绘时会重新上传）
         self._tex_cache.clear()
+        # 缓冲对象 id 同样随上下文失效，实体叠加层要重新分配并全量上传
+        self._solid_parts = []
+        self._solid_vbo_parts = []
+        self._solid_attr_sig_uploaded = None
         self._build_grid()
         self._ensure_line_vbos()
         self._upload_mesh()
@@ -364,16 +374,19 @@ class Viewport(QOpenGLWidget):
         self._bone_geom = (np.zeros((0, 3), np.float32),
                            np.zeros((0, 3), np.float32))
         self._bone_geom_r = None
-        self._rb_world = []
+        self._overlay_arrays_cache = None
+        self._rb_world = np.zeros((0, 4, 4), np.float32)
+        self._joint_world = np.zeros((0, 4, 4), np.float32)
+        self._rb_changed = None
+        self._joint_changed = None
         self._solid_template = None
         self._solid_tpl_dirty = True
+        self._solid_out_pos = None
+        self._solid_out_nrm = None
         self._rb_rest_cache = None
         self._rb_rest_inv_cache = None
         self._joint_rest_cache = None
-        self._solid_geom = (np.zeros((0, 3), np.float32),
-                            np.zeros((0, 3), np.float32),
-                            np.zeros((0, 4), np.float32),
-                            np.zeros((0,), np.int32))
+        self._solid_parts = []
         self._solid_count = 0
         self._tex_cache.clear()
         self._tick.stop()
@@ -644,10 +657,15 @@ class Viewport(QOpenGLWidget):
         self._rb_rest_cache = None
         self._rb_rest_inv_cache = None
         self._joint_rest_cache = None
+        self._overlay_arrays_cache = None
         self._solid_template = None
         self._solid_tpl_dirty = True
-        self._rb_world = []
-        self._joint_world = []
+        self._solid_out_pos = None
+        self._solid_out_nrm = None
+        self._rb_changed = None
+        self._joint_changed = None
+        self._rb_world = np.zeros((0, 4, 4), np.float32)
+        self._joint_world = np.zeros((0, 4, 4), np.float32)
 
     def _mark_full_skin_dirty(self):
         self._skin_force_full = True
@@ -1360,6 +1378,76 @@ class Viewport(QOpenGLWidget):
             self._joint_rest_cache = cache
         return cache
 
+    def _overlay_arrays(self):
+        """叠加层批处理用的静态数组：静止矩阵堆叠、骨骼绑定、关节所属刚体。"""
+        m = self.model
+        cache = self._overlay_arrays_cache
+        if (cache is not None and cache["rigid_n"] == len(m.rigid)
+                and cache["joint_n"] == len(m.joints)
+                and cache["bone_n"] == len(m.bones)):
+            return cache
+        nb = len(m.bones)
+        rigid = m.rigid
+        joints = m.joints
+        rb_bone = np.array(
+            [rb.bone if 0 <= rb.bone < nb else -1 for rb in rigid],
+            dtype=np.int32)
+        rb_rest = (np.stack(self._rigid_rest_matrices()).astype(np.float32, copy=False)
+                   if rigid else np.zeros((0, 4, 4), np.float32))
+        rb_inv = (np.stack(self._rigid_rest_inverses()).astype(np.float32, copy=False)
+                  if rigid else np.zeros((0, 4, 4), np.float32))
+        j_rest = (np.stack(self._joint_rest_matrices()).astype(np.float32, copy=False)
+                  if joints else np.zeros((0, 4, 4), np.float32))
+        j_src = np.full(len(joints), -1, np.int32)
+        for i, j in enumerate(joints):
+            for ri in (j.rigid_a, j.rigid_b):
+                if 0 <= ri < len(rigid):
+                    j_src[i] = ri
+                    break
+        bone_rest = (np.asarray([b.pos for b in m.bones], np.float32)
+                     if nb else np.zeros((0, 3), np.float32))
+        cache = {
+            "rigid_n": len(rigid),
+            "joint_n": len(joints),
+            "bone_n": nb,
+            "rigid_bone": rb_bone,
+            "rigid_rest": rb_rest,
+            "rigid_inv": rb_inv,
+            "joint_rest": j_rest,
+            "joint_src": j_src,
+            "bone_rest": bone_rest,
+            "root_bone": self._global_root_bone(),
+        }
+        self._overlay_arrays_cache = cache
+        return cache
+
+    def _global_root_bone(self):
+        if not self.model or not self.model.bones or self.pose is None:
+            return -1
+        best, best_n = -1, 0
+        n = len(self.model.bones)
+        for i, b in enumerate(self.model.bones):
+            p = b.parent
+            if p < 0 or p >= n or p == i:
+                count = len(self.pose.subtrees[i])
+                if count > best_n:
+                    best, best_n = i, count
+        return best
+
+    def _pose_delta_all(self, world):
+        """所有骨骼的静止→当前 4×4 变换，一次性批量算好供刚体/关节共用。"""
+        nb = len(self.model.bones)
+        D = np.broadcast_to(np.eye(4, dtype=np.float32), (nb, 4, 4)).copy()
+        if not nb or world is None or not len(world):
+            return D
+        n = min(nb, len(world))
+        rest = self._overlay_arrays()["bone_rest"]
+        R = np.asarray(world[:n, :3, :3], np.float32)
+        p = np.asarray(world[:n, :3, 3], np.float32)
+        D[:n, :3, :3] = R
+        D[:n, :3, 3] = p - np.einsum("nij,nj->ni", R, rest[:n])
+        return D
+
     def _global_pose_delta_from(self, world):
         """模型的整体姿态增量：取子树最大的根骨骼（通常是「全ての親」）。
 
@@ -1369,20 +1457,48 @@ class Viewport(QOpenGLWidget):
         """
         if world is None or self.pose is None or not self.model or not self.model.bones:
             return None
-        best, best_n = -1, 0
-        n = len(self.model.bones)
-        for i, b in enumerate(self.model.bones):
-            p = b.parent
-            if p < 0 or p >= n or p == i:
-                count = len(self.pose.subtrees[i])
-                if count > best_n:
-                    best, best_n = i, count
-        return self._pose_delta_from(world, best) if best >= 0 else None
+        root = self._global_root_bone()
+        return self._pose_delta_from(world, root) if root >= 0 else None
 
     def _global_pose_delta(self):
         if self.pose is None:
             return None
         return self._global_pose_delta_from(self.pose.world())
+
+    def _physics_body_matrices(self):
+        """物理刚体的当前矩阵（n,4,4），一次算完；未演算时返回 None。"""
+        ph = self.physics
+        if not (ph.enabled and ph._ready):
+            return None
+        pos = ph._body_positions
+        quat = ph._body_rotations
+        n = len(pos)
+        if not n or len(quat) < n:
+            return None
+        x, y, z, w = (np.asarray(quat[:, k], np.float32) for k in range(4))
+        R = np.empty((n, 3, 3), np.float32)
+        R[:, 0, 0] = 1.0 - 2.0 * (y * y + z * z)
+        R[:, 0, 1] = 2.0 * (x * y - z * w)
+        R[:, 0, 2] = 2.0 * (x * z + y * w)
+        R[:, 1, 0] = 2.0 * (x * y + z * w)
+        R[:, 1, 1] = 1.0 - 2.0 * (x * x + z * z)
+        R[:, 1, 2] = 2.0 * (y * z - x * w)
+        R[:, 2, 0] = 2.0 * (x * z - y * w)
+        R[:, 2, 1] = 2.0 * (y * z + x * w)
+        R[:, 2, 2] = 1.0 - 2.0 * (x * x + y * y)
+        M = np.zeros((n, 4, 4), np.float32)
+        M[:, :3, :3] = R
+        M[:, :3, 3] = pos
+        M[:, 3, 3] = 1.0
+        return M
+
+    def _physics_sim_mask(self, count: int):
+        """哪些刚体由物理演算接管（其余按骨骼姿态推导）。"""
+        ph = self.physics
+        if not (ph.enabled and ph._ready and len(ph.body_map) >= count):
+            return None
+        body_map = np.asarray(ph.body_map[:count], np.int32)
+        return body_map >= 0
 
     def _rigid_current_matrix(self, index: int):
         """刚体叠加层当前矩阵：物理演算中取模拟变换，否则跟随所属骨骼姿态。"""
@@ -1425,45 +1541,52 @@ class Viewport(QOpenGLWidget):
     def _build_rigid_lines(self):
         """刷新刚体当前矩阵（实体叠加层用）；刚体已不再画线框。
 
-        名字保留是因为测试/基准按它取矩阵。逐对象调用 _rigid_current_matrix
-        在 700+ 刚体时会有数十毫秒的 Python 开销，这里按骨骼增量缓存，
-        每个刚体只做一次矩阵乘。
+        名字保留是因为测试/基准按它取矩阵。整批一次算出，并与上一帧比较，
+        只有真正动过的刚体才标脏——物理演算时 718 个刚体里通常只有二三十个
+        在动。
         """
         if self._perf_enabled:
             self._perf_stats["rigid_matrices"] += 1
         m = self.model
         if not m or not m.rigid:
-            self._rb_world = []
+            self._rb_world = np.zeros((0, 4, 4), np.float32)
+            self._rb_changed = np.zeros(0, bool)
             return
-        rests = self._rigid_rest_matrices()
-        physics = self.physics
+        arr = self._overlay_arrays()
+        rests = arr["rigid_rest"]
         world = self.pose.world() if self.pose else None
-        simulate = (physics.enabled and physics._ready
-                    and len(physics.body_map) >= len(m.rigid)
-                    and len(physics._body_positions) >= len(m.rigid)
-                    and len(physics._body_rotations) >= len(m.rigid))
-        deltas = {}
-        global_delta = None
-        out = []
-        for i, rb in enumerate(m.rigid):
-            if simulate and physics.body_map[i] >= 0:
-                out.append(transform_to_mat4(
-                    physics._body_positions[i],
-                    physics._body_rotations[i]))
-                continue
-            bone = rb.bone
-            if 0 <= bone < len(m.bones):
-                if bone in deltas:
-                    D = deltas[bone]
-                else:
-                    D = self._pose_delta_from(world, bone)
-                    deltas[bone] = D
-            else:
-                if global_delta is None:
-                    global_delta = self._global_pose_delta_from(world)
-                D = global_delta
-            out.append(rests[i] if D is None else D @ rests[i])
-        self._rb_world = out
+        if world is not None:
+            delta = self._pose_delta_all(world)
+            bones = arr["rigid_bone"]
+            D = np.empty((len(rests), 4, 4), np.float32)
+            valid = bones >= 0
+            if valid.any():
+                D[valid] = delta[bones[valid]]
+            if not valid.all():
+                root = arr["root_bone"]
+                D[~valid] = delta[root] if root >= 0 else np.eye(4, np.float32)
+            cur = np.matmul(D, rests)
+        else:
+            cur = rests.copy()
+        simulated = self._physics_sim_mask(len(cur))
+        if simulated is not None and simulated.any():
+            physics_mats = self._physics_body_matrices()
+            if physics_mats is not None:
+                idx = np.flatnonzero(simulated)
+                idx = idx[idx < len(physics_mats)]
+                cur[idx] = physics_mats[idx]
+        prev = self._rb_world
+        if isinstance(prev, np.ndarray) and prev.shape == cur.shape and prev.size:
+            # 5e-4 的死区（约 0.5 mm / 0.03°）：物理收敛后仍有微小抖动，
+            # 低于肉眼可见的变化不重算实体，避免整帧全量刷新。
+            changed = np.abs(cur - prev).max(axis=(1, 2)) > 5e-4
+            if not changed.all():
+                # 没动的保持旧值，避免浮点抖动导致每帧都以为它变了
+                cur[~changed] = prev[~changed]
+        else:
+            changed = np.ones(len(cur), bool)
+        self._rb_world = cur
+        self._rb_changed = changed
 
     def _build_joint_lines(self):
         """刷新关节的当前矩阵（实体球用）；关节已不再画线框。"""
@@ -1471,29 +1594,32 @@ class Viewport(QOpenGLWidget):
             self._perf_stats["joint_matrices"] += 1
         m = self.model
         if not m or not m.joints:
-            self._joint_world = []
+            self._joint_world = np.zeros((0, 4, 4), np.float32)
+            self._joint_changed = np.zeros(0, bool)
             return
-        rests = self._joint_rest_matrices()
-        inv = self._rigid_rest_inverses()
-        rigid = m.rigid
-        rb_world = self._rb_world
-        stale = self._rb_dirty or len(rb_world) != len(rigid)
-        if stale and rigid:
-            # 关节依赖刚体当前矩阵：先补一次，避免每个关节重复算
+        if (self._rb_dirty or not isinstance(self._rb_world, np.ndarray)
+                or len(self._rb_world) != len(m.rigid)):
+            # 关节依赖刚体当前矩阵；这里补一次，调用方之后会清 _rb_dirty
             self._build_rigid_lines()
-            rb_world = self._rb_world
-            stale = len(rb_world) != len(rigid)
-        out = []
-        for i, j in enumerate(m.joints):
-            M = rests[i]
-            for ri in (j.rigid_a, j.rigid_b):
-                if 0 <= ri < len(rigid):
-                    cur = (self._rigid_current_matrix(ri) if stale
-                           else rb_world[ri])
-                    M = (cur @ inv[ri]) @ M
-                    break
-            out.append(M)
-        self._joint_world = out
+        arr = self._overlay_arrays()
+        rests = arr["joint_rest"]
+        src = arr["joint_src"]
+        cur = rests.copy()
+        has = src >= 0
+        if has.any() and len(self._rb_world) == len(m.rigid):
+            inv = arr["rigid_inv"]
+            s = src[has]
+            cur[has] = np.matmul(np.matmul(self._rb_world[s], inv[s]),
+                                 rests[has])
+        prev = self._joint_world
+        if isinstance(prev, np.ndarray) and prev.shape == cur.shape and prev.size:
+            changed = np.abs(cur - prev).max(axis=(1, 2)) > 5e-4
+            if not changed.all():
+                cur[~changed] = prev[~changed]
+        else:
+            changed = np.ones(len(cur), bool)
+        self._joint_world = cur
+        self._joint_changed = changed
 
     # ------------------------------------------------------------ 实体叠加
     def _solid_mesh(self, shape, sx, sy, sz):
@@ -1622,11 +1748,34 @@ class Viewport(QOpenGLWidget):
             groups.append({
                 "n": n,
                 "start": vbase,
-                "body": np.arange(len(slots), len(slots) + rows, dtype=np.int32),
+                "slots": np.arange(len(slots), len(slots) + rows, dtype=np.int32),
             })
             slots.extend(bucket["slots"])
             vbase += len(pos)
 
+        total = len(slots)
+        slot_group = np.full(total, -1, np.int32)
+        slot_row = np.zeros(total, np.int32)
+        for gi, g in enumerate(groups):
+            slot_group[g["slots"]] = gi
+            slot_row[g["slots"]] = np.arange(len(g["slots"]), dtype=np.int32)
+        slot_of_rigid = np.full(len(m.rigid), -1, np.int32)
+        slot_of_joint = np.full(len(m.joints), -1, np.int32)
+        slot_type = np.zeros(total, np.uint8)
+        slot_ref = np.zeros(total, np.int32)
+        for si, (kind, idx) in enumerate(slots):
+            if kind == "rigid":
+                slot_type[si] = 0
+                slot_ref[si] = idx
+                if 0 <= idx < len(slot_of_rigid):
+                    slot_of_rigid[idx] = si
+            else:
+                slot_type[si] = 1
+                slot_ref[si] = idx
+                if 0 <= idx < len(slot_of_joint):
+                    slot_of_joint[idx] = si
+
+        self._solid_tpl_serial += 1
         self._solid_template = {
             "groups": groups,
             "pos": np.concatenate(pos_parts, axis=0),
@@ -1634,48 +1783,128 @@ class Viewport(QOpenGLWidget):
             "col": np.concatenate(col_parts, axis=0),
             "idx": np.concatenate(idx_parts, axis=0),
             "slots": slots,
+            "slot_group": slot_group,
+            "slot_row": slot_row,
+            "slot_type": slot_type,
+            "slot_ref": slot_ref,
+            "slot_of_rigid": slot_of_rigid,
+            "slot_of_joint": slot_of_joint,
         }
         return self._solid_template
 
-    def _solid_static_geometry(self):
-        """按模板批量变换刚体/关节；每帧只做一次 gather + einsum。"""
-        if self._solid_tpl_dirty or self._solid_template is None:
-            self._build_solid_template()
-            self._solid_tpl_dirty = False
-        tpl = self._solid_template
-        if not tpl:
-            return None
-        rb_world = self._rb_world
-        joint_world = self._joint_world
-        mats = []
-        for kind, i in tpl["slots"]:
-            if kind == "rigid":
-                mats.append(rb_world[i] if i < len(rb_world)
-                            else self._rigid_current_matrix(i))
-            else:
-                mats.append(joint_world[i] if i < len(joint_world)
-                            else self._joint_current_matrix(i))
-        M = np.stack(mats).astype(np.float32, copy=False)
+    def _changed_slots(self, tpl):
+        """这一帧需要重新变换的槽位（只含动过的刚体与关节）。"""
+        parts = []
+        rb_changed = self._rb_changed
+        slot_of_rigid = tpl["slot_of_rigid"]
+        if rb_changed is not None and len(rb_changed) == len(slot_of_rigid):
+            idx = np.flatnonzero(rb_changed)
+            if idx.size:
+                s = slot_of_rigid[idx]
+                parts.append(s[s >= 0])
+        joint_changed = self._joint_changed
+        slot_of_joint = tpl["slot_of_joint"]
+        if joint_changed is not None and len(joint_changed) == len(slot_of_joint):
+            idx = np.flatnonzero(joint_changed)
+            if idx.size:
+                s = slot_of_joint[idx]
+                parts.append(s[s >= 0])
+        if not parts:
+            return np.zeros(0, np.int32)
+        return np.unique(np.concatenate(parts)).astype(np.int32, copy=False)
+
+    def _slot_matrices(self, tpl, sel=None):
+        """槽位当前的 4×4 矩阵（可按 sel 取子集），一次向量化取齐。"""
+        total = len(tpl["slots"])
+        rb_rest = self._overlay_arrays()["rigid_rest"]
+        jt_rest = self._overlay_arrays()["joint_rest"]
+        rb_world = self._rb_world if isinstance(self._rb_world, np.ndarray) else rb_rest
+        jt_world = (self._joint_world if isinstance(self._joint_world, np.ndarray)
+                    else jt_rest)
+        slot_type = tpl["slot_type"]
+        slot_ref = tpl["slot_ref"]
+        mats = np.empty((total, 4, 4), np.float32)
+        is_rb = slot_type == 0
+        if is_rb.any():
+            ref = slot_ref[is_rb]
+            src = rb_world if len(rb_world) == len(rb_rest) else rb_rest
+            mats[is_rb] = src[ref]
+        if (~is_rb).any():
+            ref = slot_ref[~is_rb]
+            src = jt_world if len(jt_world) == len(jt_rest) else jt_rest
+            mats[~is_rb] = src[ref]
+        return mats if sel is None else mats[sel]
+
+    def _apply_solid_rows(self, tpl, sel):
+        """把指定槽位对应的刚体/关节几何写入持久输出缓冲。
+
+        同一大小桶内的物体顶点数一致，因此整桶矩阵可以拼成一个三维数组做
+        一次批量变换；变化行占比高时直接整桶连续处理（省掉花式索引）。
+        """
+        mats = self._slot_matrices(tpl, sel)
+        groups_of = tpl["slot_group"][sel]
+        rows_of = tpl["slot_row"][sel]
         tpl_pos = tpl["pos"]
         tpl_nrm = tpl["nrm"]
-        out_pos = np.empty_like(tpl_pos)
-        out_nrm = np.empty_like(tpl_nrm)
-        for g in tpl["groups"]:
-            Mb = M[g["body"]]
-            R = Mb[:, :3, :3]
-            t = Mb[:, :3, 3]
+        out_pos = self._solid_out_pos
+        out_nrm = self._solid_out_nrm
+        all_mats = None
+        for gi in np.unique(groups_of):
+            mask = groups_of == gi
+            g = tpl["groups"][int(gi)]
             n = g["n"]
-            a = g["start"]
-            b = a + n * len(g["body"])
-            P = tpl_pos[a:b].reshape(-1, n, 3)
-            N = tpl_nrm[a:b].reshape(-1, n, 3)
-            # 用 matmul（BLAS 批量乘）比 einsum 快约 8 倍；点按 (3, n) 转置传入
-            out_pos[a:b] = (np.matmul(R, P.transpose(0, 2, 1)).transpose(0, 2, 1)
+            g_rows = len(g["slots"])
+            rows = rows_of[mask]
+            if rows.size * 2 >= g_rows:
+                # 整桶基本都变了：用连续切片，避免 十几万规模的花式索引
+                if all_mats is None:
+                    all_mats = self._slot_matrices(tpl)
+                M = all_mats[g["slots"]]
+                src = slice(g["start"], g["start"] + n * g_rows)
+                dst = src
+                P = tpl_pos[src].reshape(-1, n, 3)
+                N = tpl_nrm[src].reshape(-1, n, 3)
+            else:
+                M = mats[mask]
+                vi = (g["start"] + rows[:, None] * n
+                      + np.arange(n, dtype=np.int32)).ravel()
+                dst = vi
+                P = tpl_pos[vi].reshape(-1, n, 3)
+                N = tpl_nrm[vi].reshape(-1, n, 3)
+            R = M[:, :3, :3]
+            t = M[:, :3, 3]
+            out_pos[dst] = (np.matmul(R, P.transpose(0, 2, 1)).transpose(0, 2, 1)
                             + t[:, None, :]).reshape(-1, 3)
             nr = np.matmul(R, N.transpose(0, 2, 1)).transpose(0, 2, 1)
             nr /= np.maximum(np.linalg.norm(nr, axis=2), 1e-6)[..., None]
-            out_nrm[a:b] = nr.reshape(-1, 3)
-        return out_pos, out_nrm, tpl["col"], tpl["idx"]
+            out_nrm[dst] = nr.reshape(-1, 3)
+
+    def _solid_static_geometry(self):
+        """按模板增量变换刚体/关节：只重算这一帧真正动了的物体。"""
+        rebuilt = False
+        if self._solid_tpl_dirty or self._solid_template is None:
+            self._build_solid_template()
+            self._solid_tpl_dirty = False
+            rebuilt = True
+        tpl = self._solid_template
+        if not tpl:
+            self._solid_out_pos = None
+            self._solid_out_nrm = None
+            return None
+        tpl_pos = tpl["pos"]
+        if rebuilt or self._solid_out_pos is None \
+                or len(self._solid_out_pos) != len(tpl_pos):
+            # 模板刚重建（槽位顺序可能变了）或缓冲尺寸变化：必须全量刷新
+            if self._solid_out_pos is None or len(self._solid_out_pos) != len(tpl_pos):
+                self._solid_out_pos = np.empty_like(tpl_pos)
+                self._solid_out_nrm = np.empty_like(tpl["nrm"])
+            sel = np.arange(len(tpl["slots"]), dtype=np.int32)
+        else:
+            sel = self._changed_slots(tpl)
+        if len(sel):
+            self._apply_solid_rows(tpl, sel)
+        return (self._solid_out_pos, self._solid_out_nrm,
+                tpl["col"], tpl["idx"])
 
     def _bone_solid_geometry(self):
         """骨骼实体（低透明度八面体）：整批向量化，避免逐骨骼建几何。"""
@@ -1761,10 +1990,9 @@ class Viewport(QOpenGLWidget):
 
     def _build_solid_geometry(self):
         m = self.model
-        empty = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32),
-                 np.zeros((0, 4), np.float32), np.zeros((0,), np.int32))
         if not m:
-            self._solid_geom = empty
+            self._solid_parts = []
+            self._solid_count = 0
             return
         parts = []
         static = self._solid_static_geometry()
@@ -1773,49 +2001,72 @@ class Viewport(QOpenGLWidget):
         bones = self._bone_solid_geometry()
         if bones is not None:
             parts.append(bones)
-        if not parts:
-            self._solid_geom = empty
-            return
-        if len(parts) == 1:
-            self._solid_geom = parts[0]
-        else:
-            self._solid_geom = tuple(
-                np.concatenate([p[k] for p in parts], axis=0) for k in range(4))
+        # 顶点顺序/颜色/索引只在模板重建、骨骼可见数或选中变化时改变；
+        # 这一帧没变就不用重传 col/idx（约 4 MB），只传位置与法线。
+        self._solid_attr_sig = (
+            self._solid_tpl_serial,
+            self.selection_kind,
+            self.selection_index,
+            round(float(self.bone_opacity), 4),
+            0 if bones is None else len(bones[0]),
+        )
+        self._solid_parts = parts
+        self._solid_count = sum(len(p[3]) for p in parts)
         if self._perf_enabled:
             self._perf_stats["solid_builds"] += 1
 
     def _upload_solid_geom(self):
-        pos, nrm, col, idx = self._solid_geom
-        self._solid_count = len(idx)
-        if not len(idx):
+        parts = self._solid_parts
+        if not self._solid_count or not parts:
             return
-        if self._vbo_solid is None:
-            self._vbo_solid = tuple(GL.glGenBuffers(1) for _ in range(4))
-        if self._perf_enabled:
-            self._perf_stats["solid_upload_bytes"] += (pos.nbytes + nrm.nbytes
-                                                      + col.nbytes + idx.nbytes)
-        for k, data in enumerate((pos, nrm, col)):
-            data = np.ascontiguousarray(data, np.float32)
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self._vbo_solid[k])
-            if self._solid_sizes[k] == data.nbytes:
+        while len(self._solid_vbo_parts) < len(parts):
+            self._solid_vbo_parts.append(
+                {"vbo": tuple(GL.glGenBuffers(1) for _ in range(4)),
+                 "sizes": [0, 0, 0, 0], "count": 0})
+        attrs_dirty = self._solid_attr_sig != self._solid_attr_sig_uploaded
+        for pi, (pos, nrm, col, idx) in enumerate(parts):
+            info = self._solid_vbo_parts[pi]
+            vbo = info["vbo"]
+            sizes = info["sizes"]
+            info["count"] = len(idx)
+            if self._perf_enabled:
+                self._perf_stats["solid_upload_bytes"] += pos.nbytes + nrm.nbytes
+                if attrs_dirty:
+                    self._perf_stats["solid_upload_bytes"] += col.nbytes + idx.nbytes
+            for k, data in ((0, pos), (1, nrm)):
+                data = np.ascontiguousarray(data, np.float32)
+                GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vbo[k])
+                if sizes[k] == data.nbytes:
+                    GL.glBufferSubData(GL.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+                else:
+                    GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data,
+                                    GL.GL_DYNAMIC_DRAW)
+                    sizes[k] = data.nbytes
+            if not attrs_dirty:
+                continue
+            data = np.ascontiguousarray(col, np.float32)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vbo[2])
+            if sizes[2] == data.nbytes:
                 GL.glBufferSubData(GL.GL_ARRAY_BUFFER, 0, data.nbytes, data)
             else:
                 GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data,
                                 GL.GL_DYNAMIC_DRAW)
-                self._solid_sizes[k] = data.nbytes
-        data = np.ascontiguousarray(idx, np.int32)
-        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self._vbo_solid[3])
-        if self._solid_sizes[3] == data.nbytes:
-            GL.glBufferSubData(GL.GL_ELEMENT_ARRAY_BUFFER, 0, data.nbytes, data)
-        else:
-            GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, data.nbytes, data,
-                            GL.GL_DYNAMIC_DRAW)
-            self._solid_sizes[3] = data.nbytes
+                sizes[2] = data.nbytes
+            data = np.ascontiguousarray(idx, np.int32)
+            GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, vbo[3])
+            if sizes[3] == data.nbytes:
+                GL.glBufferSubData(GL.GL_ELEMENT_ARRAY_BUFFER, 0, data.nbytes, data)
+            else:
+                GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, data.nbytes, data,
+                                GL.GL_DYNAMIC_DRAW)
+                sizes[3] = data.nbytes
+        if attrs_dirty:
+            self._solid_attr_sig_uploaded = self._solid_attr_sig
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
         GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
 
     def _draw_solids(self, mvp):
-        if not self._solid_count or self._vbo_solid is None:
+        if not self._solid_count or not self._solid_parts:
             return
         L = self._loc["solid"]
         GL.glUseProgram(self._prog_solid)
@@ -1824,21 +2075,26 @@ class Viewport(QOpenGLWidget):
         GL.glUniform3f(L["uLightDir"], 0.36, 0.72, 0.58)
         eye = self.camera.eye()
         GL.glUniform3f(L["uEye"], float(eye[0]), float(eye[1]), float(eye[2]))
-        for k, size in ((0, 3), (1, 3), (2, 4)):
-            GL.glEnableVertexAttribArray(k)
-            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self._vbo_solid[k])
-            GL.glVertexAttribPointer(k, size, GL.GL_FLOAT, GL.GL_FALSE, 0, None)
-        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self._vbo_solid[3])
         cull_was_on = bool(GL.glIsEnabled(GL.GL_CULL_FACE))
         GL.glEnable(GL.GL_CULL_FACE)
         try:
-            # 先背面再正面：半透明实体内部也能看到外壳颜色，轮廓更完整
-            GL.glCullFace(GL.GL_FRONT)
-            GL.glDrawElements(GL.GL_TRIANGLES, self._solid_count,
-                              GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
-            GL.glCullFace(GL.GL_BACK)
-            GL.glDrawElements(GL.GL_TRIANGLES, self._solid_count,
-                              GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
+            for info in self._solid_vbo_parts[:len(self._solid_parts)]:
+                if not info["count"]:
+                    continue
+                vbo = info["vbo"]
+                for k, size in ((0, 3), (1, 3), (2, 4)):
+                    GL.glEnableVertexAttribArray(k)
+                    GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vbo[k])
+                    GL.glVertexAttribPointer(k, size, GL.GL_FLOAT, GL.GL_FALSE,
+                                             0, None)
+                GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, vbo[3])
+                # 先背面再正面：半透明实体内部也能看到外壳颜色，轮廓更完整
+                GL.glCullFace(GL.GL_FRONT)
+                GL.glDrawElements(GL.GL_TRIANGLES, info["count"],
+                                  GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
+                GL.glCullFace(GL.GL_BACK)
+                GL.glDrawElements(GL.GL_TRIANGLES, info["count"],
+                                  GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
         finally:
             for k in range(3):
                 GL.glDisableVertexAttribArray(k)
@@ -1975,6 +2231,8 @@ class Viewport(QOpenGLWidget):
             grid = getattr(self, "_grid_vbo", None)
             if grid:
                 buffers.extend(grid)
+            for info in self._solid_vbo_parts:
+                buffers.extend(info["vbo"])
             if buffers:
                 GL.glDeleteBuffers(len(buffers), np.asarray(buffers, dtype=np.uint32))
             textures = [v for v in self._tex_cache.values() if isinstance(v, int)]
@@ -1985,6 +2243,8 @@ class Viewport(QOpenGLWidget):
         finally:
             self._mesh_ids.clear()
             self._vbo_lines.clear()
+            self._solid_vbo_parts = []
+            self._solid_attr_sig_uploaded = None
             self._grid_vbo = None
             self._tex_cache.clear()
             if not had:

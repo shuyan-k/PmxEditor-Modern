@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pmxeditor.pmx import load_pmx
@@ -38,8 +40,16 @@ class _OverlayProbe:
     _global_pose_delta = Viewport._global_pose_delta
     _rigid_current_matrix = Viewport._rigid_current_matrix
     _joint_current_matrix = Viewport._joint_current_matrix
+    _overlay_arrays = Viewport._overlay_arrays
+    _global_root_bone = Viewport._global_root_bone
+    _pose_delta_all = Viewport._pose_delta_all
+    _physics_body_matrices = Viewport._physics_body_matrices
+    _physics_sim_mask = Viewport._physics_sim_mask
     _solid_mesh = Viewport._solid_mesh
     _build_solid_template = Viewport._build_solid_template
+    _changed_slots = Viewport._changed_slots
+    _slot_matrices = Viewport._slot_matrices
+    _apply_solid_rows = Viewport._apply_solid_rows
     _solid_static_geometry = Viewport._solid_static_geometry
     _bone_solid_geometry = Viewport._bone_solid_geometry
     _build_solid_geometry = Viewport._build_solid_geometry
@@ -48,17 +58,30 @@ class _OverlayProbe:
         self.model = model
         self.selection_kind = ""
         self.selection_index = -1
-        self.physics = SimpleNamespace(enabled=False, _ready=False, body_map=[])
-        self._rb_world = []
-        self._joint_world = []
+        self.physics = SimpleNamespace(
+            enabled=False, _ready=False, body_map=[],
+            _body_positions=np.zeros((0, 3), np.float32),
+            _body_rotations=np.zeros((0, 4), np.float32))
+        self._rb_world = np.zeros((0, 4, 4), np.float32)
+        self._joint_world = np.zeros((0, 4, 4), np.float32)
         self._rb_dirty = False
         self._perf_enabled = False
         self._bone_static = None
         self._rb_rest_cache = None
         self._rb_rest_inv_cache = None
         self._joint_rest_cache = None
+        self._overlay_arrays_cache = None
+        self._rb_changed = None
+        self._joint_changed = None
         self._solid_template = None
         self._solid_tpl_dirty = True
+        self._solid_tpl_serial = 0
+        self._solid_out_pos = None
+        self._solid_out_nrm = None
+        self._solid_parts = []
+        self._solid_count = 0
+        self._solid_attr_sig = None
+        self._solid_attr_sig_uploaded = None
         self._solid_mesh_cache = {}
         self._solid_geom = None
         self.show_bones = True
@@ -177,6 +200,18 @@ def run_benchmarks(model_path, runs):
         probe._build_joint_lines()
         probe._build_solid_geometry()
 
+    flip = [0]
+
+    def prepare_solid():
+        # 交替小幅旋转一根骨骼，模拟摆姿/物理帧：只有该子树对应的刚体变了，
+        # 增量更新应当只重算这一小部分。
+        flip[0] += 1
+        probe.pose.reset()
+        if drag_bone >= 0:
+            probe.pose.rotate_world(drag_bone, (0.0, 1.0, 0.0),
+                                    0.02 if flip[0] % 2 else -0.02)
+            probe.pose.world_update()
+
     benchmarks = {
         "load": lambda: load_pmx(str(model_path)),
         "world_full": world_full,
@@ -193,6 +228,7 @@ def run_benchmarks(model_path, runs):
         "solve_full": solve_full,
     }
     prepares = {
+        "solid_geometry": prepare_solid,
         "solve_idle": prepare_pose,
         "solve_drag_6": prepare_drag,
         "solve_drag_3": prepare_drag,
