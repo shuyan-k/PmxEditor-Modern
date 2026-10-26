@@ -16,6 +16,8 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
   NUITKA_VERSION: "4.3.1"
   # 上游 bullet3 没有 3.26 tag；pybullet 3.2.7 的 sdist 内置 Bullet 3.26 源码。
   PYBULLET_VERSION: "3.2.7"
