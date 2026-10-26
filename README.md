@@ -21,7 +21,7 @@
 | 面与柔体 | 「面」页按材质查看三角面数，把源材质的一段面移到目标材质末尾（按材质顺序重建扁平索引）；「柔体」页编辑 PMX 2.1 柔体：名称、形状、材质、碰撞组、生成选项、质量/碰撞余量/气动模型、12 项求解参数、锚点与固定点，支持新建与删除 | 柔体只读写与编辑，不参与 Bullet 演算；移动面会改变材质面数，属于结构编辑（可撤销） |
 | 形态 | 列表与新建/复制/删除；顶点、骨骼、UV、材质、组、翻转形态预览（组/翻转递归展开）；偏移表可选中任意一条，逐字段改目标索引与数值（材质/骨骼/形态/刚体下拉、向量分量、乘法/加法切换），并可添加/删除偏移 | 冲量、附加 UV 形态不改变视口（前者需物理回放，后者是独立 UV 通道）；添加顶点偏移默认指向 0 号顶点 |
 | 姿态与 IK | FK 拖动、IK 控制器拖动、CCD IK、付与继承、蒙皮（BDEF1/2/4，SDEF/QDEF 按 BDEF2 处理）、姿态重置；VPD 导入导出；撤销/重做 | IK 限位按欧拉逐轴钳制（与 MMD 一致），近 ±90° 用分支滞回保持连续；末端残差仍偏大的链会从静止姿态重解一次，取更接近目标的解 |
-| 物理 | Bullet 刚体/关节构建与实时步进，骨骼跟随与动态刚体，姿态覆盖与重置 | PMX 2.1 柔体可编辑（参数/锚点/固定点）但不参与演算；重力与迭代次数可热更新，其余参数需重建物理世界 |
+| 物理 | Bullet 刚体/关节构建与固定 1/60 步进的实时演算，骨骼跟随与动态刚体，姿态覆盖与重置 | PMX 2.1 柔体可编辑（参数/锚点/固定点）但不参与演算；重力与迭代次数可热更新（默认 30 次），其余参数需重建物理世界；步进按渲染帧推进、不做墙钟追赶，帧率低于 60 时演算会略慢 |
 | 视口 | 贴图/灰模、线框、卡通光照、描边、地面网格、骨骼/刚体/关节叠加、背景/模型亮度、拾取与 HUD | 整帧性能取决于 GPU、驱动与显示开关 |
 | 编辑历史 | 模型编辑撤销/重做（12 步，0.9 s 内同键合并）；姿态拖动/`R` 重置/VPD 导入用轻量姿态条目，不占整模型快照 | 模型快照与姿态条目各有 12 步预算，互不挤占；不是无限历史 |
 | 发布 | Nuitka 单文件发行包，内置 `--verify-backend` 数值对拍；构建命令见「打包与发布」，产物不入库（`dist/` 由构建生成，仓库不保留 exe） | 跨驱动（另一块 GPU）复测仍待完成 |
@@ -185,7 +185,11 @@ PmxStudio/
 
 ### `physics.py` — Bullet
 
-用 ctypes 加载 `native/bullet_phys.dll`（C 包装层 `bw_*`）。刚体语义与 MMD 对齐：`跟随骨骼` 为运动学体、`物理演算` 由 Bullet 求解并回写、关节用 `btGeneric6DofSpringConstraint` 保留三轴限位与弹簧、限位 `min > max` 视为自由轴。PMX 2.1 柔体可在「柔体」页编辑，但不参与 Bullet 演算。被标记「物理后变形」(`BF_AFTER_PHYSICS`) 的骨骼不接收刚体覆盖：原生与 NumPy 两条覆盖路径都会跳过它，演算结束后该骨骼保持手工姿态。
+用 ctypes 加载 `native/bullet_phys.dll`（C 包装层 `bw_*`）。刚体语义与 MMD 对齐：`跟随骨骼` 为运动学体、`物理演算` 由 Bullet 求解并回写、关节用 `btGeneric6DofSpringConstraint` 保留三轴限位与弹簧、限位 `min > max` 视为自由轴。关节框架的 PMX（ZYX）旋转先分解成 DLL 的 YXZ 三元组再交给 Bullet；`min == max` 的非零限位归零到静止位——否则约束会把刚体持续推向该偏移（胸部模板常见 Y 轴 0.3 这类同值限位）；`物理 + 骨骼对齐`（模式 2）只把旋转反馈给骨骼，位移保持手工姿态。
+
+视口的物理步进固定在 `Viewport._on_tick` 里每 tick 推进 **1/60 秒**，与渲染帧同步。用墙钟间隔（GUI 每 tick 约 25–42 ms）驱动时 `stepSimulation` 的子步数会在 1 与 2 之间跳动，同一段位移在相邻帧忽大忽小，大幅摆姿时看起来就是模型来回抖动/拖影；固定步长后每帧位移连续，代价是帧率低于 60 时演算按帧变慢（不做时间追赶）。求解迭代默认 **30**：10 次时长发等锁定链会残留持续的求解器微振，30 次可正常收敛（「设置 → 重力 / 迭代次数」可热更新）。
+
+PMX 2.1 柔体可在「柔体」页编辑，但不参与 Bullet 演算。被标记「物理后变形」(`BF_AFTER_PHYSICS`) 的骨骼不接收刚体覆盖：原生与 NumPy 两条覆盖路径都会跳过它，演算结束后该骨骼保持手工姿态。
 
 ### `viewport/` — 渲染与交互
 
@@ -266,7 +270,7 @@ powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source 
     "show_joints": false, "show_texture": true, "toon": true,
     "outline": true, "wireframe": false, "show_shadow": true
   },
-  "physics": { "gravity": 9.8, "iterations": 10, "ground": true },
+  "physics": { "gravity": -9.8, "iterations": 30, "ground": true },
   "paths": { "last_dir": "", "last_vpd_dir": "" },
   "window": { "geometry": "<base64>", "splitter": [339, 300] },
   "editor": { "move_bone_vertices": false }
@@ -430,6 +434,8 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 | 实体叠加层显存上传 | 8.4 MB/帧 | **3.6 MB/帧** |
 | 旧刚体线框（已删除） | 37.4 ms | 0 |
 
+> 物理相关数字是求解迭代 10 时的基线。默认迭代已改为 30，同一台机器上 `残虹`（718 刚体）单步耗时 **5.7 → 7.5 ms**（约 +31%），仍在一帧预算内；固定 1/60 步长不再让子步数逐帧变化。
+
 ### 已落地的优化
 
 - 贴图缓存键改为 `(贴图路径, 是否球面)`，`set_model` 与 `refresh_textures` 不再整体清空缓存 —— 旧版每次结构/材质编辑都会重新解码 12 张贴图（单次约 290 ms）。
@@ -500,6 +506,7 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 | 低 | 冲量/附加 UV 形态不影响视口 | 冲量需物理回放、附加 UV 是材质不采样的独立通道 | 需要时再接物理回放/自定义着色 |
 | 低 | 骨骼位置编辑的顶点跟随需手动开启 | 关闭「移动时带动顶点」时只有骨骼线与关节移动（静止位置语义下 `world @ (v - rest)` 自动抵消）；开关不持久化，每次启动默认关闭 | 保持默认关闭（原版移动骨骼不搬顶点）；确有需要时手动开启 |
 | 低 | 物理热更新覆盖重力/迭代次数/质量/摩擦力 | 弹性与运动学刚体的质量改动仍会被忽略 | 面板补弹性入口、运动学刚体走整体重建 |
+| 低 | 物理按渲染帧固定 1/60 推进 | 视口帧率低于 60 时演算按帧变慢（不做墙钟追赶），这是为消除逐帧位移抖动做的取舍 | 若更在意实时速度，可改为固定步长累加器 + 渲染插值 |
 | 低 | 删除骨骼仍走完整重建 | 米娅（321 骨骼）删除骨骼约 65 ms：删骨骼会重排 `v_bones` 索引并连带重映射刚体/关节，只能整次 `set_model` | 若出现真实卡顿再评估索引压缩 |
 | 低 | 亮色主题地面网格线偏深 | Intel 4x MSAA 细线光栅化导致明度偏离配色表（彩色噪点已修） | 跨驱动复测后考虑改用四边形描边 |
 | 低 | 骨骼拾取仍是屏幕距离启发式 | 已改为按投影长度自适应的像素半径并加悬停名称牌，但极密集区域仍需多次 Alt+单击循环 | 改为几何射线-线段求交与命中测试 |
@@ -534,6 +541,8 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 
 ## 更新记录
 
+- **2026-10-26 修复开物理摆姿时的抖动/残影，物理步进与关节语义对齐 MMD**：① 视口物理改为**每帧固定 1/60 秒**（`Viewport._on_tick`）。原先用墙钟间隔驱动 Bullet，GUI 每 tick 约 25–42 ms 时子步数在 1 与 2 之间交替，实测每次刷新最大顶点位移在 **0.033 / 0.016 之间 2:1 跳动**，大幅摆姿时观感就是模型来回抖动、拖影（松手后物理收敛所以「自动恢复」）；固定步长后位移恒为约 0.017 且单调衰减，逐 tick 反向骨骼归零。② 求解迭代默认 **10 → 30**（config / 设置面板 / 视口 / `physics.py` 与本地 `settings.json` 同步）：`残虹` 长发锁定链在 10 次迭代下 240 帧后仍有约 **0.027/帧**的求解器微振，30 次末帧降到 **0.0074** 并继续收敛。③ 关节框架的 PMX（ZYX）旋转按 YXZ 分解再交给 DLL；`min == max` 的非零限位归零到静止位；模式 2「物理 + 骨骼对齐」只回写旋转。修正了胸部/裙摆被限位预载推走与多轴关节限位方向偏转（`pmx_core.cpp`、`physics.py` 与重建的 `_pmx_core.cp312` 同步）。④ 开启物理**不再强制打开**骨骼/刚体/关节叠加层（旧行为会把用户手动关掉的层又打开，关节球常被误认为「掉到地上」）；顺带修复关闭叠加层后的青色实体残片（`_solid_attr_sig` 增加「静态段是否存在」标识）与写在原点的远距「補」关节标记被甩出模型（`joint_far` 只跟随平移增量）。⑤ 回归：`overlay_pose` / `physlive` / `physlazy` 在原生 3.12 与 NumPy/ctypes 回退两条路径上 anomalies 均为 0。代价与取舍记入「已知限制」：帧率低于 60 时演算按帧变慢，不再做墙钟追赶。
+
 - **2026-10-26 叠加层 CPU 收尾（评估结论：暂不需要 GPU 优化）**：实测 `残虹.pmx`（98404 顶点 / 718 刚体 / 930 关节，1141×782、4×MSAA）静态帧 GPU 仅 3.8–8 ms，脏帧 CPU 348.7 ms——瓶颈全在 CPU。① 刚体已实体化，删除残留的刚体线框构建与绘制（-37 ms/帧）；② 实体几何改为「按（类别, 顶点数）分桶的局部模板 + 批量 `matmul`」，约 1600 个物体的每帧装配 **292.5 → 8.5 ms**（逐顶点 `einsum` 13.6 ms → 分桶 `matmul` 4.99 ms；`matmul` 比 `einsum` 快约 8 倍）；③ 模板只在显示开关/不透明度/选中/结构变化时重建，关节复用刚体当前矩阵（`_build_joint_lines` 先补一次 `_build_rigid_lines`）；④ 物理每步改用 `physics.dynamic_bones()` 做增量蒙皮（本模型动态刚体挂在根附近，子树覆盖 99%，会回落到全量）。结果：脏帧 **348.7 → 33.3 ms**，物理+全部叠加层 **2.9 → 18.9 FPS**，其中蒙皮 11.6 ms（`_pmx_core` 原生）是剩余硬底。`vp`/`fix2`/`mouse`/`overlay_pose`/`flagguard`/`physlive`/`bright` 全部 0 异常。
 
 - **2026-10-26 选中后才允许骨骼变换**：`_bone_drag_allowed()` 要求 `selection_kind == "bone"` 且索引一致，未选中时左键回落为旋转视角、右键回落为平移视角，并在状态栏提示「未选中」；`_begin_bone_drag` 不再隐式选中，悬停手型只对已选中骨骼显示。新增回归断言：未选中拖动骨骼姿态不变、相机 yaw 改变、状态栏出现提示。
@@ -560,7 +569,7 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 - **2026-10-25 表示枠页与 IK 链编辑**：新增右侧「表示枠」页（`panels/frame.py`），支持新建/复制/删除/排序分组，把骨骼或形态加进分组、移除、上下移动，分组名/英文名/特殊枠可改；`doc.py` 增加 `add_frame`/`duplicate_frame`/`remove_frame`/`move_frame`/`frame_add_item`/`frame_remove_item`/`frame_move_item`。骨骼页的 IK 链从一行只读文字升级为可编辑列表：「添加链接」「移除」按钮，以及每根链接的「角度限制」开关和 XYZ 最小/最大角（UI 用度，模型里存弧度，与 PMX 一致）。新页追加在 `PAGES` 末尾以保持既有页索引不变，导航顺序由 `RAIL_ORDER` 决定（信息/骨骼/表示枠/材质/形态/物理/设置）。新增回归场景 `frame`（含 `.pmx` 往返读写），`vp`/`view`/`menu`/`skin`/`poseundo`/`undo`/`struct3`/`struct4`/`final` 均 0 异常。
 
 - **2026-10-25 骨骼页六个开关在视口里真正生效**：此前只有“显示”被画笔与拾取读取，“可操作/可移动/可旋转/物理后变形”在视口里都是空转（用户报告：未开“可移动”的骨骼照样能拖）。`viewport/core.py` 的 `_pick_candidates()` 改为同时要求 `BF_VISIBLE` 与 `BF_ENABLED`；新增 `bone_drag_block(index, mode)`（“不可操作/不可移动/不可旋转”）并由 `_begin_bone_drag()` 与 `_flush_pose_updates()` 双重把关，被挡时状态栏提示、光标保持箭头；`physics.py` 的两条覆盖路径都跳过 `BF_AFTER_PHYSICS` 的骨骼（“物理后变形”= 物理算完再用手工姿态）。新增 `go.py flagguard` 覆盖六个开关（含 Bullet 夹具验证物理后变形）；没有引入 `Pose.refresh_flags()` 之类的死代码——`pose_state()` 已包含 `b.flags`，改标志会重建 Pose。
-- **2026-10-25 合并三视图、物理改为开关、位移/旋转解耦**：删掉「浏览 / 姿态 / 物理」三选一——`Viewport` 去掉 `mode` 字段与 `set_mode()`，只保留 `set_physics(bool)`；工具栏在原 Segmented 的位置放一个 `Switch`（「物理演算」），「视图」菜单同一开关（快捷键 `P`），两者按 `physics.enabled` 双向同步。姿态编辑不再受模式门控：左键拖动骨骼 = 位移、右键拖动骨骼 = 旋转（空白处仍是左拖动视角 / 右拖平移 / 中键旋转 / Shift+中键平移），双击骨骼给出「左键位移 · 右键旋转」提示；IK 控制器被拖动时解算仍会带动整条链。物理与姿态可以同时生效，受刚体驱动的骨骼每步被 `ov_*` 覆盖，其余骨骼保持手摆结果；为让「一边演算一边摆姿」看得见，开启演算时自动打开骨骼/刚体/关节叠加。`_pick_candidates()` 改为骨骼优先、刚体/关节仅在光标附近没有骨骼线段时兜底（`show_rigid`/`show_joints` 打开才参与）；`Viewport` 删除 `self.mode = "browse"` 与 set_model/clear_model 里的模式复位。撤销标签拆成「移动骨骼」「旋转骨骼」，`app.POSE_EDIT_LABELS` 保证它们仍走轻量姿态条目（不克隆整模型）；VPD 导入前若在演算则先停演算，`_reload_structure()` 按 `physics.enabled` 恢复。HUD 徽标改为「摆姿 / 物理演算」，`F/R/P` 快捷键与设置页快捷键表同步。
+- **2026-10-25 合并三视图、物理改为开关、位移/旋转解耦**：删掉「浏览 / 姿态 / 物理」三选一——`Viewport` 去掉 `mode` 字段与 `set_mode()`，只保留 `set_physics(bool)`；工具栏在原 Segmented 的位置放一个 `Switch`（「物理演算」），「视图」菜单同一开关（快捷键 `P`），两者按 `physics.enabled` 双向同步。姿态编辑不再受模式门控：左键拖动骨骼 = 位移、右键拖动骨骼 = 旋转（空白处仍是左拖动视角 / 右拖平移 / 中键旋转 / Shift+中键平移），双击骨骼给出「左键位移 · 右键旋转」提示；IK 控制器被拖动时解算仍会带动整条链。物理与姿态可以同时生效，受刚体驱动的骨骼每步被 `ov_*` 覆盖，其余骨骼保持手摆结果；为让「一边演算一边摆姿」看得见，开启演算时自动打开骨骼/刚体/关节叠加（该自动打开行为已于 2026-10-26 移除，见上）。`_pick_candidates()` 改为骨骼优先、刚体/关节仅在光标附近没有骨骼线段时兜底（`show_rigid`/`show_joints` 打开才参与）；`Viewport` 删除 `self.mode = "browse"` 与 set_model/clear_model 里的模式复位。撤销标签拆成「移动骨骼」「旋转骨骼」，`app.POSE_EDIT_LABELS` 保证它们仍走轻量姿态条目（不克隆整模型）；VPD 导入前若在演算则先停演算，`_reload_structure()` 按 `physics.enabled` 恢复。HUD 徽标改为「摆姿 / 物理演算」，`F/R/P` 快捷键与设置页快捷键表同步。
 - **2026-10-25 仓库清理与 README 复核**：删掉 `build/` 下的 Nuitka 中间件与旧构建日志（保留 `build/python` 便携运行时）、`dist/` 里三份过期发行包（r4/r5/r6 共约 1.2 GB，均已落后于当前源码）、`tests/` 的临时诊断产物（`_probe_out*.txt`、`blender*.log/npz`、`out.pmx`、`report.json`、`sync_*.vpd`、`shots/` 截图）与各处 `__pycache__`，合计约 1.38 GB；`native/obj/`（Bullet 导入库）与 `src/pmxeditor/_pmx_core*.pyd` 保留，以免下次构建退化。README 同步：功能表的发布行不再声称仓库内有与源码一致的 exe（`dist/` 改为构建时生成）、SDEF 段落改写为「蒙皮一律按 BDEF2、求值器只作对拍基线」并按现状补充 `_sdef_fallback_table()`、删除「视图 → SDEF 降级」与 `SDEF_AS_BDEF2` 的残留描述、目录树去掉 `dist/`、路线图里过时的「SDEF 半轴插值」换成权重绘制。
 - **2026-10-25 移除 VMD 播放、SDEF 改按 BDEF2**：动作播放属于动画软件的职责，模型编辑器只保留静态姿态（VPD 导入导出）。删掉 `vmd.py`、`timeline.py`、底部时间轴控件、`Viewport.apply_bone_tracks()`、文件菜单的「载入动作/关闭动作」、`tools/compare_blender.py`/`blender_dump.py` 与 8 个 VMD 场景（`vmd`/`vmdreal`/`vmdprobe`/`vmdphys`/`vmdcheck`/`vmdbad`/`vmdsdef`/`knee`），`tests/run.py` 因此少约 430 行。同时把 SDEF 从「可选降级」改成「一律按 BDEF2」（`skinning._sdef_fallback_table()` 固定把 type 3 映射成 1），视图菜单里的降级开关与 QSettings `view/sdef_as_bdef2` 一并删除：半轴口径修正后 SDEF 膝带仍比 BDEF2 外推 0.05~0.16，侧视有台阶，而 PmxEditor 的膝盖观感就是 BDEF2。`.pmx` 里 SDEF 的 C/R0/R1 仍原样解析与回写，`skin`/`ellipsoid`/`sdefr1` 三个场景继续直接调用 `native_core.deform` 对拍两条求值路径。
 - **2026-10-25 SDEF 半轴口径修正（膝盖突起）**：PMX 里 SDEF 的 `C/R0/R1` 存的都是"点"——模型库实测 `R0−C` 与 `R1−C` 恒为 180° 反向、`|R0|` 是骨骼长度量级（米娅 6.9、阿涵 14.6），只有逐轴 `|R−C|`（0.1~0.3）才是可信半轴。`native/pmx_core.cpp` 与 `skinning._special_blend()` 改为 `a_i = |R_i − C|`，并用**原始** R1 是否全零决定回退（C 非零时 `|0−C|` 不为零，不能看平移后的半轴）。效果：真机米娅帧 136 膝带 57 个 SDEF 顶点到关节中心 0.755/0.608 → **0.661/0.540**，与相邻 BDEF2（0.610/0.517）接上，侧视横向硬棱消失；`bdef2 vs sdef` 膝带最大差 0.209 → **0.164**。顺带让 HEAD 的「视图 → SDEF 降级为 BDEF2」开关真正生效（`skinning._sdef_fallback_table()` + `SkinDeformer.wtype_table()`，此前 deform 路径从不读这个开关）。新增 `go.py knee`（膝带权重类型、半轴口径、两种混合模式的侧视对照与数值），`ellipsoid` 增补「C 平移后半径不变」用例（该开关与 `knee` 场景已在下一条移除）。`verify_native_backend` 测试模型 26 项全过；米娅仅剩既有的 `IK rotations 0.0394` 差异（与蒙皮无关）；skin/dform/ellipsoid/sdefr1/final 场景 0 异常（`ikclamp` 的 0.2036 为既有差异，HEAD 同样复现）。
