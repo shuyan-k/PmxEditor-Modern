@@ -363,7 +363,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 同一项操作在原版与新版本里各做一遍并另存，再用 `pmxsem` 按 1e-5 容差逐字段比对。GUI 无法编辑或原版无入口的字段走原版自带 CSScript（`.cx`）通道写入，落盘仍由 PmxEditor 完成。
 
 ```powershell
-# 汇总总表（当前 42 项：34 一致 / 7 差异 / 1 单侧）
+# 汇总总表（当前 42 项：36 一致 / 5 差异 / 1 单侧）
 .\build\python\python.exe tests\parity\compare_all.py
 
 # 跑一组功能场景并收集异常
@@ -402,7 +402,7 @@ $env:PYTHONUTF8="1"     # 控制台是 GBK 时必须设置，否则中文日志�
 9. 保存后重新打开：计数全等，顶点/UV 最大差为 0。
 10. 真实模型（`米娅.pmx` 级别）改骨骼坐标应在 **100 ms** 以内（贴图缓存命中、结构分项重建）。
 11. `tools\verify_vpd.py` 通过，并用真实 VPD 检查导入、未匹配报告、撤销与零变化拒绝导出。
-12. 有原版 PmxEditor 环境时跑 `tests\parity\compare_all.py`，确认总表没有新增差异（当前 42 项 / 34 一致）。
+12. 有原版 PmxEditor 环境时跑 `tests\parity\compare_all.py`，确认总表没有新增差异（当前 42 项 / 36 一致）。
 
 ## 性能
 

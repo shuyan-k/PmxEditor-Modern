@@ -61,7 +61,7 @@ verify_native_report.json
 tests/action.vmd
 
 tests/*.npz
-_t*.py
+/_t*.py
 tests/*.vmd
 
 # 本地设置文件（settings.json 由程序生成，不随仓库分发）
