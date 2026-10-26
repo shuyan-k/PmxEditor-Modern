@@ -7,16 +7,29 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: "3.12"
   NUITKA_VERSION: "4.3.1"
-  BULLET_TAG: "3.25"
+  # 上游 bullet3 没有 3.26 tag；pybullet 3.2.7 的 sdist 内置 Bullet 3.26 源码。
+  PYBULLET_VERSION: "3.2.7"
+  BULLET_VERSION: "3.26"
 
 jobs:
   windows-exe:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # CI 自行编译原生二进制，不拉取 LFS 里的便携运行时，避免每次多下载约 220 MB。
+          lfs: false
 
       - uses: actions/setup-python@v5
         with:
@@ -30,6 +43,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt "nuitka==$env:NUITKA_VERSION"
+          python -m pip check
 
       # 静态检查仅供参考：规则集见 ruff.toml，偶发误报不阻断打包。
       - name: Lint (ruff)
@@ -38,18 +52,52 @@ jobs:
           python -m pip install -r requirements-dev.txt
           ruff check src tools tests --output-format concise
 
-      - name: Fetch Bullet sources
+      - name: Cache Bullet source archive
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pybullet-${{ env.PYBULLET_VERSION }}.tar.gz
+          key: pybullet-${{ env.PYBULLET_VERSION }}-bullet-${{ env.BULLET_VERSION }}
+
+      - name: Fetch Bullet 3.26 sources
+        shell: pwsh
         run: |
-          curl.exe -sSL -o "$env:RUNNER_TEMP\bullet.zip" "https://github.com/bulletphysics/bullet3/archive/refs/tags/$env:BULLET_TAG.zip"
-          Expand-Archive -Path "$env:RUNNER_TEMP\bullet.zip" -DestinationPath "$env:RUNNER_TEMP\bullet" -Force
+          $tar = Join-Path $env:RUNNER_TEMP "pybullet-$env:PYBULLET_VERSION.tar.gz"
+          if (-not (Test-Path $tar) -or (Get-Item $tar).Length -lt 50MB) {
+            curl.exe -L --fail --retry 3 --retry-delay 5 `
+              -o $tar "https://files.pythonhosted.org/packages/source/p/pybullet/pybullet-$env:PYBULLET_VERSION.tar.gz"
+            if ($LASTEXITCODE -ne 0) { throw "pybullet source download failed" }
+          }
+          tar -xzf $tar -C $env:RUNNER_TEMP
+          $src = Join-Path $env:RUNNER_TEMP "pybullet-$env:PYBULLET_VERSION\src"
+          if (-not (Test-Path (Join-Path $src "btBulletDynamicsCommon.h"))) {
+            throw "Bullet headers not found in pybullet sdist"
+          }
+          $version = Select-String -Path (Join-Path $src "LinearMath\btScalar.h") `
+            -Pattern '#define BT_BULLET_VERSION (\d+)'
+          if (-not $version -or $version.Matches[0].Groups[1].Value -ne "326") {
+            throw "expected Bullet 3.26 sources"
+          }
+          if (Test-Path native\bullet_src) { Remove-Item native\bullet_src -Recurse -Force }
           New-Item -ItemType Directory -Force native\bullet_src | Out-Null
-          Copy-Item -Recurse -Force "$env:RUNNER_TEMP\bullet\bullet3-$env:BULLET_TAG\src" native\bullet_src\src
+          Copy-Item -Recurse -Force $src native\bullet_src\src
 
       - name: Build Bullet physics DLL
         run: powershell -ExecutionPolicy Bypass -File native\build.ps1
 
       - name: Build native compute backend
         run: powershell -ExecutionPolicy Bypass -File native\build_core.ps1
+
+      - name: Verify native artifacts
+        shell: pwsh
+        run: |
+          $dll = Get-Item native\bullet_phys.dll
+          if ($dll.Length -lt 100KB) {
+            throw "bullet_phys.dll looks like an LFS pointer ($($dll.Length) bytes)"
+          }
+          $pyd = Get-ChildItem src\pmxeditor\_pmx_core*.pyd | Select-Object -First 1
+          if (-not $pyd -or $pyd.Length -lt 50KB) {
+            throw "native core extension was not produced"
+          }
 
       - name: Syntax check
         run: python -m compileall -q src tools tests main.py
@@ -94,8 +142,59 @@ jobs:
           if ($vi.ProductVersion -ne "1.0.0.0") { throw "unexpected ProductVersion: $($vi.ProductVersion)" }
           if (-not (Test-Path dist\release\PmxStudio.exe)) { throw "executable not produced" }
 
+      - name: Generate release metadata
+        shell: pwsh
+        run: |
+          $exe = "dist\release\PmxStudio.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  PmxStudio.exe" | Set-Content "dist\release\PmxStudio.exe.sha256" -Encoding ascii
+          $nuitka = (& python -m nuitka --version | Select-Object -First 1)
+          @(
+            "product=PmxStudio"
+            "commit=$env:GITHUB_SHA"
+            "ref=$env:GITHUB_REF"
+            "built_at=$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+            "python=$env:PYTHON_VERSION"
+            "nuitka=$nuitka"
+            "bullet=$env:BULLET_VERSION (pybullet $env:PYBULLET_VERSION)"
+          ) | Set-Content "dist\release\BUILD_INFO.txt" -Encoding utf8
+          Get-Content "dist\release\BUILD_INFO.txt"
+
       - uses: actions/upload-artifact@v4
         with:
           name: PmxStudio-windows-x64
-          path: dist/release/PmxStudio.exe
+          path: |
+            dist/release/PmxStudio.exe
+            dist/release/PmxStudio.exe.sha256
+            dist/release/BUILD_INFO.txt
           if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-exe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PmxStudio-windows-x64
+          path: release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "PmxStudio $tag" --generate-notes
+          fi
+          gh release upload "$tag" \
+            release/PmxStudio.exe \
+            release/PmxStudio.exe.sha256 \
+            release/BUILD_INFO.txt \
+            --clobber

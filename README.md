@@ -228,7 +228,7 @@ powershell -ExecutionPolicy Bypass -File native\build.ps1
 
 ### 便携 Python 运行时
 
-`build/python` 是精简的 CPython 3.12.10（约 251 MB，含 PyQt5 / PyOpenGL / NumPy / pybind11 / setuptools / pip / Nuitka，已剔除测试套件、tkinter、翻译与 `.pyi/.pdb`；NumPy 2.x 的 `numpy.libs` OpenBLAS DLL 一并保留）。重建：
+`build/python` 是精简的 CPython 3.12.10（约 220 MB，含 PyQt5 / PyOpenGL / NumPy / pybind11 / setuptools / pip / Nuitka，已剔除测试套件、tkinter、翻译与 `.pyi/.pdb`；NumPy 2.x 的 `numpy.libs` OpenBLAS DLL 一并保留）。该目录与原生二进制（`native/bullet_phys.dll`、`src/pmxeditor/_pmx_core*.pyd`）通过 **Git LFS** 入库；克隆后若未自动拉取，执行 `git lfs install && git lfs pull`。重建：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\make_portable_python.ps1 -Source "C:\Python312\python.exe"
@@ -467,8 +467,9 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
 - 数据文件映射按包内布局写：`assets` 与 `native` 落在发行根目录，`_pmx_core*.pyd` 落在 `pmxeditor/` 内（`paths.py` 的 `_locate()` 会自动找到它们）。
 - 通过 PowerShell 传参时带空格的参数必须整体加引号（如 `'--company-name="My App Name"'`），否则 Nuitka 报 `specify only one positional argument`。
 - **onefile 每次启动都会把运行时解压到 `%TEMP%`**。若解压目录不可用（策略受限、残留被强杀进程占用的 `onefile_*`、路径异常），exe 会立即退出且不显示窗口，退出码 2。排查顺序：清理 `%TEMP%\onefile_*` → 把 `TEMP`/`TMP` 指向普通可写目录 → 用 `--onefile-tempdir-spec` 固定解压目录重建；冒烟脚本结束时按进程名清理子进程，否则解压目录会被长期占用。
-- CI 构建：`.github/workflows/build.yml` 在 `windows-latest` 上重复上述流程（拉取 Bullet 3.25 源码 → 编译 `bullet_phys.dll` → 编译原生后端 → 语法检查 → 性能基准冒烟 → 原生/NumPy 对拍 → Nuitka 打包），校验 exe 的 `ProductName`/`ProductVersion` 后作为构建产物上传；发布用的 exe 以该产物为准。
-- 构建产物不入库：`dist/` 是构建时生成的输出目录（已在 `.gitignore` 里），仓库不保留 exe。发布前用上面的命令重新生成，再按下列方式验收：
+- CI 构建：`.github/workflows/build.yml` 在 `windows-latest` 上重复上述流程（拉取 Bullet 3.26 源码 → 编译 `bullet_phys.dll` → 编译原生后端 → 语法检查 → 性能基准冒烟 → 原生/NumPy 对拍 → Nuitka 打包），校验 exe 的 `ProductName`/`ProductVersion` 后作为构建产物上传；发布用的 exe 以该产物为准。Bullet 3.26 取自 pybullet 3.2.7 的 sdist（上游 bullet3 没有 3.26 tag），CI 会校验 `BT_BULLET_VERSION == 326`。
+- 推送 `v*` 标签时，CI 额外生成 `PmxStudio.exe.sha256` 与 `BUILD_INFO.txt`，并由 `release` job 自动创建或更新 GitHub Release；普通 push/PR 只上传 Actions 构建产物。
+- `dist/` 是构建时生成的输出目录（已在 `.gitignore` 里），仓库不保留 exe；`build/python` 与原生二进制走 Git LFS。发布前用上面的命令重新生成，再按下列方式验收：
   - 隔离环境（`PATH` 只留 `C:\Windows\System32` 等系统目录、私有 `TEMP`）启动 → 窗口正常、模型与贴图正常、骨骼叠加正常、stderr 为空；
   - `PmxStudio.exe --verify-backend --runs 1 --out dist\be.json tests\test_model.pmx` → 包内 `pmxeditor\_pmx_core.pyd` 被正确加载、26 项对拍出报告，整体 `ok=true`。IK 链接遍历顺序与限位阈值已与 NumPy 回退对齐，真实模型差异约 1e-9；「不限轮次」合成长链保留约 1.25e-4 的 float32 量化差（该项容差 2e-4 / 5e-4）。真实大模型上只剩 NumPy 回退的 `physics world` 约 1.1e-3（见「已知限制与技术债」）。
 - 上一次完整构建验收针对 `448af3c`（移除 VMD 与 SDEF 降级开关之前）；当前源码改动后需重新构建并复测。

@@ -4,7 +4,13 @@
 *.txt text eol=lf
 *.ps1 text eol=crlf
 *.bat text eol=crlf
-*.pyd binary
-*.dll binary
 *.png binary
 *.svg text eol=lf
+
+# Git LFS：便携运行时与原生二进制，避免大文件直接进入 Git 历史
+build/python/**/*.dll filter=lfs diff=lfs merge=lfs -text
+build/python/**/*.pyd filter=lfs diff=lfs merge=lfs -text
+build/python/**/*.exe filter=lfs diff=lfs merge=lfs -text
+build/python/**/*.lib filter=lfs diff=lfs merge=lfs -text
+native/bullet_phys.dll filter=lfs diff=lfs merge=lfs -text
+src/pmxeditor/_pmx_core*.pyd filter=lfs diff=lfs merge=lfs -text

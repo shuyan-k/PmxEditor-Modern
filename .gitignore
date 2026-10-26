@@ -1,6 +1,4 @@
-﻿# 便携运行时与构建产物
-build/
-!build/.gitkeep
+﻿# 打包产物
 dist/
 *.build/
 *.dist/
@@ -19,7 +17,8 @@ native/bullet_src/
 
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
 *.egg-info/
 .pytest_cache/
 .venv/
