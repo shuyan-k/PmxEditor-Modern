@@ -63,7 +63,7 @@ jobs:
         run: |
           $tar = Join-Path $env:RUNNER_TEMP "pybullet-$env:PYBULLET_VERSION.tar.gz"
           if (-not (Test-Path $tar) -or (Get-Item $tar).Length -lt 50MB) {
-            curl.exe -L --fail --retry 3 --retry-delay 5 `
+            curl.exe -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 600 `
               -o $tar "https://files.pythonhosted.org/packages/source/p/pybullet/pybullet-$env:PYBULLET_VERSION.tar.gz"
             if ($LASTEXITCODE -ne 0) { throw "pybullet source download failed" }
           }
@@ -191,7 +191,7 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "PmxStudio $tag" --generate-notes
+            gh release create "$tag" --title "PmxStudio $tag" --generate-notes --verify-tag
           fi
           gh release upload "$tag" \
             release/PmxStudio.exe \
