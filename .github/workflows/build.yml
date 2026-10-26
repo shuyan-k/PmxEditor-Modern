@@ -130,7 +130,7 @@ jobs:
             --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
             --company-name=PmxStudio --product-name=PmxStudio `
             --file-description="PMX model editor" `
-            --file-version=1.0.0.0 --product-version=1.0.0.0 main.py
+            --file-version=1.0.1.0 --product-version=1.0.1.0 main.py
 
       # SignPath metadata requirements: product name must match the project and
       # product version must be identical across builds.
@@ -139,7 +139,7 @@ jobs:
           $vi = (Get-Item dist\release\PmxStudio.exe).VersionInfo
           "ProductName=$($vi.ProductName) ProductVersion=$($vi.ProductVersion)"
           if ($vi.ProductName -ne "PmxStudio") { throw "unexpected ProductName: $($vi.ProductName)" }
-          if ($vi.ProductVersion -ne "1.0.0.0") { throw "unexpected ProductVersion: $($vi.ProductVersion)" }
+          if ($vi.ProductVersion -ne "1.0.1.0") { throw "unexpected ProductVersion: $($vi.ProductVersion)" }
           if (-not (Test-Path dist\release\PmxStudio.exe)) { throw "executable not produced" }
 
       - name: Generate release metadata

@@ -458,7 +458,7 @@ $env:PYTHONPATH = "$PWD\src"   # 让 Nuitka 找到 src 下的 pmxeditor 包，�
   --include-module=pmxeditor._pmx_core --include-module=tools.verify_native_backend `
   --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
   --company-name="PmxStudio" --product-name="PmxStudio" `
-  --file-version=1.0.0.0 --product-version=1.0.0.0 main.py
+  --file-version=1.0.1.0 --product-version=1.0.1.0 main.py
 ```
 
 要点：
