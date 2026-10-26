@@ -85,7 +85,8 @@ jobs:
         run: powershell -ExecutionPolicy Bypass -File native\build.ps1
 
       - name: Build native compute backend
-        run: powershell -ExecutionPolicy Bypass -File native\build_core.ps1
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File native\build_core.ps1 -Python (Get-Command python).Source
 
       - name: Verify native artifacts
         shell: pwsh
