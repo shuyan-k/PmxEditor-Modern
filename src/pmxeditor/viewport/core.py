@@ -56,7 +56,9 @@ class Viewport(QOpenGLWidget):
         self.pose: Optional[Pose] = None
         self.deformer: Optional[SkinDeformer] = None
         self.physics = MMDPhysics()
-        self.physics_settings = {"gravity": -9.8, "iterations": 10, "ground": True}
+        # 迭代次数与 MMD 的默认求解质量对齐：10 次时长发等锁定链会残留
+        # 持续微振（求解器噪声），30 次可正常收敛。
+        self.physics_settings = {"gravity": -9.8, "iterations": 30, "ground": True}
         self.camera = OrbitCamera()
         # 单一视图：姿态编辑随时可用，物理是独立开关（见 set_physics），
         # 两者可以同时生效（物理+姿态）。这里只记录"当前按住的骨骼"，
@@ -197,7 +199,6 @@ class Viewport(QOpenGLWidget):
         self._pose_flush_timer.setInterval(16)
         self._pose_flush_timer.timeout.connect(self._flush_pose_updates)
         self._pending_pose_deltas = []
-        self._phys_last = QElapsedTimer()
         self._hud = _HudOverlay(self)
         self._hud.setGeometry(self.rect())
 
@@ -793,7 +794,6 @@ class Viewport(QOpenGLWidget):
                 self.physics.reset(self.pose, self.morph_weights,
                                    self.model.morphs if self.model else None)
                 self.physics.enabled = True
-                self._phys_last.restart()
                 self._tick.start()
                 self.statusChanged.emit("物理演算已开启")
             else:
@@ -874,7 +874,6 @@ class Viewport(QOpenGLWidget):
             self.physics.reset(self.pose, self.morph_weights,
                                self.model.morphs if self.model else None)
             self.physics.enabled = True
-            self._phys_last.restart()
         else:
             self._tick.stop()
         self._pose_dirty = True
@@ -890,10 +889,11 @@ class Viewport(QOpenGLWidget):
             return
         if not self.ensure_physics():
             return
-        dt = max(0.0, min(0.05, self._phys_last.elapsed() / 1000.0))
-        self._phys_last.restart()
+        # 固定步长对齐 MMD：每帧推进 1/60 秒。若用墙钟间隔（GUI 每 tick
+        # 约 25ms）喂给 Bullet，stepSimulation 会在 1 和 2 个子步之间跳动，
+        # 同一段位移在相邻帧忽大忽小，观感就是模型来回抖动/拖影。
         self.pose.apply(self.morph_weights, self.model.morphs)
-        self.physics.step(self.pose, dt if dt > 0 else 1 / 60.0,
+        self.physics.step(self.pose, 1.0 / 60.0,
                           self.morph_weights, self.model.morphs)
         self._pose_dirty = True
         self._rb_dirty = True
@@ -1399,11 +1399,20 @@ class Viewport(QOpenGLWidget):
         j_rest = (np.stack(self._joint_rest_matrices()).astype(np.float32, copy=False)
                   if joints else np.zeros((0, 4, 4), np.float32))
         j_src = np.full(len(joints), -1, np.int32)
+        # 有一部分转换生成的模型会把「補」关节统一写在原点，而它约束的刚体在头顶；
+        # 这种关节框架离刚体有十几到二十个单位，完整增量（绕刚体转）会把标记甩出
+        # 好几米。正常关节离刚体通常不到 1 个单位，所以按 2 个单位区分。
+        j_far = np.zeros(len(joints), bool)
         for i, j in enumerate(joints):
+            jp = np.asarray(j.pos, np.float32)
+            near = []
             for ri in (j.rigid_a, j.rigid_b):
                 if 0 <= ri < len(rigid):
                     j_src[i] = ri
-                    break
+                    near.append(float(np.linalg.norm(
+                        jp - np.asarray(rigid[ri].pos, np.float32))))
+            if near and min(near) > 2.0:
+                j_far[i] = True
         bone_rest = (np.asarray([b.pos for b in m.bones], np.float32)
                      if nb else np.zeros((0, 3), np.float32))
         cache = {
@@ -1415,6 +1424,7 @@ class Viewport(QOpenGLWidget):
             "rigid_inv": rb_inv,
             "joint_rest": j_rest,
             "joint_src": j_src,
+            "joint_far": j_far,
             "bone_rest": bone_rest,
             "root_bone": self._global_root_bone(),
         }
@@ -1535,6 +1545,12 @@ class Viewport(QOpenGLWidget):
                     cur = self._rb_world[ri]
                 else:
                     cur = self._rigid_current_matrix(ri)
+                if self._overlay_arrays()["joint_far"][index]:
+                    # 远离刚体的异常关节只跟随平移（见 _build_joint_lines）
+                    out = M.copy()
+                    out[:3, 3] = (M[:3, 3] + cur[:3, 3]
+                                  - self._rigid_rest_matrices()[ri][:3, 3])
+                    return out
                 return (cur @ inv[ri]) @ M
         return M
 
@@ -1609,8 +1625,16 @@ class Viewport(QOpenGLWidget):
         if has.any() and len(self._rb_world) == len(m.rigid):
             inv = arr["rigid_inv"]
             s = src[has]
-            cur[has] = np.matmul(np.matmul(self._rb_world[s], inv[s]),
-                                 rests[has])
+            rbw = self._rb_world[s]
+            cur[has] = np.matmul(np.matmul(rbw, inv[s]), rests[has])
+            # 远离刚体的异常关节（例如写在原点的「補」关节）只跟随平移增量：
+            # 否则刚体稍微一转，几十个单位的力臂就会把标记甩到模型外。
+            far = arr["joint_far"][has]
+            if far.any():
+                moved = rests[has].copy()
+                moved[:, :3, 3] = (rests[has][:, :3, 3]
+                                   + (rbw[:, :3, 3] - arr["rigid_rest"][s][:, :3, 3]))
+                cur[has] = np.where(far[:, None, None], moved, cur[has])
         prev = self._joint_world
         if isinstance(prev, np.ndarray) and prev.shape == cur.shape and prev.size:
             changed = np.abs(cur - prev).max(axis=(1, 2)) > 5e-4
@@ -2005,6 +2029,10 @@ class Viewport(QOpenGLWidget):
         # 这一帧没变就不用重传 col/idx（约 4 MB），只传位置与法线。
         self._solid_attr_sig = (
             self._solid_tpl_serial,
+            # 静态段是否存在：模板变空时 _solid_tpl_serial 不递增，
+            # 但 parts 会少一段、骨骼数据被写进原静态段的 VBO，
+            # 颜色/索引若沿用旧刚体的就会渲染出青色等残片。
+            0 if static is None else 1,
             self.selection_kind,
             self.selection_index,
             round(float(self.bone_opacity), 4),

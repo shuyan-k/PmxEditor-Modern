@@ -75,7 +75,7 @@ class SettingsPage(PageBase):
         self.gravity.setValue(-9.8)
         self.iterations = QSpinBox()
         self.iterations.setRange(1, 60)
-        self.iterations.setValue(10)
+        self.iterations.setValue(30)
         self.iterations.setButtonSymbols(QSpinBox.NoButtons)
         self.ground = Switch(True)
         row = QHBoxLayout()

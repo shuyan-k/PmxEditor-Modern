@@ -1274,6 +1274,7 @@ void physics_step(
     Array<std::int32_t> bone_order, Array<std::int32_t> parents,
     Array<std::int32_t> rigid_for_bone, Array<float> rest_offsets,
     Array<float> pose_rotations, Array<float> pose_translations,
+    Array<float> pose_base_translations,
     Array<float> inverse_offsets, Array<float> override_rotations,
     Array<float> override_translations,
     Array<std::uint8_t> override_mask) {
@@ -1290,6 +1291,7 @@ void physics_step(
     const auto rest_info = rest_offsets.request();
     const auto pose_rot_info = pose_rotations.request();
     const auto pose_trans_info = pose_translations.request();
+    const auto pose_base_trans_info = pose_base_translations.request();
     const auto inverse_offsets_info = inverse_offsets.request();
     const auto override_rot_info = override_rotations.request(true);
     const auto override_trans_info = override_translations.request(true);
@@ -1308,6 +1310,7 @@ void physics_step(
     require_shape(rest_info, "rest_offsets", {bone_count, 3});
     require_shape(pose_rot_info, "pose_rotations", {bone_count, 4});
     require_shape(pose_trans_info, "pose_translations", {bone_count, 3});
+    require_shape(pose_base_trans_info, "pose_base_translations", {bone_count, 3});
     require_shape(inverse_offsets_info, "inverse_offsets", {body_count, 4, 4});
     require_shape(override_rot_info, "override_rotations", {bone_count, 4});
     require_shape(override_trans_info, "override_translations", {bone_count, 3});
@@ -1326,6 +1329,7 @@ void physics_step(
     const auto* rest_ptr = rest_offsets.data();
     const auto* pose_rot_ptr = pose_rotations.data();
     const auto* pose_trans_ptr = pose_translations.data();
+    const auto* pose_base_trans_ptr = pose_base_translations.data();
     const auto* inverse_offset_ptr = inverse_offsets.data();
     auto* position_ptr = body_positions.mutable_data();
     auto* rotation_ptr = body_rotations.mutable_data();
@@ -1393,9 +1397,12 @@ void physics_step(
                 float local[16] = {};
                 multiply4(parent_body, inverse_offset_ptr + rigid * 16, local);
                 local_rotation = matrix_quaternion(local);
+                // 模式 2「物理 + 骨骼对齐」：位移丢弃，只把旋转反馈给骨骼
+                const bool bone_merge = mode_ptr[rigid] == 2;
                 for (int axis = 0; axis < 3; ++axis) {
-                    local_translation[axis] =
-                        local[axis * 4 + 3] - rest_ptr[bone * 3 + axis];
+                    local_translation[axis] = bone_merge
+                        ? pose_base_trans_ptr[bone * 3 + axis]
+                        : local[axis * 4 + 3] - rest_ptr[bone * 3 + axis];
                 }
                 std::copy(local_rotation.begin(), local_rotation.end(),
                           override_rot_ptr + bone * 4);

@@ -54,7 +54,7 @@ DEFAULTS = {
         "wireframe": False,
         "show_shadow": True,
     },
-    "physics": {"gravity": -9.8, "iterations": 10, "ground": True},
+    "physics": {"gravity": -9.8, "iterations": 30, "ground": True},
     "paths": {"last_dir": "", "last_vpd_dir": ""},
     "window": {"geometry": "", "splitter": []},
     "editor": {"move_bone_vertices": True},

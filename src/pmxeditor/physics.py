@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 from typing import List
 
@@ -70,6 +71,52 @@ class _Bullet:
 def _arr(vals) -> ctypes.Array:
     return (ctypes.c_float * len(vals))(*[float(v) for v in vals])
 
+def _settle_limits(lo, hi) -> tuple:
+    """6DOF 限位：把「锁死在某非零值」的轴改为锁定在静止位。
+
+    Bullet 把 lo == hi 的轴当作「必须等于该值」，而静止位（偏差 0）恰好落在
+    限位之外，约束会持续把刚体推向该偏移。部分模型（残虹、KARU 式 MIKU、
+    1Zankou 系列等）的胸部物理模板正是写了 Y 轴 0.3 这类同值限位，开物理后
+    胸部上飞就是这个预载造成的。这里只把同值的非零端点归零：锁定语义不变，
+    目标变成静止位，静止姿态成为约束的稳定解。
+    """
+    lo = [float(v) for v in lo]
+    hi = [float(v) for v in hi]
+    for k in range(3):
+        if abs(lo[k] - hi[k]) <= 1e-6 and abs(lo[k]) > 1e-6:
+            lo[k] = hi[k] = 0.0
+    return lo, hi
+
+def _joint_frame_euler(rot) -> list:
+    """PMX 关节旋转（弧度）换算成本 DLL 需要的 YXZ 欧拉三元组。
+
+    PMX/MMD 的关节框架用 ZYX 顺序（R = Rz·Ry·Rx，与 saba 的 setEulerZYX 一致），
+    而 bullet_wrap 的 make_transform 固定按 YXZ 组四元数（刚体约定）。单轴时两种
+    顺序结果相同，多轴组合会差一个顺序，限位轴方向随之偏转。这里把目标旋转矩阵
+    分解成 YXZ 三元组，交给 DLL 现成的换算即可。
+    """
+    x, y, z = [float(v) for v in rot[:3]]
+    cx, sx = math.cos(x), math.sin(x)
+    cy, sy = math.cos(y), math.sin(y)
+    cz, sz = math.cos(z), math.sin(z)
+    # R = Rz·Ry·Rx（行主序），取分解需要的分量
+    r00 = cz * cy
+    r01 = cz * sy * sx - sz * cx
+    r02 = cz * sy * cx + sz * sx
+    r10 = sz * cy
+    r11 = sz * sy * sx + cz * cx
+    r12 = sz * sy * cx - cz * sx
+    r22 = cy * cx
+    rx = math.asin(max(-1.0, min(1.0, -r12)))
+    if abs(r12) < 1.0 - 1e-6:
+        ry = math.atan2(r02, r22)
+        rz = math.atan2(r10, r11)
+    else:
+        # 万向锁：rx = ±90°，把 rz 归零，剩下的角度合到 ry 上
+        rz = 0.0
+        ry = math.atan2(r01 if sx >= 0.0 else -r01, r00)
+    return [rx, ry, rz]
+
 class MMDPhysics:
     def __init__(self):
         self.world = None
@@ -96,7 +143,7 @@ class MMDPhysics:
         self._pose_layout_id = None
         self.enabled = False
         self.gravity = -9.8
-        self.iterations = 10
+        self.iterations = 30
         self.ground = True
         self.error = ""
         self._ready = False
@@ -200,12 +247,19 @@ class MMDPhysics:
                 continue
             if self.body_map[a] < 0 or self.body_map[b] < 0:
                 continue
+            if int(joint.type) in (0, 1):
+                # 只有 6DOF 的六个值才是「区间限位」，其余类型的数组字段另有含义
+                min_loc, max_loc = _settle_limits(joint.min_loc, joint.max_loc)
+                min_rot, max_rot = _settle_limits(joint.min_rot, joint.max_rot)
+            else:
+                min_loc, max_loc = joint.min_loc, joint.max_loc
+                min_rot, max_rot = joint.min_rot, joint.max_rot
             lib.bw_add_joint(self.world, int(joint.type),
                              self.body_map[a], self.body_map[b],
-                             _arr(joint.pos), _arr(joint.rot),
-                             _arr(joint.min_loc), _arr(joint.max_loc),
-                             _arr(joint.min_rot),
-                             _arr(joint.max_rot),
+                             _arr(joint.pos), _arr(_joint_frame_euler(joint.rot)),
+                             _arr(min_loc), _arr(max_loc),
+                             _arr(min_rot),
+                             _arr(max_rot),
                              _arr(joint.spring_loc), _arr(joint.spring_rot))
         self._ready = True
         self.enabled = False
@@ -329,7 +383,8 @@ class MMDPhysics:
                 self._body_positions, self._body_rotations,
                 self._pose_order_array, self._pose_parent_array,
                 self._rigid_for_bone, self._pose_rest_offsets,
-                pose.rot, pose.trans, self._inverse_offsets_array,
+                pose.rot, pose.trans, pose.base_trans,
+                self._inverse_offsets_array,
                 self._override_rotations, self._override_translations,
                 self._override_mask)
             pose.clear_overrides()
@@ -389,8 +444,12 @@ class MMDPhysics:
                     local = (mat4_inverse(Wp) @ body_m
                              @ mat4_inverse(self.offsets[i]))
                     pose.ov_rot[bone] = mat_to_quat(local[:3, :3])
-                    pose.ov_trans[bone] = (
-                        local[:3, 3] - pose.rest_off[bone])
+                    if self.modes[i] == 2:
+                        # 「物理 + 骨骼对齐」：位移丢弃，只有旋转反馈给骨骼
+                        pose.ov_trans[bone] = pose.base_trans[bone]
+                    else:
+                        pose.ov_trans[bone] = (
+                            local[:3, 3] - pose.rest_off[bone])
                     q = pose.ov_rot[bone]
                     t = pose.ov_trans[bone]
                 else:

@@ -582,7 +582,7 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
         try:
             page.gravity.setValue(float(self.config.get("physics/gravity", -9.8)))
-            page.iterations.setValue(int(self.config.get("physics/iterations", 10)))
+            page.iterations.setValue(int(self.config.get("physics/iterations", 30)))
             page.ground.setChecked(bool(self.config.get("physics/ground", True)))
         except Exception:
             traceback.print_exc()
@@ -989,8 +989,8 @@ class MainWindow(QMainWindow):
                 w.setChecked(enabled)
                 w.blockSignals(False)
         if enabled:
-            self._apply_display({"show_rigid": True, "show_joints": True,
-                                 "show_bones": True})
+            # 物理演算不改动用户的显示开关：之前强制打开刚体/关节/骨骼，
+            # 会把用户手动关掉的叠加层又打开（关节球常被当成「掉到地上」）。
             self._pages[5].sync_display(self.viewport)
             self._set_status("物理演算已开启 · 可同时摆姿（左键位移 / 右键旋转）")
         else:
