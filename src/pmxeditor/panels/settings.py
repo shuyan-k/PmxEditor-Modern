@@ -57,6 +57,18 @@ class SettingsPage(PageBase):
         sec.add(label("背景：视口底色明度；模型：材质漫反射/环境色倍率。", "Faint", True))
         bl.addWidget(card)
 
+        card, sec = self._card("叠加层不透明度", "骨骼 / 刚体 / 关节实体")
+        self.bone_opacity, self.bone_opacity_value = self._brightness_row(
+            sec, "骨骼", 0, 100, 16)
+        self.rigid_opacity, self.rigid_opacity_value = self._brightness_row(
+            sec, "刚体", 0, 100, 22)
+        self.joint_opacity, self.joint_opacity_value = self._brightness_row(
+            sec, "关节", 0, 100, 33)
+        for slider in (self.bone_opacity, self.rigid_opacity, self.joint_opacity):
+            slider.valueChanged.connect(self._opacity)
+        sec.add(label("0% 完全隐藏实体，100% 完全不透明。", "Faint", True))
+        bl.addWidget(card)
+
         card, sec = self._card("Bullet 物理", "实时预览参数")
         form = Form(64)
         self.gravity = make_spin(2, -100.0, 100.0, 0.5)
@@ -120,9 +132,9 @@ class SettingsPage(PageBase):
         keys = [("Ctrl+O", "打开模型"), ("Ctrl+S", "保存"), ("Ctrl+Shift+S", "另存为"),
                 ("Ctrl+Z", "撤销"), ("Ctrl+Y", "重做"), ("F", "视图全部"),
                 ("R", "重置姿态"), ("P", "物理演算开关"),
-                ("左键单击/双击", "选择骨骼/刚体/关节"),
-                ("左键拖动骨骼", "位移"),
-                ("右键拖动骨骼", "旋转"),
+                ("双击", "选择骨骼/刚体/关节"),
+                ("左键拖动骨骼", "位移（先选中）"),
+                ("右键拖动骨骼", "旋转（先选中）"),
                 ("中键拖动", "旋转视图"), ("Shift+中键拖动", "平移视图"),
                 ("滚轮", "缩放")]
         form = Form(90)
@@ -187,6 +199,18 @@ class SettingsPage(PageBase):
         self.bg_value.setText("%d%%" % self.bg_slider.value())
         self.model_value.setText("%d%%" % self.model_slider.value())
 
+    def _opacity(self):
+        self.bone_opacity_value.setText("%d%%" % self.bone_opacity.value())
+        self.rigid_opacity_value.setText("%d%%" % self.rigid_opacity.value())
+        self.joint_opacity_value.setText("%d%%" % self.joint_opacity.value())
+        if self.loading:
+            return
+        self.displayChanged.emit({
+            "bone_opacity": self.bone_opacity.value() / 100.0,
+            "rigid_opacity": self.rigid_opacity.value() / 100.0,
+            "joint_opacity": self.joint_opacity.value() / 100.0,
+        })
+
     def _display(self, key: str, on: bool):
         if self.loading:
             return
@@ -204,5 +228,12 @@ class SettingsPage(PageBase):
         try:
             for key, sw in self.display_switches.items():
                 sw.setChecked(bool(getattr(viewport, key, False)))
+            for key, slider, value in (
+                    ("bone_opacity", self.bone_opacity, self.bone_opacity_value),
+                    ("rigid_opacity", self.rigid_opacity, self.rigid_opacity_value),
+                    ("joint_opacity", self.joint_opacity, self.joint_opacity_value)):
+                pct = int(round(float(getattr(viewport, key, 0.0)) * 100))
+                slider.setValue(pct)
+                value.setText("%d%%" % pct)
         finally:
             self.loading = False

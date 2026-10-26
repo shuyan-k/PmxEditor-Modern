@@ -29,9 +29,11 @@ struct BWWorld {
 };
 
 static btQuaternion euler_to_quat(float rx, float ry, float rz) {
-    // PMX 采用 XYZ 欧拉角（等价于 Blender 'XYZ'），即 Rz * Ry * Rx
-    btQuaternion q;
-    q.setEulerZYX(rz, ry, rx);
+    // PMX 刚体/关节旋转是弧度制，MMD 使用 YXZ 顺序：R = Ry * Rx * Rz
+    btQuaternion qx(btVector3(1, 0, 0), rx);
+    btQuaternion qy(btVector3(0, 1, 0), ry);
+    btQuaternion qz(btVector3(0, 0, 1), rz);
+    btQuaternion q = qy * qx * qz;
     q.normalize();
     return q;
 }

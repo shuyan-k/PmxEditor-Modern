@@ -566,6 +566,9 @@ class MainWindow(QMainWindow):
         for key in ("show_grid", "show_bones", "show_rigid", "show_joints",
                     "show_texture", "toon", "outline", "wireframe"):
             values[key] = bool(self.config.get("view/" + key, True))
+        for key in ("bone_opacity", "rigid_opacity", "joint_opacity"):
+            values[key] = float(self.config.get("view/" + key,
+                                                getattr(self.viewport, key)))
         try:
             self.viewport.set_display(**values)
             for key, on in values.items():
@@ -1005,6 +1008,15 @@ class MainWindow(QMainWindow):
 
     def _apply_display(self, values: dict):
         self.viewport.set_display(**values)
+        settings = {}
+        for key, value in values.items():
+            if key in ("bone_opacity", "rigid_opacity", "joint_opacity"):
+                settings["view/" + key] = float(value)
+            elif hasattr(self.viewport, key):
+                settings["view/" + key] = bool(value)
+        if settings:
+            self.config.update(settings, save=False)
+            self._defer_settings_save()
         for key, on in values.items():
             act = self.display_actions.get(key)
             if act is not None:

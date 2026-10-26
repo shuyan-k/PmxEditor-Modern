@@ -111,6 +111,17 @@ def euler_to_quat(rx, ry, rz) -> np.ndarray:
     qz = axis_angle_quat((0, 0, 1), rz)
     return normalize_quat(quat_mul(qz, quat_mul(qy, qx)))
 
+def rigid_euler_quat(rx, ry, rz) -> np.ndarray:
+    """PMX 刚体/关节旋转（弧度）：MMD 使用 YXZ 顺序，即 R = Ry·Rx·Rz。
+
+    骨骼姿态用的是 XYZ（R = Rz·Ry·Rx），两者不能混用；顺序错了单轴看起来
+    正常，多轴组合时刚体会朝错误方向扭转。
+    """
+    qx = axis_angle_quat((1, 0, 0), rx)
+    qy = axis_angle_quat((0, 1, 0), ry)
+    qz = axis_angle_quat((0, 0, 1), rz)
+    return normalize_quat(quat_mul(qy, quat_mul(qx, qz)))
+
 def quat_to_euler(q):
     x, y, z, w = [float(v) for v in normalize_quat(q)]
     # R = Rz·Ry·Rx

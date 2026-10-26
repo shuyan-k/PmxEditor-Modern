@@ -876,23 +876,35 @@ def scen_vp():
         log("   %s 首个=%s 末个=%s" % (k, v[0], v[-1]))
     if not hits:
         anomaly("pick", "视口内任意位置都拾取不到任何对象")
-    # 单击骨骼
+    # 单击骨骼：不再选中；双击才选中
     if "bone" in hits:
         xx, yy, idx = hits["bone"][len(hits["bone"]) // 2]
-        log("--- 单击骨骼 (本地坐标 %d,%d 期望 index=%d)" % (xx, yy, idx))
+        log("--- 单击骨骼 (本地坐标 %d,%d) 期望不选中" % (xx, yy))
         QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(xx, yy))
         pump(300)
         log("    doc.sel=%s vp.selection_kind=%r 页=%d status=%r"
             % ((WIN.doc.sel_kind, WIN.doc.sel_index), vp.selection_kind,
                WIN.inspector.currentIndex(), STATUS.text))
+        if vp.selection_kind:
+            anomaly("click-select", "单击骨骼仍改变了选择（%s:%s）"
+                    % (vp.selection_kind, vp.selection_index))
+        log("--- 双击骨骼 (本地坐标 %d,%d 期望 index=%d)" % (xx, yy, idx))
+        QTest.mouseDClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(xx, yy))
+        pump(300)
+        log("    doc.sel=%s vp.selection_kind=%r 页=%d status=%r"
+            % ((WIN.doc.sel_kind, WIN.doc.sel_index), vp.selection_kind,
+               WIN.inspector.currentIndex(), STATUS.text))
+        if vp.selection_kind != "bone":
+            anomaly("dblclick-select", "双击骨骼未选中（当前 %r）"
+                    % (vp.selection_kind,))
         log("    vp._hover=%r" % vp._hover)
-    # 单击空白（左上角）
-    log("--- 单击空白处 (10,10)")
-    QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(10, 10))
+    # 双击空白取消选择
+    log("--- 双击空白处 (10,10)")
+    QTest.mouseDClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(10, 10))
     pump(250)
     log("    doc.sel=%s" % ((WIN.doc.sel_kind, WIN.doc.sel_index),))
     if WIN.doc.sel_kind:
-        anomaly("deselect", "点击视口空白处后选中状态没有清除（%s:%s 仍保持）"
+        anomaly("deselect", "双击视口空白处后选中状态没有清除（%s:%s 仍保持）"
                 % (WIN.doc.sel_kind, WIN.doc.sel_index))
     # 滚轮缩放
     d0 = cam.distance
@@ -932,6 +944,34 @@ def scen_vp():
     n_undo = len(WIN.doc._undo)
     if "bone" in hits:
         hx, hy, idx = [v for v in hits["bone"] if v[2] != 0][0]
+        # 未选中时拖动骨骼：不得改姿态，左键只旋转视角
+        WIN.doc.select("", -1)
+        pump(150)
+        cam_saved = (cam.yaw, cam.pitch, cam.target.copy(), cam.distance)
+        rot_u = [list(map(float, r)) for r in vp.pose.base_rot] if vp.pose else None
+        trans_u = [list(map(float, r)) for r in vp.pose.base_trans] if vp.pose else None
+        yaw_u = cam.yaw
+        log("--- 未选中时左键拖动骨骼 index=%d（姿态应不变）" % idx)
+        _mouse_drag(vp, QPoint(hx, hy), QPoint(hx + 30, hy + 10), Qt.LeftButton, Qt.NoModifier)
+        pump(300)
+        same_rot = rot_u == ([list(map(float, r)) for r in vp.pose.base_rot] if vp.pose else None)
+        same_trans = trans_u == ([list(map(float, r)) for r in vp.pose.base_trans] if vp.pose else None)
+        log("    姿态不变=%s/%s yaw %.4f → %.4f status=%r"
+            % (same_rot, same_trans, yaw_u, cam.yaw, STATUS.text))
+        if not (same_rot and same_trans):
+            anomaly("unselected-drag", "未选中的骨骼被拖动改变了姿态")
+        if abs(cam.yaw - yaw_u) < 1e-6:
+            anomaly("unselected-orbit", "未选中拖动骨骼时左键没有旋转视角")
+        if "未选中" not in STATUS.text:
+            anomaly("unselected-tip", "拖动未选中骨骼时没有状态提示（%r）" % STATUS.text)
+        cam.yaw, cam.pitch = cam_saved[0], cam_saved[1]
+        cam.target = cam_saved[2]
+        cam.distance = cam_saved[3]
+        vp.update()
+        pump(120)
+        WIN.doc.select("bone", idx)
+        pump(150)
+        rot_before = [list(map(float, r)) for r in vp.pose.base_rot]
         log("--- 右键拖动骨骼旋转 index=%d 本地(%d,%d)" % (idx, hx, hy))
         _mouse_drag(vp, QPoint(hx, hy), QPoint(hx + 40, hy + 15), Qt.RightButton, Qt.NoModifier)
         pump(500)
@@ -1009,6 +1049,8 @@ def scen_vp():
             break
     if target:
         bx, by, bidx = target
+        WIN.doc.select("bone", bidx)
+        pump(150)
         t0 = vp.pose.base_trans[bidx].copy()
         log("--- 物理演算中左键拖动非物理骨骼 index=%d" % bidx)
         _mouse_drag(vp, QPoint(bx, by), QPoint(bx + 35, by + 20),
@@ -2110,13 +2152,13 @@ def scen_fix2():
     H.STATE["step"] = "fix2"
     WIN._select_page(1); pump(300)
     vp = WIN.viewport
-    # 1) 点空白处取消选择
+    # 1) 双击空白处取消选择（单击已改为不改变选择）
     WIN.doc.select("bone", 0); pump(200)
-    QTest.mouseClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(8, 8))
+    QTest.mouseDClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(8, 8))
     pump(250)
     log("deselect: sel=%s" % ((WIN.doc.sel_kind, WIN.doc.sel_index),))
     if WIN.doc.sel_kind:
-        anomaly("deselect", "点视口空白处后选择未清除")
+        anomaly("deselect", "双击视口空白处后选择未清除")
     # 2) 姿态模式仅单击不产生撤销
     WIN.set_physics(False); pump(300)
     hits = []
@@ -3806,7 +3848,7 @@ def scen_restmove():
 
 
 def scen_mouse():
-    """视角操作：左键拖动旋转、右键拖动平移、左键单击选择；骨骼页开关持久化。"""
+    """视角操作：左键拖动旋转、右键拖动平移、单击不选中/双击选中；骨骼页开关持久化。"""
     from PyQt5.QtCore import QEvent, QPointF, Qt
     from PyQt5.QtGui import QMouseEvent
     from pmxeditor import panels as pn
@@ -3854,13 +3896,18 @@ def scen_mouse():
     if dt < 1e-4:
         anomaly("right-drag-pan", "右键拖动没有平移视角")
 
-    # 3) 左键单击（不移动）= 选择，空白处取消选择
+    # 3) 左键单击（不移动）不改变选择；双击空白取消选择
     send(QEvent.MouseButtonPress, 6, 6, Qt.LeftButton, Qt.LeftButton)
     send(QEvent.MouseButtonRelease, 6, 6, Qt.LeftButton, Qt.NoButton)
     pump(80)
     log("左键单击空白: sel=%s" % ((doc.sel_kind, doc.sel_index),))
+    if doc.sel_kind != "bone":
+        anomaly("click-blank", "左键单击空白不应改变选择（%s）" % (doc.sel_kind,))
+    QTest.mouseDClick(vp, Qt.LeftButton, Qt.NoModifier, QPoint(6, 6))
+    pump(80)
+    log("双击空白: sel=%s" % ((doc.sel_kind, doc.sel_index),))
     if doc.sel_kind != "":
-        anomaly("click-blank", "左键单击空白没有取消选择")
+        anomaly("dblclick-blank", "双击空白没有取消选择")
 
     # 4) 「移动时带动顶点」不再持久化（与原版 PmxEditor 对齐：原版移动骨骼不搬顶点）
     from pmxeditor.config import Config
@@ -5120,6 +5167,8 @@ def scen_flagguard():
 
     # 3) 可移动=开时左键拖动确实位移（对照组）
     restore_cam()
+    doc.select("bone", idx)
+    pump(80)
     px, py = at()
     trans0 = vp.pose.base_trans[idx].copy()
     send(QEvent.MouseButtonPress, px, py, Qt.LeftButton, Qt.LeftButton)

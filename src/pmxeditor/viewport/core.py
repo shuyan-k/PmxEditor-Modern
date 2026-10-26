@@ -21,8 +21,9 @@ from ..skinning import (Pose, SkinDeformer, apply_vertex_morphs, active_ik_indic
                         transform_to_mat4, mat4_inverse)
 from ..theme import (ACCENT, BONE_RGB, GRID_MAJOR_RGB, GRID_MINOR_RGB, GRID_X_RGB, GRID_Z_RGB, GROUP_COLORS, RIGID_STATIC_RGB, TEX_MISS_BG, TEX_MISS_CELL, TEXT, TEXT_DIM, TEXT_FAINT, VIEW_BG_RGB, mono_font, ui_font)
 from .camera import OrbitCamera
-from .shaders import LINE_FS, LINE_VS, MESH_FS, MESH_VS, _compile
-from .geom import _deg_quat, _line_geom, _point_segment_dist
+from .shaders import LINE_FS, LINE_VS, MESH_FS, MESH_VS, SOLID_FS, SOLID_VS, _compile
+from .geom import (_rigid_quat, _line_geom, _point_segment_dist, box_mesh,
+                   capsule_mesh, octahedron_mesh, sphere_mesh)
 from .hud import _HudOverlay
 
 
@@ -73,6 +74,10 @@ class Viewport(QOpenGLWidget):
         self.show_bones = False
         self.show_rigid = False
         self.show_joints = False
+        # 叠加层实体不透明度（0~1），只影响显示，可随配置保存
+        self.bone_opacity = 0.16
+        self.rigid_opacity = 0.22
+        self.joint_opacity = 0.33
         self.show_texture = True
         self.toon = True
         self.outline = True
@@ -102,6 +107,7 @@ class Viewport(QOpenGLWidget):
         self._tex_warm: Optional[threading.Thread] = None
         self._prog_mesh = 0
         self._prog_line = 0
+        self._prog_solid = 0
         self._stencil_bits = 0
         self._loc = {}
         self._line = {}
@@ -116,6 +122,15 @@ class Viewport(QOpenGLWidget):
         self._line_sizes = {
             name: [0, 0] for name in ("bone", "rigid", "joint")
         }
+        # 实体叠加层：所有可见的刚体/关节/选中骨骼合并成一个 VBO
+        self._solid_geom = (np.zeros((0, 3), np.float32),
+                            np.zeros((0, 3), np.float32),
+                            np.zeros((0, 4), np.float32),
+                            np.zeros((0,), np.int32))
+        self._solid_count = 0
+        self._solid_sizes = [0, 0, 0, 0]
+        self._vbo_solid = None
+        self._solid_mesh_cache = {}
         self._rb_world = []
         self._skin_pos = None
         self._skin_nrm = None
@@ -134,6 +149,8 @@ class Viewport(QOpenGLWidget):
             "joint_lines": 0,
             "line_uploads": 0,
             "line_upload_bytes": 0,
+            "solid_builds": 0,
+            "solid_upload_bytes": 0,
             "deform_calls": 0,
             "deform_ms": 0.0,
             "solve_ik_calls": 0,
@@ -152,7 +169,6 @@ class Viewport(QOpenGLWidget):
         self._dragging = None
         self._last_mouse = QPoint()
         self._press_pos = QPoint()
-        self._pending_pick = ("", -1)
         self._drag_bone = -1
         self._edit_pushed = False
         self._pose_moved = False
@@ -191,6 +207,8 @@ class Viewport(QOpenGLWidget):
                                        {"aPos": 0, "aNrm": 1, "aUV": 2})
             self._prog_line = _compile(LINE_VS, LINE_FS,
                                        {"aPos": 0, "aColor": 1})
+            self._prog_solid = _compile(SOLID_VS, SOLID_FS,
+                                        {"aPos": 0, "aNrm": 1, "aColor": 2})
             self._loc = {
                 "mesh": {k: GL.glGetUniformLocation(self._prog_mesh, k) for k in
                          ("uMVP", "uExpand", "uTex", "uUseTex", "uDiffuse", "uAmbient",
@@ -198,6 +216,8 @@ class Viewport(QOpenGLWidget):
                           "uLightDir", "uSphereTex", "uUseSphere", "uSphereMode")},
                 "line": {k: GL.glGetUniformLocation(self._prog_line, k)
                          for k in ("uMVP", "uAlpha")},
+                "solid": {k: GL.glGetUniformLocation(self._prog_solid, k)
+                          for k in ("uMVP", "uLightDir", "uEye")},
             }
         except Exception as e:
             self._status = "渲染初始化失败：%s" % e
@@ -242,14 +262,24 @@ class Viewport(QOpenGLWidget):
             self._draw_mesh(mvp)
         overlays = self.show_bones or self.show_rigid or self.show_joints
         if overlays:
+            GL.glEnable(GL.GL_BLEND)
+            GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
             GL.glDisable(GL.GL_DEPTH_TEST)
-            if self.show_bones and self._bone_geom[0].size:
-                self._draw_lines("bone", mvp, 0.5, width=1.1)
-            if self.show_rigid and self._rb_geom[0].size:
-                self._draw_lines("rigid", mvp, 0.6, width=1.2)
-            if self.show_joints and self._joint_geom[0].size:
-                self._draw_lines("joint", mvp, 0.7, width=1.2)
-            GL.glEnable(GL.GL_DEPTH_TEST)
+            GL.glDepthMask(GL.GL_FALSE)
+            try:
+                self._draw_solids(mvp)
+                # 线框保持不透明，避免半透明线条在浅色模型上发灰
+                GL.glDisable(GL.GL_BLEND)
+                if self.show_bones and self._bone_geom[0].size:
+                    self._draw_lines("bone", mvp, 0.5, width=1.1)
+                if self.show_rigid and self._rb_geom[0].size:
+                    self._draw_lines("rigid", mvp, 0.6, width=1.2)
+                if self.show_joints and self._joint_geom[0].size:
+                    self._draw_lines("joint", mvp, 0.7, width=1.2)
+            finally:
+                GL.glDepthMask(GL.GL_TRUE)
+                GL.glEnable(GL.GL_DEPTH_TEST)
+                GL.glDisable(GL.GL_BLEND)
         self._paint_hud_done()
         if self._fps_skip:
             # 这一次重绘是 _decay_fps 为了刷新 HUD 才触发的，不能当成真实帧率样本，
@@ -334,6 +364,11 @@ class Viewport(QOpenGLWidget):
                          np.zeros((0, 3), np.float32))
         self._joint_geom = (np.zeros((0, 3), np.float32),
                             np.zeros((0, 3), np.float32))
+        self._solid_geom = (np.zeros((0, 3), np.float32),
+                            np.zeros((0, 3), np.float32),
+                            np.zeros((0, 4), np.float32),
+                            np.zeros((0,), np.int32))
+        self._solid_count = 0
         self._rb_world = []
         self._tex_cache.clear()
         self._tick.stop()
@@ -901,13 +936,28 @@ class Viewport(QOpenGLWidget):
         self.update()
 
     def set_display(self, **kwargs):
+        overlay_changed = False
         for k, v in kwargs.items():
+            if k in ("bone_opacity", "rigid_opacity", "joint_opacity"):
+                value = max(0.0, min(1.0, float(v)))
+                if abs(value - float(getattr(self, k))) > 1e-6:
+                    setattr(self, k, value)
+                    overlay_changed = True
+                continue
             if hasattr(self, k):
+                old = bool(getattr(self, k))
                 setattr(self, k, bool(v))
-                if v and k == "show_rigid":
-                    self._rb_dirty = True
-                elif v and k == "show_joints":
-                    self._joint_dirty = True
+                if k in ("show_bones", "show_rigid", "show_joints"):
+                    if old != bool(v):
+                        overlay_changed = True
+                    if v and k == "show_rigid":
+                        self._rb_dirty = True
+                    elif v and k == "show_joints":
+                        self._joint_dirty = True
+        # 实体层按当前可见集合整体重建，关闭任一开关也必须刷新，
+        # 否则隐藏的刚体/关节/骨骼实体还会残留在叠加层里。
+        if overlay_changed:
+            self._pose_dirty = True
         self.update()
 
     def frame_all(self):
@@ -962,6 +1012,11 @@ class Viewport(QOpenGLWidget):
         if self._pose_dirty:
             self._refresh_pose_geometry(skin)
         self._refresh_static_overlays()
+        if self.show_bones or self.show_rigid or self.show_joints:
+            self._build_solid_geometry()
+            self._upload_solid_geom()
+        else:
+            self._solid_count = 0
 
     def _refresh_pose_geometry(self, skin: bool = True):
         m = self.model
@@ -1069,15 +1124,31 @@ class Viewport(QOpenGLWidget):
             lengths[degenerate] = np.linalg.norm(directions[degenerate], axis=1)
         directions /= np.maximum(1e-6, lengths)[:, None]
 
-        ups = np.zeros_like(directions)
-        ups[:, 1] = 1.0
-        use_z_up = np.abs(directions[:, 1]) > 0.98
-        ups[use_z_up] = (0.0, 0.0, 1.0)
-        sides = np.cross(directions, ups)
+        selected = ((indices == self.selection_index)
+                    & (self.selection_kind == "bone"))
+
+        # 环的朝向取骨骼局部 X/Z 轴，而不是世界“上”，这样骨骼滚转（roll）
+        # 和扭转能直接从视口看出来；局部轴退化时才回退到与方向垂直的构造。
+        sides = world[indices, :3, 0].astype(np.float32, copy=True)
+        up2 = world[indices, :3, 2].astype(np.float32, copy=True)
         side_lengths = np.linalg.norm(sides, axis=1)
+        up_lengths = np.linalg.norm(up2, axis=1)
+        bad_axes = (side_lengths < 1e-6) | (up_lengths < 1e-6)
+        if bad_axes.any():
+            ups = np.zeros_like(directions)
+            ups[:, 1] = 1.0
+            use_z_up = np.abs(directions[:, 1]) > 0.98
+            ups[use_z_up] = (0.0, 0.0, 1.0)
+            fb_sides = np.cross(directions, ups)
+            fb_sides /= np.maximum(1e-6, np.linalg.norm(fb_sides, axis=1))[:, None]
+            sides[bad_axes] = fb_sides[bad_axes]
+            up2[bad_axes] = np.cross(fb_sides, directions)[bad_axes]
+            side_lengths[bad_axes] = 1.0
+            up_lengths[bad_axes] = 1.0
         sides /= np.maximum(1e-6, side_lengths)[:, None]
-        up2 = np.cross(sides, directions)
-        widths = np.maximum(0.012, lengths * 0.055)[:, None]
+        up2 /= np.maximum(1e-6, up_lengths)[:, None]
+        widths = np.maximum(
+            0.010, lengths * np.where(selected, 0.062, 0.040))[:, None]
         mids = heads + directions * (lengths * 0.18)[:, None]
         ring = np.stack((
             mids + sides * widths,
@@ -1090,35 +1161,50 @@ class Viewport(QOpenGLWidget):
             np.asarray(BONE_RGB, dtype=np.float32), heads.shape).copy()
         colors[static["after_physics"]] = (0.35, 0.85, 0.78)
         colors[static["ik"]] = (0.98, 0.75, 0.35)
-        selected = ((indices == self.selection_index)
-                    & (self.selection_kind == "bone"))
         colors[selected] = (0.31, 0.72, 1.0)
         colors[static["not_operable"]] *= 0.5
 
+        # 0=中心轴，1-4=头到环，5-8=环到腿，9-11=选中坐标轴，12-17=轴箭头
         n = len(indices)
-        starts = np.zeros((n, 11, 3), dtype=np.float32)
+        starts = np.zeros((n, 18, 3), dtype=np.float32)
         ends = np.zeros_like(starts)
         segment_colors = np.broadcast_to(colors[:, None, :], starts.shape).copy()
         starts[:, 0] = heads
-        ends[:, 0] = np.where(selected[:, None], ring[:, 0], tails)
-        segment_colors[:, 0] *= np.where(selected, 1.0, 0.85)[:, None]
-        for i in range(3):
-            starts[:, 1 + i] = np.where(selected[:, None], heads, ring[:, i])
-            ends[:, 1 + i] = ring[:, i + 1]
-        starts[:, 4] = np.where(selected[:, None], ring[:, 0], ring[:, 3])
-        ends[:, 4] = np.where(selected[:, None], tails, ring[:, 0])
-        for i in range(3):
-            starts[:, 5 + i] = ring[:, i + 1]
+        ends[:, 0] = tails
+        segment_colors[:, 0] *= 0.55
+        for i in range(4):
+            starts[:, 1 + i] = heads
+            ends[:, 1 + i] = ring[:, i]
+            starts[:, 5 + i] = ring[:, i]
             ends[:, 5 + i] = tails
+
         axis_colors = np.asarray(
             ((0.93, 0.35, 0.35), (0.4, 0.9, 0.5), (0.35, 0.6, 1.0)),
             dtype=np.float32)
+        axis_dirs = np.eye(3, dtype=np.float32)
+        axis_perps = (
+            (np.array((0.0, 1.0, 0.0), np.float32),
+             np.array((0.0, 0.0, 1.0), np.float32)),
+            (np.array((1.0, 0.0, 0.0), np.float32),
+             np.array((0.0, 0.0, 1.0), np.float32)),
+            (np.array((1.0, 0.0, 0.0), np.float32),
+             np.array((0.0, 1.0, 0.0), np.float32)),
+        )
+        axis_len = np.clip(lengths * 0.9, 0.15, 1.2)[:, None].astype(np.float32)
+        arrow_len = np.clip(axis_len * 0.22, 0.018, 0.11)
+        arrow_off = np.clip(axis_len * 0.12, 0.010, 0.060)
         for i in range(3):
-            starts[:, 8 + i] = heads
-            ends[:, 8 + i] = heads
-            ends[:, 8 + i, i] += 2.0
-            segment_colors[:, 8 + i] = axis_colors[i]
-        valid = np.arange(11)[None, :] < np.where(selected, 11, 5)[:, None]
+            axis = axis_dirs[i]
+            tip = heads + axis * axis_len
+            starts[:, 9 + i] = heads
+            ends[:, 9 + i] = tip
+            segment_colors[:, 9 + i] = axis_colors[i]
+            for j, perp in enumerate(axis_perps[i]):
+                seg = 12 + i * 2 + j
+                starts[:, seg] = tip - axis * arrow_len + perp * arrow_off
+                ends[:, seg] = tip
+                segment_colors[:, seg] = axis_colors[i] * 0.85
+        valid = np.arange(18)[None, :] < np.where(selected, 18, 9)[:, None]
         vertices = np.stack((starts, ends), axis=2)[valid].reshape(-1, 3)
         line_colors = np.repeat(segment_colors[valid], 2, axis=0)
         self._bone_geom = (vertices, line_colors)
@@ -1215,7 +1301,7 @@ class Viewport(QOpenGLWidget):
 
     def _rigid_rest_matrix(self, index: int):
         rb = self.model.rigid[index]
-        return transform_to_mat4(rb.pos, _deg_quat(rb.rot))
+        return transform_to_mat4(rb.pos, _rigid_quat(rb.rot))
 
     def _global_pose_delta(self):
         """模型的整体姿态增量：取子树最大的根骨骼（通常是「全ての親」）。
@@ -1259,7 +1345,7 @@ class Viewport(QOpenGLWidget):
     def _joint_current_matrix(self, index: int):
         """关节跟随它引用的第一个刚体（无骨骼引用时退回第二个）。"""
         j = self.model.joints[int(index)]
-        M = transform_to_mat4(j.pos, _deg_quat(j.rot))
+        M = transform_to_mat4(j.pos, _rigid_quat(j.rot))
         for ri in (j.rigid_a, j.rigid_b):
             if 0 <= ri < len(self.model.rigid):
                 D = (self._rigid_current_matrix(ri)
@@ -1288,6 +1374,11 @@ class Viewport(QOpenGLWidget):
                 col = np.array(RIGID_STATIC_RGB, np.float32)
             if sel:
                 segs.extend(self._rigid_shape_segments(rb, M, col))
+                segs.extend(self._axis_segments(
+                    M[:3, 3], M[:3, :3], 0.5,
+                    np.array(((0.92, 0.34, 0.34), (0.4, 0.88, 0.5),
+                              (0.35, 0.6, 1.0)), np.float32),
+                    both=True, arrow=True))
             else:
                 t = M[:3, 3]
                 R = M[:3, :3]
@@ -1296,6 +1387,28 @@ class Viewport(QOpenGLWidget):
                     v = np.eye(3, dtype=np.float32)[k] * d
                     segs.append((tuple(t - R @ v), tuple(t + R @ v), col))
         self._rb_geom = _line_geom(segs)
+
+    @staticmethod
+    def _axis_segments(t, R, length, colors, both=False, arrow=True):
+        """带箭头的局部坐标轴；用于选中刚体和关节的朝向提示。"""
+        segs = []
+        perps = ((1, 2), (0, 2), (0, 1))
+        eye = np.eye(3, dtype=np.float32)
+        for k in range(3):
+            col = np.asarray(colors[k] if np.ndim(colors) > 1 else colors,
+                             np.float32)
+            for sign in ((1.0, -1.0) if both else (1.0,)):
+                v = R @ eye[k] * (length * sign)
+                tip = t + v
+                segs.append((tuple(t), tuple(tip), col))
+                if not arrow:
+                    continue
+                back = tip - v * 0.22
+                for p in perps[k]:
+                    off = R @ (eye[p] * 0.07)
+                    segs.append((tuple(back + off), tuple(tip), col * 0.85))
+                    segs.append((tuple(back - off), tuple(tip), col * 0.85))
+        return segs
 
     @staticmethod
     def _rigid_shape_segments(rb, M, col):
@@ -1329,9 +1442,9 @@ class Viewport(QOpenGLWidget):
             for a, b in edges:
                 segs.append((corners[a], corners[b], col))
         else:
+            # PMX 胶囊的 sy 是圆柱段高度，总长为 sy + 2r
             r = abs(sx)
-            total = abs(sy)
-            hh = max(0.0, total * 0.5 - r)
+            hh = abs(sy) * 0.5
             for yy in (-hh, hh):
                 ring = []
                 for k in range(17):
@@ -1348,42 +1461,236 @@ class Viewport(QOpenGLWidget):
     def _build_joint_lines(self):
         if self._perf_enabled:
             self._perf_stats["joint_lines"] += 1
+        # 关节只用实体球表示：不再画坐标轴、包围盒或弹簧螺旋线，
+        # 弹簧关节与普通关节通过球体颜色区分。
+        self._joint_geom = (np.zeros((0, 3), np.float32),
+                            np.zeros((0, 3), np.float32))
+
+    # ------------------------------------------------------------ 实体叠加
+    def _solid_mesh(self, shape, sx, sy, sz):
+        """按尺寸缓存局部网格，摆姿拖动时只做矩阵变换，不重复建几何。"""
+        if shape == 0:
+            r = max(0.004, abs(float(sx)))
+            key = (0, round(r, 6))
+            cached = self._solid_mesh_cache.get(key)
+            if cached is None:
+                cached = sphere_mesh(r, 16, 10)
+                self._solid_mesh_cache[key] = cached
+            return cached
+        if shape == 1:
+            hx, hy, hz = (max(0.004, abs(float(v))) for v in (sx, sy, sz))
+            key = (1, round(hx, 6), round(hy, 6), round(hz, 6))
+            cached = self._solid_mesh_cache.get(key)
+            if cached is None:
+                cached = box_mesh(hx, hy, hz)
+                self._solid_mesh_cache[key] = cached
+            return cached
+        r = max(0.004, abs(float(sx)))
+        height = max(0.0, abs(float(sy)))
+        key = (2, round(r, 6), round(height, 6))
+        cached = self._solid_mesh_cache.get(key)
+        if cached is None:
+            cached = capsule_mesh(r, height, 16, 4)
+            self._solid_mesh_cache[key] = cached
+        return cached
+
+    def _build_solid_geometry(self):
         m = self.model
-        if not m or not m.joints:
-            self._joint_geom = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32))
+        empty = (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32),
+                 np.zeros((0, 4), np.float32), np.zeros((0,), np.int32))
+        if not m:
+            self._solid_geom = empty
             return
-        segs = []
-        for i, j in enumerate(m.joints):
-            M = self._joint_current_matrix(i)
+        parts_pos, parts_nrm, parts_col, parts_idx = [], [], [], []
+        offset = 0
+        accent = QColor(ACCENT)
+        accent_rgb = (accent.redF(), accent.greenF(), accent.blueF())
+
+        def add(mesh, M, rgb, alpha):
+            nonlocal offset
+            p, n, idx = mesh
+            if not len(idx):
+                return
+            M = np.asarray(M, np.float32)
             R = M[:3, :3]
-            t = M[:3, 3]
-            sel = (i == self.selection_index and self.selection_kind == "joint")
-            base = np.array([0.95, 0.72, 0.33], np.float32)
-            if j.type == 1:
-                base = np.array([0.62, 0.72, 0.95], np.float32)
-            if sel:
-                base = np.array([0.31, 0.72, 1.0], np.float32)
-            length = 0.9 if sel else 0.24
-            if not sel:
-                for ax in range(3):
-                    v = np.eye(3, dtype=np.float32)[ax] * length
-                    segs.append((tuple(t), tuple(t + R @ v), base))
-                continue
-            for ax, c in ((0, (0.92, 0.34, 0.34)), (1, (0.4, 0.88, 0.5)), (2, (0.35, 0.6, 1.0))):
-                v = np.eye(3, dtype=np.float32)[ax] * length
-                col = np.array(c, np.float32) if sel else base
-                segs.append((tuple(t), tuple(t + R @ v), col))
-                segs.append((tuple(t), tuple(t - R @ v), col))
-            box = 0.16
-            corners = [(x, y, z) for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
-            for a in range(8):
-                for b in range(a + 1, 8):
-                    ca, cb = corners[a], corners[b]
-                    if sum(1 for k in range(3) if ca[k] != cb[k]) == 1:
-                        pa = tuple(t + R @ (np.array(ca, np.float32) * box))
-                        pb = tuple(t + R @ (np.array(cb, np.float32) * box))
-                        segs.append((pa, pb, base * 0.8))
-        self._joint_geom = _line_geom(segs)
+            world_pos = p @ R.T + M[:3, 3]
+            world_nrm = n @ R.T
+            lengths = np.linalg.norm(world_nrm, axis=1)
+            world_nrm /= np.maximum(1e-6, lengths)[:, None]
+            color = np.tile(
+                np.array([rgb[0], rgb[1], rgb[2], alpha], np.float32),
+                (len(p), 1))
+            parts_pos.append(world_pos.astype(np.float32, copy=False))
+            parts_nrm.append(world_nrm.astype(np.float32, copy=False))
+            parts_col.append(color)
+            parts_idx.append((idx + offset).astype(np.int32, copy=False))
+            offset += len(p)
+
+        selected = self.selection_index
+        rigid_op = float(self.rigid_opacity)
+        if self.show_rigid and m.rigid and rigid_op > 0.0:
+            order = [i for i in range(len(m.rigid))
+                     if not (i == selected and self.selection_kind == "rigid")]
+            if 0 <= selected < len(m.rigid) and self.selection_kind == "rigid":
+                order.append(selected)
+            for i in order:
+                rb = m.rigid[i]
+                M = (self._rb_world[i] if i < len(self._rb_world)
+                     else self._rigid_current_matrix(i))
+                sel = i == selected and self.selection_kind == "rigid"
+                if sel:
+                    rgb, alpha = accent_rgb, min(1.0, rigid_op + 0.3)
+                elif rb.mode == 0:
+                    rgb, alpha = RIGID_STATIC_RGB, rigid_op
+                else:
+                    color = QColor(GROUP_COLORS[rb.group % len(GROUP_COLORS)])
+                    rgb = (color.redF(), color.greenF(), color.blueF())
+                    alpha = rigid_op
+                add(self._solid_mesh(rb.shape, *rb.size), M, rgb, alpha)
+
+        joint_op = float(self.joint_opacity)
+        if self.show_joints and m.joints and joint_op > 0.0:
+            order = [i for i in range(len(m.joints))
+                     if not (i == selected and self.selection_kind == "joint")]
+            if 0 <= selected < len(m.joints) and self.selection_kind == "joint":
+                order.append(selected)
+            for i in order:
+                j = m.joints[i]
+                sel = i == selected and self.selection_kind == "joint"
+                radius = 0.055 if sel else 0.048
+                mesh = self._solid_mesh(0, radius, radius, radius)
+                M = self._joint_current_matrix(i)
+                if sel:
+                    rgb, alpha = accent_rgb, min(1.0, joint_op + 0.32)
+                elif j.type == 1:
+                    rgb, alpha = (0.62, 0.72, 0.95), joint_op
+                else:
+                    rgb, alpha = (0.95, 0.72, 0.33), joint_op
+                add(mesh, M, rgb, alpha)
+
+        # 骨骼也用低透明度实体，保留线框轮廓；选中骨骼高亮，
+        # 是否可操作 / IK / 付与后仍在颜色上可区分。
+        if self.show_bones and self.pose and m.bones and self.bone_opacity > 0.0:
+            bone_op = float(self.bone_opacity)
+            world = self.pose.world()
+            for i, b in enumerate(m.bones):
+                if not (b.flags & 0x0008):
+                    continue
+                if not (0 <= i < len(world)):
+                    continue
+                head = world[i][:3, 3]
+                if (b.flags & 0x0001) and 0 <= b.tail_bone < len(m.bones):
+                    tail = world[b.tail_bone][:3, 3]
+                else:
+                    tail = head + np.asarray(b.tail_offset, np.float32)
+                direction = tail - head
+                length = float(np.linalg.norm(direction))
+                if length < 1e-5:
+                    direction = np.array([0.0, 1.0, 0.0], np.float32)
+                    length = 0.4
+                    tail = head + direction * length
+                sel = i == selected and self.selection_kind == "bone"
+                if sel:
+                    rgb, alpha = accent_rgb, min(1.0, bone_op + 0.29)
+                else:
+                    if b.flags & 0x0020:
+                        rgb = (0.98, 0.75, 0.35)
+                    elif b.flags & 0x1000:
+                        rgb = (0.35, 0.85, 0.78)
+                    else:
+                        rgb = BONE_RGB
+                    alpha = bone_op
+                side = world[i][:3, 0].copy()
+                up2 = world[i][:3, 2].copy()
+                if (np.linalg.norm(side) < 1e-6
+                        or np.linalg.norm(up2) < 1e-6):
+                    d = direction / max(1e-6, length)
+                    up = np.array([0.0, 1.0, 0.0], np.float32)
+                    if abs(float(d[1])) > 0.98:
+                        up = np.array([0.0, 0.0, 1.0], np.float32)
+                    side = np.cross(d, up)
+                    up2 = np.cross(side, d)
+                side /= max(1e-6, float(np.linalg.norm(side)))
+                up2 /= max(1e-6, float(np.linalg.norm(up2)))
+                width = max(0.008, length * (0.05 if sel else 0.035))
+                mesh = octahedron_mesh(head, tail, side, up2, width)
+                add(mesh, np.eye(4, dtype=np.float32), rgb, alpha)
+
+        if not parts_pos:
+            self._solid_geom = empty
+            return
+        self._solid_geom = (
+            np.concatenate(parts_pos, axis=0),
+            np.concatenate(parts_nrm, axis=0),
+            np.concatenate(parts_col, axis=0),
+            np.concatenate(parts_idx, axis=0),
+        )
+        if self._perf_enabled:
+            self._perf_stats["solid_builds"] += 1
+
+    def _upload_solid_geom(self):
+        pos, nrm, col, idx = self._solid_geom
+        self._solid_count = len(idx)
+        if not len(idx):
+            return
+        if self._vbo_solid is None:
+            self._vbo_solid = tuple(GL.glGenBuffers(1) for _ in range(4))
+        if self._perf_enabled:
+            self._perf_stats["solid_upload_bytes"] += (pos.nbytes + nrm.nbytes
+                                                      + col.nbytes + idx.nbytes)
+        for k, data in enumerate((pos, nrm, col)):
+            data = np.ascontiguousarray(data, np.float32)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self._vbo_solid[k])
+            if self._solid_sizes[k] == data.nbytes:
+                GL.glBufferSubData(GL.GL_ARRAY_BUFFER, 0, data.nbytes, data)
+            else:
+                GL.glBufferData(GL.GL_ARRAY_BUFFER, data.nbytes, data,
+                                GL.GL_DYNAMIC_DRAW)
+                self._solid_sizes[k] = data.nbytes
+        data = np.ascontiguousarray(idx, np.int32)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self._vbo_solid[3])
+        if self._solid_sizes[3] == data.nbytes:
+            GL.glBufferSubData(GL.GL_ELEMENT_ARRAY_BUFFER, 0, data.nbytes, data)
+        else:
+            GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, data.nbytes, data,
+                            GL.GL_DYNAMIC_DRAW)
+            self._solid_sizes[3] = data.nbytes
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+
+    def _draw_solids(self, mvp):
+        if not self._solid_count or self._vbo_solid is None:
+            return
+        L = self._loc["solid"]
+        GL.glUseProgram(self._prog_solid)
+        GL.glUniformMatrix4fv(L["uMVP"], 1, GL.GL_FALSE,
+                              np.ascontiguousarray(mvp.T, np.float32))
+        GL.glUniform3f(L["uLightDir"], 0.36, 0.72, 0.58)
+        eye = self.camera.eye()
+        GL.glUniform3f(L["uEye"], float(eye[0]), float(eye[1]), float(eye[2]))
+        for k, size in ((0, 3), (1, 3), (2, 4)):
+            GL.glEnableVertexAttribArray(k)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self._vbo_solid[k])
+            GL.glVertexAttribPointer(k, size, GL.GL_FLOAT, GL.GL_FALSE, 0, None)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self._vbo_solid[3])
+        cull_was_on = bool(GL.glIsEnabled(GL.GL_CULL_FACE))
+        GL.glEnable(GL.GL_CULL_FACE)
+        try:
+            # 先背面再正面：半透明实体内部也能看到外壳颜色，轮廓更完整
+            GL.glCullFace(GL.GL_FRONT)
+            GL.glDrawElements(GL.GL_TRIANGLES, self._solid_count,
+                              GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
+            GL.glCullFace(GL.GL_BACK)
+            GL.glDrawElements(GL.GL_TRIANGLES, self._solid_count,
+                              GL.GL_UNSIGNED_INT, ctypes.c_void_p(0))
+        finally:
+            for k in range(3):
+                GL.glDisableVertexAttribArray(k)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+            GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+            GL.glCullFace(GL.GL_BACK)
+            if not cull_was_on:
+                GL.glDisable(GL.GL_CULL_FACE)
 
     # ------------------------------------------------------------ 绘制
     def _draw_grid(self, mvp):
@@ -1991,21 +2298,28 @@ class Viewport(QOpenGLWidget):
             return "不可旋转"
         return ""
 
+    def _bone_drag_allowed(self, kind: str, index: int) -> bool:
+        """只有已选中的骨骼才允许位移/旋转；未选中时提示先双击选中。"""
+        if kind != "bone":
+            return False
+        if self.selection_kind == "bone" and self.selection_index == index:
+            return True
+        name = ""
+        if self.model and 0 <= index < len(self.model.bones):
+            name = self.model.bones[index].name or ""
+        self.statusChanged.emit(
+            "「%s」未选中：双击选中后才能位移 / 旋转" % (name or "骨骼"))
+        return False
+
     def _begin_bone_drag(self, index: int, mode: str):
-        """按下骨骼：先选中，再按左键/右键进入位移/旋转拖动。"""
-        old_kind = self.selection_kind
-        self.selection_kind, self.selection_index = "bone", index
-        self.boneClicked.emit(index)
-        self._mark_selection_geometry_dirty(old_kind, "bone")
-        self.update()
-        # 撤销记录推迟到真正拖动时：单击不拖动不该压入撤销栈
+        """按下已选中的骨骼，准备进入位移/旋转拖动。"""
+        # 撤销记录推迟到真正拖动时：按下不拖动不该压入撤销栈
         self._edit_pushed = False
         self._pose_moved = False
         self._dragging = None
         self._armed_bone = index
         blocked = self.bone_drag_block(index, mode)
         if blocked:
-            # 选中仍然生效（方便看是哪个骨骼被挡住），只是不进入拖动
             self._drag_bone = -1
             name = ""
             if self.model and 0 <= index < len(self.model.bones):
@@ -2030,21 +2344,21 @@ class Viewport(QOpenGLWidget):
         if e.button() == Qt.LeftButton:
             kind, index = self.pick(e.x(), e.y(),
                                     cycle=bool(e.modifiers() & Qt.AltModifier))
-            self._pending_pick = (kind, index)
-            if kind == "bone":
+            if self._bone_drag_allowed(kind, index):
                 # 左键 = 位移（IK 控制器、Shift 修饰同样走位移）
                 self._begin_bone_drag(index, "move")
                 return
-            self._dragging = "select"
+            # 未选中或未点中骨骼：左键只旋转视角；选中请双击
+            # （见 mouseDoubleClickEvent）或从面板选择。
+            self._dragging = "orbit"
             self._last_mouse = e.pos()
-            self.setCursor(Qt.PointingHandCursor if kind else Qt.ArrowCursor)
+            self.setCursor(Qt.ClosedHandCursor)
             return
         if e.button() == Qt.RightButton:
             kind, index = self.pick(e.x(), e.y(),
                                     cycle=bool(e.modifiers() & Qt.AltModifier))
-            if kind == "bone":
-                # 右键 = 旋转；右键落在空白处仍是视角平移
-                self._pending_pick = (kind, index)
+            if self._bone_drag_allowed(kind, index):
+                # 右键 = 旋转；未选中骨骼时右键仍是视角平移
                 self._begin_bone_drag(index, "rotate")
                 return
             self._dragging = "pan"
@@ -2054,35 +2368,45 @@ class Viewport(QOpenGLWidget):
         super().mousePressEvent(e)
 
     def mouseDoubleClickEvent(self, e):
-        """双击选中骨骼：之后左键拖动位移、右键拖动旋转。"""
+        """双击选中：骨骼/刚体/关节均可在视口双击选中。"""
         if e.button() == Qt.LeftButton:
-            kind, index = self.pick(e.x(), e.y(),
+            kind, index = self.pick(e.x(), e.y(), all_kinds=True,
                                     cycle=bool(e.modifiers() & Qt.AltModifier))
-            if kind == "bone":
+            if kind:
                 old_kind = self.selection_kind
-                self.selection_kind, self.selection_index = "bone", index
-                self.boneClicked.emit(index)
-                self._mark_selection_geometry_dirty(old_kind, "bone")
-                self._armed_bone = index
+                self.selection_kind, self.selection_index = kind, index
+                if kind == "bone":
+                    self.boneClicked.emit(index)
+                elif kind == "rigid":
+                    self.rigidClicked.emit(index)
+                elif kind == "joint":
+                    self.jointClicked.emit(index)
+                self._mark_selection_geometry_dirty(old_kind, kind)
+                self._armed_bone = index if kind == "bone" else -1
                 self._dragging = None
                 self.setCursor(Qt.ArrowCursor)
                 self.update()
                 name = ""
-                if self.model and 0 <= index < len(self.model.bones):
-                    name = self.model.bones[index].name or ""
-                self.statusChanged.emit(
-                    "已选中「%s」：左键拖动位移 · 右键拖动旋转" % (name or "骨骼"))
+                if self.model:
+                    items = {"bone": self.model.bones, "rigid": self.model.rigid,
+                             "joint": self.model.joints}.get(kind)
+                    if items and 0 <= index < len(items):
+                        name = items[index].name or ""
+                suffix = ("：左键拖动位移 · 右键拖动旋转"
+                          if kind == "bone" else "")
+                self.statusChanged.emit("已选中「%s」%s" % (name or kind, suffix))
                 return
+            # 双击空白处取消选择
+            if self.selection_kind:
+                old_kind = self.selection_kind
+                self.selection_kind, self.selection_index = "", -1
+                self._mark_selection_geometry_dirty(old_kind, "")
+                self.selectionCleared.emit()
+                self.update()
+            return
         super().mouseDoubleClickEvent(e)
 
     def mouseMoveEvent(self, e):
-        if self._dragging == "select" and (e.buttons() & Qt.LeftButton):
-            # 左键拖动改为旋转视角；位移不超过阈值仍算单击选择
-            if (e.pos() - self._press_pos).manhattanLength() <= 3:
-                return
-            self._dragging = "orbit"
-            self._last_mouse = self._press_pos
-            self.setCursor(Qt.ClosedHandCursor)
         if self._dragging in ("orbit", "pan"):
             d = e.pos() - self._last_mouse
             self._last_mouse = e.pos()
@@ -2119,7 +2443,10 @@ class Viewport(QOpenGLWidget):
                                     cycle=bool(e.modifiers() & Qt.AltModifier))
             hover = "%s:%s" % (kind, index) if kind else ""
             self._hover_pos = e.pos()
-            self.setCursor(Qt.PointingHandCursor if kind else Qt.ArrowCursor)
+            # 只有已选中的骨骼才能拖动，未选中时不给"可抓取"的手型
+            draggable = (kind == "bone" and self.selection_kind == "bone"
+                         and self.selection_index == index)
+            self.setCursor(Qt.PointingHandCursor if draggable else Qt.ArrowCursor)
             if hover != self._hover:
                 self._hover = hover
                 self.update()
@@ -2135,29 +2462,6 @@ class Viewport(QOpenGLWidget):
             self._flush_pose_updates()
         self._dragging = None
         self.setCursor(Qt.ArrowCursor)
-        if was == "select":
-            d = e.pos() - self._press_pos
-            if d.manhattanLength() <= 3:
-                kind, index = self._pending_pick
-                if kind:
-                    old_kind = self.selection_kind
-                    self.selection_kind, self.selection_index = kind, index
-                    if kind == "bone":
-                        self.boneClicked.emit(index)
-                    elif kind == "rigid":
-                        self.rigidClicked.emit(index)
-                    elif kind == "joint":
-                        self.jointClicked.emit(index)
-                    self._mark_selection_geometry_dirty(old_kind, kind)
-                    self.update()
-                else:
-                    # 点击空白处取消选择
-                    old_kind = self.selection_kind
-                    self.selection_kind, self.selection_index = "", -1
-                    self._mark_selection_geometry_dirty(old_kind, "")
-                    self.selectionCleared.emit()
-                    self.update()
-        self._pending_pick = ("", -1)
         if was in ("rotate", "move") and self.pose and self._pose_moved:
             # 松手时用完整迭代次数再收敛一次，保证姿态精确
             self.pose.world_update()
@@ -2189,11 +2493,13 @@ class Viewport(QOpenGLWidget):
         b = m.bones[index]
         return bool(b.flags & 0x0020) and b.ik is not None
 
-    def _pick_candidates(self, x, y):
+    def _pick_candidates(self, x, y, all_kinds=False):
         """收集光标附近的候选对象：(score, depth, kind, index)。
 
         score 越小越可能是用户想点的目标；depth 是候选点到相机的距离，
         供 Alt 循环选择时按"由近到远"排序（密集骨骼区域用得上）。
+        all_kinds=True 供双击使用：不再让骨骼独占候选，而是把刚体/关节
+        一起参与排序，避免关节（常与骨骼端点重合）永远选不到。
         """
         m = self.model
         if not m:
@@ -2204,9 +2510,8 @@ class Viewport(QOpenGLWidget):
         def depth_of(p):
             return float(np.linalg.norm(np.array(p, np.float64) - eye))
 
-        # 单一视图：骨骼手柄优先（摆姿是主操作），没有命中骨骼时才让
-        # 显示中的刚体/关节参与拾取；Alt 循环在同类候选内轮换。
-        bones = []
+        # 单一视图：单一拾取让骨骼手柄优先（摆姿是主操作），没有命中骨骼时
+        # 才让显示中的刚体/关节参与；双击时 all_kinds=True，三类一起排序。
         others = []
         if self.show_rigid:
             for i, rb in enumerate(m.rigid):
@@ -2227,7 +2532,6 @@ class Viewport(QOpenGLWidget):
         world = self.pose.world() if self.pose else None
         if world is None:
             return others
-        out = bones
         for i, b in enumerate(m.bones):
             # 骨骼标志：不可见 / 不可操作的骨骼不参与视口拾取
             # （不可操作的骨骼仍可在骨骼列表里选中查看，但视口里点不到）
@@ -2260,11 +2564,19 @@ class Viewport(QOpenGLWidget):
                 d -= 5.0
             if d < radius:
                 out.append((d, depth_of(head), "bone", i))
+        if all_kinds:
+            return others + out
         return out if out else others
 
-    def pick(self, x, y, cycle=False):
+    def pick(self, x, y, cycle=False, all_kinds=False):
         """返回光标下最可能的对象；cycle=True 时按由近到远轮换候选。"""
-        cands = self._pick_candidates(x, y)
+        cands = self._pick_candidates(x, y, all_kinds=all_kinds)
+        if all_kinds:
+            # 双击时刚体/关节优先：它们画在最上层，且命中半径只有中心附近
+            # 的十几像素，不会挡住远离刚体中心的骨骼手柄。
+            overlays = [c for c in cands if c[2] in ("rigid", "joint")]
+            if overlays:
+                cands = overlays
         if not cands:
             self._pick_cycle = None
             return ("", -1)

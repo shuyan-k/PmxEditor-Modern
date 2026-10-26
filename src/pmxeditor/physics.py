@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import ctypes
-import math
 import os
 from typing import List
 
@@ -19,8 +18,8 @@ import numpy as np
 from . import paths
 from .native_backend import core as native_core
 from .pmx import BF_AFTER_PHYSICS
-from .skinning import (Pose, euler_to_quat, mat4_inverse, mat_to_quat, quat_to_mat,
-                      translation, transform_to_mat4)
+from .skinning import (Pose, mat4_inverse, mat_to_quat, quat_to_mat,
+                      rigid_euler_quat, translation, transform_to_mat4)
 
 DLL_NAME = "bullet_phys.dll"
 
@@ -125,7 +124,6 @@ class MMDPhysics:
         self.rest = [((0, 0, 0), (0, 0, 0, 1))] * len(model.rigid)
         self.modes = [0] * len(model.rigid)
         nb = len(model.bones)
-        radians = math.pi / 180.0
         for i, rb in enumerate(model.rigid):
             bone = rb.bone if 0 <= rb.bone < nb else -1
             mass = float(rb.mass) if rb.mode != 0 else 0.0
@@ -136,15 +134,16 @@ class MMDPhysics:
                 sx = abs(sx)
                 sy = sz = sx
             elif shape == 2:
+                # PMX 胶囊的 size.y 是圆柱段高度（与 btCapsuleShape 参数一致），
+                # 总长 = size.y + 2 * 半径
                 r = abs(sx)
-                total = abs(sy)
                 sx = r
-                sy = max(0.01, total - 2.0 * r)
+                sy = max(0.01, abs(sy))
                 sz = r
             else:
                 sx, sy, sz = max(0.001, abs(sx)), max(0.001, abs(sy)), max(0.001, abs(sz))
-            rot_rad = [float(v) * radians for v in rb.rot[:3]]
-            q = euler_to_quat(*rot_rad)
+            rot_rad = [float(v) for v in rb.rot[:3]]
+            q = rigid_euler_quat(*rot_rad)
             bi = lib.bw_add_body(self.world, shape, sx, sy, sz,
                                  *[float(v) for v in rb.pos], *rot_rad,
                                  mass, float(rb.mov_damp), float(rb.rot_damp),
@@ -187,10 +186,10 @@ class MMDPhysics:
                 continue
             lib.bw_add_joint(self.world, int(joint.type),
                              self.body_map[a], self.body_map[b],
-                             _arr(joint.pos), _arr([v * radians for v in joint.rot]),
+                             _arr(joint.pos), _arr(joint.rot),
                              _arr(joint.min_loc), _arr(joint.max_loc),
-                             _arr([v * radians for v in joint.min_rot]),
-                             _arr([v * radians for v in joint.max_rot]),
+                             _arr(joint.min_rot),
+                             _arr(joint.max_rot),
                              _arr(joint.spring_loc), _arr(joint.spring_rot))
         self._ready = True
         self.enabled = False

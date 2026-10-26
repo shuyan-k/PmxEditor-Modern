@@ -91,6 +91,46 @@ void main() {
 }
 """
 
+# 骨骼/关节/刚体实体叠加层：逐顶点颜色 + 双面光照 + 边缘菲涅尔，
+# 半透明显示时不写深度，避免遮挡模型和彼此。
+SOLID_VS = """
+#version 120
+attribute vec3 aPos;
+attribute vec3 aNrm;
+attribute vec4 aColor;
+uniform mat4 uMVP;
+varying vec3 vN;
+varying vec3 vPos;
+varying vec4 vC;
+void main() {
+    vN = aNrm;
+    vPos = aPos;
+    vC = aColor;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+"""
+
+SOLID_FS = """
+#version 120
+uniform vec3 uLightDir;
+uniform vec3 uEye;
+varying vec3 vN;
+varying vec3 vPos;
+varying vec4 vC;
+void main() {
+    vec3 n = normalize(vN);
+    if (!gl_FrontFacing) n = -n;
+    vec3 light = normalize(uLightDir);
+    float ndl = max(dot(n, light), 0.0);
+    float hemi = 0.5 + 0.5 * n.y;
+    float shade = 0.44 + 0.36 * ndl + 0.20 * hemi;
+    vec3 view = normalize(uEye - vPos);
+    float rim = pow(1.0 - abs(dot(n, view)), 2.5);
+    vec3 col = vC.rgb * shade + vC.rgb * rim * 0.28;
+    gl_FragColor = vec4(clamp(col, 0.0, 1.0), vC.a);
+}
+"""
+
 
 def _compile(vs: str, fs: str, bindings=None):
     prog = GL.glCreateProgram()
