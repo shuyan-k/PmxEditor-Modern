@@ -95,13 +95,25 @@ if(PMX_ENABLE_PHYSICS)
         set(BUILD_CPU_DEMOS OFF CACHE BOOL "" FORCE)
         set(BUILD_OPENGL3_DEMOS OFF CACHE BOOL "" FORCE)
         set(BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+        # Extras（BulletRobotics/GUI）会连带编译 examples 下的 TinyRenderer，
+        # 其旧代码无法通过 GCC 13，且本项目完全用不到。
+        set(BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
         set(USE_GRAPHICAL_BENCHMARK OFF CACHE BOOL "" FORCE)
         set(BUILD_PYBULLET OFF CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(bullet)
         if(TARGET BulletDynamics)
             add_library(bullet INTERFACE)
-            target_link_libraries(bullet INTERFACE BulletDynamics BulletCollision
-                BulletSoftBody LinearMath Bullet3Common)
+            # Bullet 上游不声明各静态库之间的依赖，链接顺序需要重新扫描。
+            if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+                target_link_libraries(bullet INTERFACE
+                    "$<LINK_GROUP:RESCAN,BulletDynamics,BulletCollision,BulletSoftBody,LinearMath,Bullet3Common>")
+            else()
+                target_link_libraries(bullet INTERFACE BulletDynamics BulletCollision
+                    BulletSoftBody LinearMath Bullet3Common)
+            endif()
+            # Bullet 的上游 CMake 只在目录级 INCLUDE_DIRECTORIES 里加了 src，
+            # 不会随目标传递，这里补上，否则 <btBulletDynamicsCommon.h> 找不到。
+            target_include_directories(bullet INTERFACE "${bullet_SOURCE_DIR}/src")
         endif()
     endif()
 endif()
