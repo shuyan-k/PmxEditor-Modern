@@ -166,8 +166,15 @@ Bullet 固定 1/60 步进。刚体旋转按 PMX 的 YXZ 顺序组四元数，关
 ### 偏好持久化
 主题、显示开关、叠加层不透明度、重力/迭代/地面等写入 `%APPDATA%/PmxStudioCpp/settings.ini`（UTF-8 key=value）。启动时先读偏好再加载模型，`last_model` 只在没有命令行参数时生效；退出时保存。
 
+### 分辨率与 DPI 适配
+UI 缩放因子由 `glfwGetWindowContentScale` 与 framebuffer/window 比例推导（`content_scale / fb_ratio`，钳制在 1–3），macOS 上该比值恒为 1。样式与所有面板内的固定像素尺寸统一乘以 [ui_scale.hpp](src/app/ui_scale.hpp) 的 `pmxui::scale()`，`FontScaleDpi` 让 ImGui 1.92 的动态字体按缩放后的字号重新光栅化，高 DPI 下不会出现位图拉伸发虚。
+
+初始窗口按 1440×900 逻辑尺寸乘缩放因子，并限制在显示器工作区 92% 以内后居中，最小尺寸 760×500；检查器默认 560×780，但用 `SetNextWindowSizeConstraints` 约束在视口内，1280×720 这类小屏上面板不会被窗口底部裁掉，内容改由滚动条访问。主循环每帧检测跨显示器拖动或系统缩放变化，变化后重新应用主题。布局不写 `imgui.ini`（`IniFilename = nullptr`），避免旧 DPI 下保存的像素尺寸在新分辨率下把控件挤坏。
+
+部分 Linux 桌面不提供 `Xft.dpi`，自动推导会得到 1.0；可用 `PMX_UI_SCALE=2 ./pmxstudio` 强制缩放。已在 3840×2160（100% / 200%）、1920×1080、1280×720 下验证布局。
+
 ### 路径与编码
-所有路径字符串在内部统一使用 UTF-8；文件访问经 [fs.hpp](src/core/fs.hpp) 转成宽字符 `std::filesystem::path` 再打开。Windows 上 `std::ifstream(const char*)`、`std::filesystem::path(const std::string&)` 与 `stbi_load()` 都按系统 ANSI 代码页解释，中文/日文目录会直接打不开；纹理改为按 UTF-8 路径读入内存后走 `stbi_load_from_memory`。
+所有路径字符串在内部统一使用 UTF-8；文件访问经 [fs.hpp](src/core/fs.hpp) 转成宽字符 `std::filesystem::path` 再打开。Windows 上 `std::ifstream(const char*)`、`std::filesystem::path(const std::string&)` 与 `stbi_load()` 都按系统 ANSI 代码页解释，中文/日文目录会直接打不开；纹理改为按 UTF-8 路径读入内存后走 `stbi_load_from_memory`，字体也按 UTF-8 路径读入内存后注册。命令行参数同样会被 CRT 按 ANSI 代码页解码，启动时用 `GetCommandLineW` + `CommandLineToArgvW`（[utf8_args.cpp](src/core/utf8_args.cpp)）重新解析成 UTF-8，`pmxstudio.exe "D:\我的模型\初音未来.pmx"` 才能落在中文目录里。
 
 ### VPD 导出
 默认只导出与静止姿态不同的骨骼和非零形态权重，可切换为全量。旋转先归一化，数值 6 位小数并把近零值归零。文件优先写 Shift-JIS（CP932），名称包含 CP932 无法表示的字符时自动退回 UTF-8；读取时按 UTF-8 严格校验自动识别编码。

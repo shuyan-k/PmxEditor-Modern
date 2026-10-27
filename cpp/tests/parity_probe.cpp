@@ -5,18 +5,22 @@
 #include <cstdio>
 #include <exception>
 #include <string>
+#include <vector>
 
 #include "core/pmx.hpp"
+#include "core/utf8_args.hpp"
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
+    // Windows 的 argv 是 ANSI 编码，中文路径会乱码；统一还原成 UTF-8。
+    const std::vector<std::string> args = pmx::utf8_args(argc, argv);
+    if (args.size() < 3) {
         std::fprintf(stderr, "用法: pmx_parity_probe info <in.pmx>\n"
                              "      pmx_parity_probe roundtrip <in.pmx> <out.pmx>\n");
         return 2;
     }
-    const std::string mode = argv[1];
+    const std::string mode = args[1];
     try {
-        pmx::Model model = pmx::load_pmx(argv[2]);
+        pmx::Model model = pmx::load_pmx(args[2]);
         if (mode == "info") {
             std::printf("version %.1f encoding %d add_uv %d\n", model.version,
                         model.encoding, model.add_uv_count);
@@ -29,11 +33,11 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (mode == "roundtrip") {
-            if (argc < 4) {
+            if (args.size() < 4) {
                 std::fprintf(stderr, "roundtrip 需要输出路径\n");
                 return 2;
             }
-            pmx::save_pmx(model, argv[3]);
+            pmx::save_pmx(model, args[3]);
             std::printf("OK %zu %zu %zu %zu %zu %zu %zu %zu %zu\n",
                         model.vertices.size(), model.n_faces(), model.materials.size(),
                         model.bones.size(), model.morphs.size(), model.frames.size(),

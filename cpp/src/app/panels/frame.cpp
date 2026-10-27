@@ -104,7 +104,7 @@ void panel_frame(Viewer& v) {
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##frame_search", "搜索表示枠名", filter, sizeof filter);
 
-    ImGui::BeginChild("##frame_list", ImVec2(0, 200), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##frame_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     std::vector<int> visible;
     visible.reserve(model.frames.size());
     for (int i = 0; i < frame_count; ++i)
@@ -173,7 +173,7 @@ void panel_frame(Viewer& v) {
     if (item_count == 0) item_row = -1;
     else item_row = std::clamp(item_row, 0, item_count - 1);
 
-    ImGui::BeginChild("##frame_items", ImVec2(0, 150), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##frame_items", ImVec2(0, pmxui::scale(150.0f)), ImGuiChildFlags_Borders);
     for (int i = 0; i < item_count; ++i) {
         char prefix[16];
         std::snprintf(prefix, sizeof prefix, "%02d  ", i);
@@ -247,7 +247,7 @@ void panel_frame(Viewer& v) {
         const bool can_add = !avail_bones.empty();
         ImGui::BeginDisabled(!can_add);
         std::string preview = can_add ? bone_entry_text(model, bone_choice) : "（无骨骼）";
-        ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - 70.0f));
+        ImGui::SetNextItemWidth(std::max(pmxui::scale(60.0f), ImGui::GetContentRegionAvail().x - pmxui::scale(70.0f)));
         if (ImGui::BeginCombo("##frame_add_bone", preview.c_str())) {
             for (int i : avail_bones) {
                 std::string text = bone_entry_text(model, i) + "##frame_bone" + std::to_string(i);
@@ -273,7 +273,7 @@ void panel_frame(Viewer& v) {
         const bool can_add = !avail_morphs.empty();
         ImGui::BeginDisabled(!can_add);
         std::string preview = can_add ? morph_entry_text(model, morph_choice) : "（无形态）";
-        ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - 70.0f));
+        ImGui::SetNextItemWidth(std::max(pmxui::scale(60.0f), ImGui::GetContentRegionAvail().x - pmxui::scale(70.0f)));
         if (ImGui::BeginCombo("##frame_add_morph", preview.c_str())) {
             for (int i : avail_morphs) {
                 std::string text =

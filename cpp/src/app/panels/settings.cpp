@@ -42,18 +42,18 @@ void panel_settings(Viewer& v) {
 
     // ------------------------------------------------------------ 叠加层透明度
     ImGui::SeparatorText("叠加层不透明度");
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::SliderFloat("骨骼##bone_alpha", &v.bone_alpha, 0.0f, 1.0f, "%.2f");
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::SliderFloat("刚体##rigid_alpha", &v.rigid_alpha, 0.0f, 1.0f, "%.2f");
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::SliderFloat("关节##joint_alpha", &v.joint_alpha, 0.0f, 1.0f, "%.2f");
 
     // ------------------------------------------------------------ Bullet 物理
     ImGui::SeparatorText("Bullet 物理");
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::DragFloat("重力", &v.gravity, 0.1f, -100.0f, 100.0f, "%.1f");
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::DragInt("迭代次数", &v.iterations, 1.0f, 1, 60);
     ImGui::Checkbox("显示地面", &v.ground);
     if (ImGui::Checkbox("物理演算##physics_enabled", &v.physics_enabled)) {

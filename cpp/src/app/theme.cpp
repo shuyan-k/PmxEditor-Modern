@@ -22,6 +22,7 @@
 
 #include <imgui.h>
 
+#include "app/ui_scale.hpp"
 #include "app/viewer.hpp"
 
 namespace {
@@ -117,22 +118,27 @@ int as_bit(bool on) { return on ? 1 : 0; }
 }  // namespace
 
 void pmxtheme::apply_theme(const std::string& name) {
+    ImGuiStyle& style = ImGui::GetStyle();
+    // 先回到默认尺寸再统一缩放：主题切换或 DPI 变化后重复调用结果一致，不会叠加。
+    style = ImGuiStyle();
     if (name == "light") ImGui::StyleColorsLight();
     else ImGui::StyleColorsDark();
 
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.ChildRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.PopupRounding = 5.0f;
-    style.ScrollbarRounding = 6.0f;
-    style.TabRounding = 4.0f;
-    style.WindowBorderSize = 1.0f;
-    style.ChildBorderSize = 1.0f;
-    style.WindowPadding = ImVec2(10.0f, 10.0f);
-    style.FramePadding = ImVec2(8.0f, 4.0f);
-    style.ItemSpacing = ImVec2(8.0f, 6.0f);
+    const float s = pmxui::ui_scale();
+    style.ScaleAllSizes(s);
+    style.FontScaleDpi = s;  // 1.92 动态字体图集会按缩放后的字号重新光栅化，不会模糊
+    style.WindowRounding = 6.0f * s;
+    style.ChildRounding = 6.0f * s;
+    style.FrameRounding = 4.0f * s;
+    style.GrabRounding = 4.0f * s;
+    style.PopupRounding = 5.0f * s;
+    style.ScrollbarRounding = 6.0f * s;
+    style.TabRounding = 4.0f * s;
+    style.WindowBorderSize = 1.0f * s;
+    style.ChildBorderSize = 1.0f * s;
+    style.WindowPadding = ImVec2(10.0f * s, 10.0f * s);
+    style.FramePadding = ImVec2(8.0f * s, 4.0f * s);
+    style.ItemSpacing = ImVec2(8.0f * s, 6.0f * s);
 }
 
 std::string pmxtheme::settings_path() {

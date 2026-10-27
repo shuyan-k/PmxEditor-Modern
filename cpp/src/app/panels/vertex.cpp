@@ -209,7 +209,7 @@ void draw_detail(Viewer& v, VertexPanelState& st, int si) {
 
     int wt = si < static_cast<int>(verts.wtype.size()) ? static_cast<int>(verts.wtype[si]) : 0;
     if (wt < 0 || wt >= 5) wt = 0;
-    ImGui::SetNextItemWidth(-96.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-96.0f));
     if (ImGui::BeginCombo("权重类型", weight_type_name(wt))) {
         for (int t = 0; t < 5; ++t) {
             const bool selected = t == wt;
@@ -237,7 +237,7 @@ void draw_detail(Viewer& v, VertexPanelState& st, int si) {
         ImGui::SameLine();
         const int cur = si < static_cast<int>(verts.bones.size()) ? verts.bones[si][k] : -1;
         const std::string preview = bone_label(model, cur);
-        ImGui::SetNextItemWidth(-86.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-86.0f));
         if (ImGui::BeginCombo(("##vbone" + std::to_string(k)).c_str(), preview.c_str())) {
             if (ImGui::Selectable("（无）", cur < 0)) {
                 v.edit("修改顶点骨骼",
@@ -264,7 +264,7 @@ void draw_detail(Viewer& v, VertexPanelState& st, int si) {
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(76.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(76.0f));
         ImGui::BeginDisabled(wt == pmx::WT_BDEF1);
         float weight = si < static_cast<int>(verts.weights.size()) ? verts.weights[si][k] : 0.0f;
         if (ImGui::DragFloat(("##vweight" + std::to_string(k)).c_str(), &weight, 0.005f, 0.0f,
@@ -354,7 +354,7 @@ void panel_vertex(Viewer& v) {
         ImGui::TextDisabled("未选择顶点");
     }
 
-    ImGui::SetNextItemWidth(-96.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-96.0f));
     if (ImGui::InputTextWithHint("##vsearch", "搜索索引（顶点号）", &st.search)) st.page = 0;
     ImGui::SameLine();
     if (ImGui::Button("清除")) {
@@ -381,7 +381,7 @@ void panel_vertex(Viewer& v) {
         }
     }
 
-    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(120.0f));
     if (ImGui::InputInt("跳转到", &st.jump, 0, 0)) st.jump = std::clamp(st.jump, 0, n - 1);
     ImGui::SameLine();
     if (ImGui::Button("前往")) {
@@ -419,7 +419,7 @@ void panel_vertex(Viewer& v) {
     if (ImGui::Button("下一页")) ++st.page;
     ImGui::EndDisabled();
 
-    ImGui::BeginChild("##vlist", ImVec2(0.0f, 170.0f), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##vlist", ImVec2(0, pmxui::scale(170.0f)), ImGuiChildFlags_Borders);
     if (total == 0) {
         ImGui::TextDisabled("无匹配结果");
     } else {

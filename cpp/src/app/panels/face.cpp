@@ -200,7 +200,7 @@ void panel_face(Viewer& v) {
 
     ImGui::Text("共 %zu 个三角面 · %d 个材质", model.indices.size() / 3, nmat);
 
-    ImGui::SetNextItemWidth(-96.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-96.0f));
     if (ImGui::InputTextWithHint("##fsearch", "搜索材质名", &st.search)) st.page = 0;
     ImGui::SameLine();
     if (ImGui::Button("清除")) {
@@ -214,7 +214,7 @@ void panel_face(Viewer& v) {
     material_spans(model, starts, counts);
 
     ImGui::SeparatorText("材质");
-    ImGui::BeginChild("##matlist", ImVec2(0.0f, 150.0f), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##matlist", ImVec2(0, pmxui::scale(150.0f)), ImGuiChildFlags_Borders);
     if (st.filtered.empty()) {
         ImGui::TextDisabled("无匹配结果");
     } else {
@@ -267,7 +267,7 @@ void panel_face(Viewer& v) {
     if (ImGui::Button("下一页")) ++st.page;
     ImGui::EndDisabled();
 
-    ImGui::BeginChild("##facelist", ImVec2(0.0f, 170.0f), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##facelist", ImVec2(0, pmxui::scale(170.0f)), ImGuiChildFlags_Borders);
     if (fcount == 0) {
         ImGui::TextDisabled("该材质没有面");
     } else {
@@ -330,7 +330,7 @@ void panel_face(Viewer& v) {
     ImGui::SeparatorText("重分配");
     ImGui::TextDisabled("移到目标材质的面会追加在它原有面之后");
 
-    ImGui::SetNextItemWidth(-96.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-96.0f));
     if (ImGui::BeginCombo("源材质", material_label(model, st.material).c_str())) {
         for (int i = 0; i < nmat; ++i) {
             const bool selected = i == st.material;
@@ -341,9 +341,9 @@ void panel_face(Viewer& v) {
         ImGui::EndCombo();
     }
 
-    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(120.0f));
     ImGui::InputInt("起始面", &st.start, 1, 10);
-    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(120.0f));
     ImGui::InputInt("数量", &st.count, 1, 10);
     if (fcount > 0) {
         st.start = std::clamp(st.start, 0, fcount - 1);
@@ -353,7 +353,7 @@ void panel_face(Viewer& v) {
         st.count = 0;
     }
 
-    ImGui::SetNextItemWidth(-96.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-96.0f));
     if (ImGui::BeginCombo("目标材质", material_label(model, st.dst).c_str())) {
         for (int i = 0; i < nmat; ++i) {
             const bool selected = i == st.dst;

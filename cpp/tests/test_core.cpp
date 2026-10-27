@@ -11,6 +11,7 @@
 #include "core/pmx.hpp"
 #include "core/pose.hpp"
 #include "core/skinning.hpp"
+#include "core/utf8_args.hpp"
 #include "core/vpd.hpp"
 #ifdef PMX_ENABLE_PHYSICS
 #include "physics/physics.hpp"
@@ -341,7 +342,9 @@ void test_utf8_paths(const pmx::Model& model, const std::filesystem::path& dir) 
 int main(int argc, char** argv) {
     // 崩溃时也要保留已打印的进度，便于定位失败项。
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    const std::string path = argc > 1 ? argv[1] : PMX_TEST_MODEL;
+    // Windows 的 argv 是 ANSI 编码，中文路径参数需要先还原成 UTF-8。
+    const std::vector<std::string> args = pmx::utf8_args(argc, argv);
+    const std::string path = args.size() > 1 ? args[1] : PMX_TEST_MODEL;
     if (!std::filesystem::exists(pmx::utf8_path(path))) {
         std::fprintf(stderr, "找不到测试模型：%s\n", path.c_str());
         return 2;

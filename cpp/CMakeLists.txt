@@ -37,11 +37,17 @@ set(PMX_CORE_SOURCES
     src/core/skinning.cpp
     src/core/morph.cpp
     src/core/vpd.cpp
+    src/core/utf8_args.cpp
 )
 
 add_library(pmx_core STATIC ${PMX_CORE_SOURCES})
 target_include_directories(pmx_core PUBLIC src)
 target_compile_features(pmx_core PUBLIC cxx_std_20)
+
+if(WIN32)
+    # CommandLineToArgvW 用于把宽字符命令行还原成 UTF-8 参数。
+    target_link_libraries(pmx_core PRIVATE shell32)
+endif()
 
 if(PMX_ENABLE_PHYSICS)
     target_sources(pmx_core PRIVATE src/physics/physics.cpp src/physics/softbody.cpp)

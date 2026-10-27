@@ -8,6 +8,7 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "app/ui_scale.hpp"
 #include "app/viewer.hpp"
 
 namespace pmxui {
@@ -31,14 +32,14 @@ inline bool name_fields(Viewer& v, std::string& name, std::string& name_en, cons
     bool changed = false;
     ImGui::PushID(id);
     std::string tmp = name;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::InputText("名称", &tmp)) {
         v.edit(label, [&name, &tmp](pmx::Model&) { name = tmp; }, kind,
                std::string("name:") + id);
         changed = true;
     }
     tmp = name_en;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::InputText("英文名", &tmp)) {
         v.edit(label, [&name_en, &tmp](pmx::Model&) { name_en = tmp; }, kind,
                std::string("name_en:") + id);

@@ -245,7 +245,7 @@ bool offset_index_combo(Viewer& v, int morph, int row, int pmx::MorphOffset::*fi
 
     int picked = current;
     bool changed = false;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (ImGui::BeginCombo(id, preview.c_str())) {
         for (const IndexOption& option : options) {
             const bool selected = option.value == current;
@@ -283,7 +283,7 @@ bool offset_choice_combo(Viewer& v, int morph, int row, std::uint8_t pmx::MorphO
     const std::string preview = (current >= 0 && current < count) ? items[current] : "?";
     int picked = current;
     bool changed = false;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (ImGui::BeginCombo(id, preview.c_str())) {
         for (int i = 0; i < count; ++i) {
             const bool selected = i == current;
@@ -318,7 +318,7 @@ bool offset_drag_float(Viewer& v, int morph, int row, float pmx::MorphOffset::*f
     const float current = morph_ref.offsets[static_cast<std::size_t>(row)].*field;
 
     float value = current;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::DragFloat(label, &value, 0.01f, lo, hi, "%.3f")) return false;
     if (value == current) return false;
     v.edit("修改形态偏移", [morph, row, field, value](pmx::Model& m) {
@@ -338,7 +338,7 @@ bool offset_input_int(Viewer& v, int morph, int row, int pmx::MorphOffset::*fiel
     const int current = morph_ref.offsets[static_cast<std::size_t>(row)].*field;
 
     int value = current;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::InputInt(label, &value)) return false;
     value = std::clamp(value, lo, hi);
     if (value == current) return false;
@@ -359,7 +359,7 @@ bool offset_drag_vec3(Viewer& v, int morph, int row, pmx::Vec3 pmx::MorphOffset:
     const pmx::Vec3 current = morph_ref.offsets[static_cast<std::size_t>(row)].*field;
 
     float tmp[3] = {current.x, current.y, current.z};
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::DragFloat3(label, tmp, 0.01f, -99999.0f, 99999.0f, "%.3f")) return false;
     const pmx::Vec3 value{tmp[0], tmp[1], tmp[2]};
     if (value.x == current.x && value.y == current.y && value.z == current.z) return false;
@@ -380,7 +380,7 @@ bool offset_drag_vec4(Viewer& v, int morph, int row, pmx::Vec4 pmx::MorphOffset:
     const pmx::Vec4 current = morph_ref.offsets[static_cast<std::size_t>(row)].*field;
 
     float tmp[4] = {current.x, current.y, current.z, current.w};
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::DragFloat4(label, tmp, 0.01f, -99999.0f, 99999.0f, "%.3f")) return false;
     const pmx::Vec4 value{tmp[0], tmp[1], tmp[2], tmp[3]};
     if (value.x == current.x && value.y == current.y && value.z == current.z &&
@@ -404,7 +404,7 @@ bool offset_drag_vec4_xyz(Viewer& v, int morph, int row, pmx::Vec4 pmx::MorphOff
     const pmx::Vec4 current = morph_ref.offsets[static_cast<std::size_t>(row)].*field;
 
     float tmp[3] = {current.x, current.y, current.z};
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::DragFloat3(label, tmp, 0.01f, -99999.0f, 99999.0f, "%.3f")) return false;
     if (tmp[0] == current.x && tmp[1] == current.y && tmp[2] == current.z) return false;
     const pmx::Vec3 value{tmp[0], tmp[1], tmp[2]};
@@ -615,7 +615,7 @@ void panel_morph(Viewer& v) {
     ImGui::InputTextWithHint("##morph_search", "搜索形态名 / 英文名", &filter);
 
     morph_count = static_cast<int>(v.model.morphs.size());
-    ImGui::BeginChild("##morph_list", ImVec2(0, 180), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##morph_list", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
     {
         std::vector<int> visible;
         visible.reserve(v.model.morphs.size());
@@ -673,7 +673,7 @@ void panel_morph(Viewer& v) {
             panel_pick = std::clamp(mo.panel, 0, 4);
         }
         static const char* kPanelItems[] = {"0 系统", "1 眉", "2 眼", "3 口", "4 其他"};
-        ImGui::SetNextItemWidth(-110.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
         if (ImGui::Combo("操作面板", &panel_pick, kPanelItems, IM_ARRAYSIZE(kPanelItems))) {
             const int value = panel_pick;
             v.edit("修改操作面板", [idx, value](pmx::Model& m) {
@@ -687,7 +687,7 @@ void panel_morph(Viewer& v) {
         // -------------------------------------------------------- 预览
         ImGui::SeparatorText("预览");
         ImGui::TextDisabled("仅影响当前视图，不写入文件");
-        ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 160.0f));
+        ImGui::SetNextItemWidth(std::max(pmxui::scale(80.0f), ImGui::GetContentRegionAvail().x - pmxui::scale(160.0f)));
         const bool preview_changed =
             ImGui::SliderFloat("##morph_weight", &preview_pct, 0.0f, 100.0f, "%.0f%%");
         ImGui::SameLine();
@@ -709,7 +709,7 @@ void panel_morph(Viewer& v) {
         if (offset_count == 0) offset_row = -1;
         else offset_row = std::clamp(offset_row, 0, offset_count - 1);
 
-        ImGui::BeginChild("##morph_offsets", ImVec2(0, 180), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##morph_offsets", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
         {
             if (offset_count == 0) {
                 ImGui::TextDisabled("暂无偏移");

@@ -38,7 +38,7 @@ bool texture_combo(Viewer& v, int material, int pmx::Material::*field, const cha
 
     int picked = current;
     bool changed = false;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (ImGui::BeginCombo(id, preview.c_str())) {
         if (ImGui::Selectable(empty_text, current < 0)) {
             picked = -1;
@@ -71,7 +71,7 @@ bool texture_combo(Viewer& v, int material, int pmx::Material::*field, const cha
 bool index_input(Viewer& v, int material, int pmx::Material::*field, const char* label,
                  const char* edit_label, int lo, int hi, const char* coalesce) {
     int value = v.model.materials[static_cast<std::size_t>(material)].*field;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::InputInt(label, &value)) return false;
     value = std::clamp(value, lo, hi);
     v.edit(edit_label, [material, field, value](pmx::Model& m) {
@@ -85,7 +85,7 @@ bool color_edit4(Viewer& v, int material, pmx::Vec4 pmx::Material::*field, const
                  const char* edit_label, const char* coalesce) {
     const pmx::Vec4 current = v.model.materials[static_cast<std::size_t>(material)].*field;
     float tmp[4] = {current.x, current.y, current.z, current.w};
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::ColorEdit4(label, tmp, ImGuiColorEditFlags_Float)) return false;
     const pmx::Vec4 value{tmp[0], tmp[1], tmp[2], tmp[3]};
     v.edit(edit_label, [material, field, value](pmx::Model& m) {
@@ -99,7 +99,7 @@ bool color_edit3(Viewer& v, int material, pmx::Vec3 pmx::Material::*field, const
                  const char* edit_label, const char* coalesce) {
     const pmx::Vec3 current = v.model.materials[static_cast<std::size_t>(material)].*field;
     float tmp[3] = {current.x, current.y, current.z};
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (!ImGui::ColorEdit3(label, tmp, ImGuiColorEditFlags_Float)) return false;
     const pmx::Vec3 value{tmp[0], tmp[1], tmp[2]};
     v.edit(edit_label, [material, field, value](pmx::Model& m) {
@@ -159,7 +159,7 @@ void draw_material_detail(Viewer& v, int index) {
     {
         static const char* kSphereModes[] = {"0 无", "1 乘算", "2 加算", "3 子纹理"};
         int mode = std::clamp(static_cast<int>(mt.sphere_mode), 0, 3);
-        ImGui::SetNextItemWidth(-110.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
         if (ImGui::Combo("球面模式", &mode, kSphereModes, IM_ARRAYSIZE(kSphereModes))) {
             v.edit("修改球面模式", [index, mode](pmx::Model& m) {
                 if (index < 0 || index >= static_cast<int>(m.materials.size())) return;
@@ -180,7 +180,7 @@ void draw_material_detail(Viewer& v, int index) {
     }
     if (mt.toon_shared != 0) {
         int shown = std::clamp(mt.toon + 1, 1, 10);
-        ImGui::SetNextItemWidth(-110.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
         if (ImGui::InputInt("Toon 索引", &shown)) {
             shown = std::clamp(shown, 1, 10);
             const int value = shown - 1;
@@ -221,7 +221,7 @@ void draw_material_detail(Viewer& v, int index) {
 
     ImGui::SeparatorText("备注");
     std::string memo = mt.memo;
-    ImGui::SetNextItemWidth(-110.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-110.0f));
     if (ImGui::InputText("备注", &memo)) {
         v.edit("修改材质备注", [index, memo](pmx::Model& m) {
             if (index < 0 || index >= static_cast<int>(m.materials.size())) return;
@@ -271,7 +271,7 @@ void panel_material(Viewer& v) {
 
     const int material_count = static_cast<int>(v.model.materials.size());
     int shown_rows = 0;
-    ImGui::BeginChild("##material_list", ImVec2(0, 180.0f), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##material_list", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
     for (int i = 0; i < material_count; ++i) {
         const pmx::Material& mt = v.model.materials[static_cast<std::size_t>(i)];
         if (!pmxui::match_filter(filter, mt.name, mt.name_en)) continue;
@@ -281,7 +281,7 @@ void panel_material(Viewer& v) {
         const ImVec4 swatch(mt.diffuse.x, mt.diffuse.y, mt.diffuse.z, 1.0f);
         ImGui::ColorButton("##swatch", swatch,
                            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
-                           ImVec2(16, 16));
+                           ImVec2(pmxui::scale(16.0f), pmxui::scale(16.0f)));
         ImGui::SameLine();
 
         std::string row = mt.name.empty() ? std::string("未命名材质") : mt.name;

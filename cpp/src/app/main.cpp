@@ -27,8 +27,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <filesystem>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,10 +37,13 @@
 #include "app/camera.hpp"
 #include "app/panels.hpp"
 #include "app/theme.hpp"
+#include "app/ui_scale.hpp"
 #include "app/viewer.hpp"
+#include "core/fs.hpp"
 #include "core/morph.hpp"
 #include "core/pmx.hpp"
 #include "core/pose.hpp"
+#include "core/utf8_args.hpp"
 #include "core/vpd.hpp"
 #include "gpu/gl_api.hpp"
 #include "gpu/renderer.hpp"
@@ -405,8 +409,17 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
 }
 
 void Viewer::draw_ui() {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(560, 780), ImGuiCond_FirstUseEver);
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float margin = pmxui::scale(8.0f);
+    ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(pmxui::scale(560.0f), pmxui::scale(780.0f)),
+                             ImGuiCond_FirstUseEver);
+    // 小分辨率（如 1280×720）下默认 780 高的面板会超出窗口底部，内容被裁掉且滚动条
+    // 触不到底；限制最大尺寸让面板始终完整落在视口内，内容改由滚动条访问。
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(pmxui::scale(320.0f), pmxui::scale(240.0f)),
+        ImVec2(std::max(pmxui::scale(320.0f), display.x - margin * 2.0f),
+               std::max(pmxui::scale(240.0f), display.y - margin * 2.0f)));
     ImGui::Begin("检查器");
 
     ImGui::TextWrapped("%s", status.c_str());
@@ -600,6 +613,9 @@ void on_drop(GLFWwindow* window, int count, const char** paths) {
 
 
 int main(int argc, char** argv) {
+    // CRT 的 argv 在 Windows 上按 ANSI 代码页解码，中文/日文路径会变成乱码，
+    // 这里统一还原成 UTF-8 后再交给内部路径处理（fs.hpp）。
+    const std::vector<std::string> args = pmx::utf8_args(argc, argv);
     if (!glfwInit()) {
         std::fprintf(stderr, "GLFW 初始化失败\n");
         return 1;
@@ -620,6 +636,46 @@ int main(int argc, char** argv) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetDropCallback(window, on_drop);
+
+    // ---- 分辨率 / DPI 适配
+    // ImGui 的坐标单位是屏幕坐标：Windows/X11 上 framebuffer 与窗口等大，需要按
+    // content scale 手动放大字体与控件；macOS 的 framebuffer 已是 content scale 倍，
+    // 两者相除后缩放因子自动为 1，不会二次放大。
+    int win_w = 0, win_h = 0, fb_w0 = 0, fb_h0 = 0;
+    glfwGetWindowSize(window, &win_w, &win_h);
+    glfwGetFramebufferSize(window, &fb_w0, &fb_h0);
+    float cs_x = 1.0f, cs_y = 1.0f;
+    glfwGetWindowContentScale(window, &cs_x, &cs_y);
+    (void)cs_y;
+    const float fb_ratio = static_cast<float>(fb_w0) / static_cast<float>(std::max(1, win_w));
+    pmxui::set_ui_scale(std::clamp(cs_x / std::max(1.0f, fb_ratio), 1.0f, 3.0f));
+    // 拿不到可靠 DPI 时（部分 Linux 桌面没有 Xft.dpi）可用环境变量强制缩放。
+    bool ui_scale_locked = false;
+    if (const char* env = std::getenv("PMX_UI_SCALE")) {
+        const float forced = std::strtof(env, nullptr);
+        if (forced > 0.0f) {
+            pmxui::set_ui_scale(std::clamp(forced, 1.0f, 3.0f));
+            ui_scale_locked = true;
+        }
+    }
+
+    // 默认 1440×900 逻辑尺寸，按 DPI 放大后限制在显示器工作区的 92% 内（4K 放得下）。
+    int target_w = static_cast<int>(1440.0f * pmxui::ui_scale());
+    int target_h = static_cast<int>(900.0f * pmxui::ui_scale());
+    if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(monitor, &mx, &my, &mw, &mh);
+        if (mw > 0 && mh > 0) {
+            target_w = std::min(target_w, static_cast<int>(static_cast<float>(mw) * 0.92f));
+            target_h = std::min(target_h, static_cast<int>(static_cast<float>(mh) * 0.92f));
+            glfwSetWindowSize(window, target_w, target_h);
+            glfwSetWindowPos(window, mx + (mw - target_w) / 2, my + (mh - target_h) / 2);
+        }
+    }
+    glfwSetWindowSizeLimits(
+        window, std::min(target_w, static_cast<int>(760.0f * pmxui::ui_scale())),
+        std::min(target_h, static_cast<int>(500.0f * pmxui::ui_scale())), GLFW_DONT_CARE,
+        GLFW_DONT_CARE);
 #ifdef _WIN32
     g_owner = glfwGetWin32Window(window);  // 文件对话框的属主，保持模态
 #endif
@@ -647,7 +703,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::string initial = argc > 1 ? argv[1] : viewer.model_path;
+    std::string initial = args.size() > 1 ? args[1] : viewer.model_path;
     if (initial.empty()) initial = "tests/test_model.pmx";
     if (!viewer.load_model(initial, &err)) {
         viewer.model_path = initial;
@@ -658,6 +714,9 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // 只有一个检查器窗口，布局由代码按 DPI 决定；持久化 imgui.ini 会在换分辨率/DPI 后
+    // 留下旧的像素尺寸，反而把控件挤坏，这里禁用。
+    ImGui::GetIO().IniFilename = nullptr;
     pmxtheme::apply_theme(viewer.theme);
     // 默认字体不含中日韩字形，按平台候选列表加载一款系统字体（ImGui 1.92 按需加载字形）。
     {
@@ -669,10 +728,22 @@ int main(int argc, char** argv) {
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         };
+        // 按 UTF-8 路径读入内存再注册字体：ImGui 自身会转宽字符，但统一走 fs.hpp
+        // 可以覆盖 Windows / MinGW / Linux 的所有路径分支。
+        static std::vector<char> font_bytes;  // 必须存活到字体图集销毁
         for (const char* f : kFonts) {
-            std::error_code ec;
-            if (!std::filesystem::exists(f, ec) || ec) continue;
-            if (ImGui::GetIO().Fonts->AddFontFromFileTTF(f, 18.0f)) break;
+            if (!pmx::path_exists(f)) continue;
+            std::ifstream in = pmx::open_ifstream(f);
+            if (!in) continue;
+            font_bytes.assign(std::istreambuf_iterator<char>(in),
+                              std::istreambuf_iterator<char>());
+            if (font_bytes.empty()) continue;
+            ImFontConfig cfg;
+            cfg.FontDataOwnedByAtlas = false;
+            if (ImGui::GetIO().Fonts->AddFontFromMemoryTTF(
+                    font_bytes.data(), static_cast<int>(font_bytes.size()), 18.0f, &cfg))
+                break;
+            font_bytes.clear();
         }
     }
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -680,6 +751,25 @@ int main(int argc, char** argv) {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        // 跨显示器拖动或系统缩放变化时重新计算 UI 缩放；style 只能在帧间修改。
+        {
+            int ww = 0, wh = 0, fw = 0, fh = 0;
+            glfwGetWindowSize(window, &ww, &wh);
+            glfwGetFramebufferSize(window, &fw, &fh);
+            float sx = 1.0f, sy = 1.0f;
+            glfwGetWindowContentScale(window, &sx, &sy);
+            (void)wh;
+            (void)fh;
+            (void)sy;
+            const float ratio = static_cast<float>(fw) / static_cast<float>(std::max(1, ww));
+            const float next = std::clamp(sx / std::max(1.0f, ratio), 1.0f, 3.0f);
+            if (!ui_scale_locked && std::fabs(next - pmxui::ui_scale()) > 0.01f) {
+                pmxui::set_ui_scale(next);
+                pmxtheme::apply_theme(viewer.theme);
+            }
+        }
+
         int fb_w = 0, fb_h = 0;
         glfwGetFramebufferSize(window, &fb_w, &fb_h);
 

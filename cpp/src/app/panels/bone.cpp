@@ -38,7 +38,7 @@ bool bone_combo(const char* label, int& value, const pmx::Model& model, int none
     else preview = none_text;
 
     bool changed = false;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::BeginCombo(label, preview.c_str())) {
         if (ImGui::Selectable(none_text, value == none_value)) {
             value = none_value;
@@ -81,7 +81,7 @@ bool bone_cycle(const pmx::Model& model, int start, int parent) {
 bool drag_angle_vec3(Viewer& v, const char* id, pmx::Vec3& value, float lo_deg, float hi_deg,
                      const char* label, const char* coalesce) {
     float tmp[3] = {value.x * kRadToDeg, value.y * kRadToDeg, value.z * kRadToDeg};
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (!ImGui::DragFloat3(id, tmp, 1.0f, lo_deg, hi_deg, "%.1f°")) return false;
     const pmx::Vec3 next{tmp[0] * kDegToRad, tmp[1] * kDegToRad, tmp[2] * kDegToRad};
     v.edit(label, [&value, next](pmx::Model&) { value = next; }, "bone", coalesce);
@@ -150,7 +150,7 @@ void panel_bone(Viewer& v) {
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##bone_search", "搜索骨骼名 / 英文名", filter, sizeof filter);
 
-    ImGui::BeginChild("##bone_list", ImVec2(0, 200), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##bone_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     std::vector<int> visible;
     visible.reserve(model.bones.size());
     for (int i = 0; i < bone_count; ++i)
@@ -199,7 +199,7 @@ void panel_bone(Viewer& v) {
 
     {
         float pos[3] = {b.pos.x, b.pos.y, b.pos.z};
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragFloat3("位置", pos, 0.01f, 0.0f, 0.0f, "%.3f")) {
             const pmx::Vec3 next{pos[0], pos[1], pos[2]};
             const int target = idx;
@@ -233,7 +233,7 @@ void panel_bone(Viewer& v) {
 
     {
         int layer = b.layer;
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragInt("变形层级", &layer, 0.2f, 0, 31))
             v.edit("修改变形层级", [idx, layer](pmx::Model& m) {
                 m.bones[idx].layer = layer;
@@ -325,7 +325,7 @@ void panel_bone(Viewer& v) {
             }, "bone");
 
         float ratio = b.append_ratio;
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragFloat("付与率", &ratio, 0.01f, -10.0f, 10.0f, "%.3f"))
             v.edit("修改付与率", [idx, ratio](pmx::Model& m) {
                 m.bones[idx].append_ratio = ratio;
@@ -411,7 +411,7 @@ void panel_bone(Viewer& v) {
         }
         {
             int loop = b.ik->loop;
-            ImGui::SetNextItemWidth(-90.0f);
+            ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
             if (ImGui::DragInt("循环次数", &loop, 0.2f, 0, 255))
                 v.edit("修改 IK 循环", [idx, loop](pmx::Model& m) {
                     m.bones[idx].ik->loop = loop;
@@ -419,7 +419,7 @@ void panel_bone(Viewer& v) {
         }
         {
             float deg = b.ik->angle * kRadToDeg;
-            ImGui::SetNextItemWidth(-90.0f);
+            ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
             if (ImGui::DragFloat("单次角度", &deg, 0.5f, 0.0f, 180.0f, "%.1f°"))
                 v.edit("修改 IK 单次角度", [idx, deg](pmx::Model& m) {
                     m.bones[idx].ik->angle = deg * kDegToRad;
@@ -436,7 +436,7 @@ void panel_bone(Viewer& v) {
         if (link_count == 0) link_row = -1;
         else link_row = std::clamp(link_row, 0, link_count - 1);
 
-        ImGui::BeginChild("##ik_links", ImVec2(0, 84), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##ik_links", ImVec2(0, pmxui::scale(84.0f)), ImGuiChildFlags_Borders);
         for (int i = 0; i < link_count; ++i) {
             const pmx::IKLink& link = b.ik->links[i];
             std::string name = "?";
@@ -474,7 +474,7 @@ void panel_bone(Viewer& v) {
         ImGui::BeginDisabled(!can_add);
         std::string preview = can_add ? bone_item_text(model, add_link_bone) : "（无可选骨骼）";
         ImGui::SetNextItemWidth(
-            std::max(60.0f, ImGui::GetContentRegionAvail().x - 150.0f));
+            std::max(pmxui::scale(60.0f), ImGui::GetContentRegionAvail().x - pmxui::scale(150.0f)));
         if (ImGui::BeginCombo("##ik_link_pick", preview.c_str())) {
             for (int i : available) {
                 std::string text = bone_item_text(model, i) + "##ik_pick" + std::to_string(i);

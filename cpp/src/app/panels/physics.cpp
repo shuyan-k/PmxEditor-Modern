@@ -54,7 +54,7 @@ bool bone_combo(const char* label, int& value, const pmx::Model& model, const ch
     }
 
     bool changed = false;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::BeginCombo(label, preview.c_str())) {
         if (ImGui::Selectable(none_text, value < 0)) {
             value = -1;
@@ -82,7 +82,7 @@ bool rigid_combo(const char* label, int& value, const pmx::Model& model, const c
     std::string preview = (value >= 0 && value < n) ? rigid_item_text(model, value) : none_text;
 
     bool changed = false;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::BeginCombo(label, preview.c_str())) {
         if (ImGui::Selectable(none_text, value < 0)) {
             value = -1;
@@ -163,7 +163,7 @@ void draw_rigid_detail(Viewer& v, int index) {
 
     {
         int mode = std::clamp(static_cast<int>(rb.mode), 0, 2);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::Combo("刚体模式", &mode, kRigidModes, IM_ARRAYSIZE(kRigidModes)))
             v.edit("修改刚体模式", [index, mode](pmx::Model& m) {
                 m.rigid[static_cast<std::size_t>(index)].mode =
@@ -174,7 +174,7 @@ void draw_rigid_detail(Viewer& v, int index) {
     ImGui::SeparatorText("形状与变换");
     {
         int shape = std::clamp(static_cast<int>(rb.shape), 0, 2);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::Combo("形状", &shape, kShapes, IM_ARRAYSIZE(kShapes)))
             v.edit("修改刚体形状", [index, shape](pmx::Model& m) {
                 m.rigid[static_cast<std::size_t>(index)].shape =
@@ -204,7 +204,7 @@ void draw_rigid_detail(Viewer& v, int index) {
     ImGui::SeparatorText("碰撞组");
     {
         int group = std::clamp(static_cast<int>(rb.group), 0, 15);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragInt("所属组", &group, 0.2f, 0, 15))
             v.edit("修改刚体组", [index, group](pmx::Model& m) {
                 m.rigid[static_cast<std::size_t>(index)].group =
@@ -232,7 +232,7 @@ void draw_joint_detail(Viewer& v, int index) {
 
     {
         int type = joint_type_index(jt);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::Combo("类型", &type, kJointTypes, IM_ARRAYSIZE(kJointTypes)))
             v.edit("修改关节类型", [index, type](pmx::Model& m) {
                 m.joints[static_cast<std::size_t>(index)].type =
@@ -388,7 +388,7 @@ void panel_physics(Viewer& v) {
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##physics_search", "搜索名称 / 关联骨骼", filter, sizeof filter);
 
-    ImGui::BeginChild("##physics_list", ImVec2(0, 200), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##physics_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     std::vector<int> visible;
     visible.reserve(static_cast<std::size_t>(count));
     if (kind == 0) {

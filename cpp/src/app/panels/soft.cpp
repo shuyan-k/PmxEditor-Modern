@@ -50,7 +50,7 @@ bool material_combo(const char* label, int& value, const pmx::Model& model) {
     }
 
     bool changed = false;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::BeginCombo(label, preview.c_str())) {
         if (ImGui::Selectable("（无材质）", value < 0)) {
             value = -1;
@@ -77,7 +77,7 @@ bool material_combo(const char* label, int& value, const pmx::Model& model) {
 bool anchor_rigid_combo(const char* label, int& value, const pmx::Model& model) {
     const int n = static_cast<int>(model.rigid.size());
     if (n == 0) {
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         ImGui::BeginDisabled(true);
         if (ImGui::BeginCombo(label, "（无刚体）")) ImGui::EndCombo();
         ImGui::EndDisabled();
@@ -86,7 +86,7 @@ bool anchor_rigid_combo(const char* label, int& value, const pmx::Model& model) 
     if (value < 0 || value >= n) value = 0;
 
     bool changed = false;
-    ImGui::SetNextItemWidth(-90.0f);
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     if (ImGui::BeginCombo(label, rigid_name_text(model, value).c_str())) {
         for (int i = 0; i < n; ++i) {
             std::string text = rigid_name_text(model, i) + "##pa" + std::to_string(i);
@@ -207,7 +207,7 @@ void draw_soft_detail(Viewer& v, int index) {
 
     {
         int shape = std::clamp(static_cast<int>(sb.shape), 0, 1);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::Combo("形状", &shape, kShapes, IM_ARRAYSIZE(kShapes)))
             v.edit("修改柔体形状", [index, shape](pmx::Model& m) {
                 m.soft_bodies[static_cast<std::size_t>(index)].shape =
@@ -223,7 +223,7 @@ void draw_soft_detail(Viewer& v, int index) {
     }
     {
         int group = std::clamp(static_cast<int>(sb.group), 0, 15);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragInt("所属组", &group, 0.2f, 0, 15))
             v.edit("修改柔体所属组", [index, group](pmx::Model& m) {
                 m.soft_bodies[static_cast<std::size_t>(index)].group =
@@ -237,7 +237,7 @@ void draw_soft_detail(Viewer& v, int index) {
     soft_flag_checkbox(v, index, kSbRandomize, "随机化约束");
     {
         int distance = sb.b_link_dist;
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragInt("弯曲链接距离", &distance, 0.2f, 0, 1000))
             v.edit("修改柔体生成选项", [index, distance](pmx::Model& m) {
                 m.soft_bodies[static_cast<std::size_t>(index)].b_link_dist = distance;
@@ -245,7 +245,7 @@ void draw_soft_detail(Viewer& v, int index) {
     }
     {
         int clusters = sb.cluster_count;
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::DragInt("簇数量", &clusters, 0.5f, 0, 100000))
             v.edit("修改柔体生成选项", [index, clusters](pmx::Model& m) {
                 m.soft_bodies[static_cast<std::size_t>(index)].cluster_count = clusters;
@@ -259,7 +259,7 @@ void draw_soft_detail(Viewer& v, int index) {
                       "修改柔体碰撞余量", "soft.collision_margin");
     {
         int aero = std::clamp(sb.aero_model, 0, 4);
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         if (ImGui::Combo("气动模型", &aero, kAeroModels, IM_ARRAYSIZE(kAeroModels)))
             v.edit("修改气动模型", [index, aero](pmx::Model& m) {
                 m.soft_bodies[static_cast<std::size_t>(index)].aero_model = aero;
@@ -301,7 +301,7 @@ void draw_soft_detail(Viewer& v, int index) {
     if (anchor_count == 0) anchor_row = -1;
     else anchor_row = std::clamp(anchor_row, 0, anchor_count - 1);
 
-    ImGui::BeginChild("##soft_anchors", ImVec2(0, 96), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##soft_anchors", ImVec2(0, pmxui::scale(96.0f)), ImGuiChildFlags_Borders);
     for (int i = 0; i < anchor_count; ++i) {
         const pmx::SoftBodyAnchor& anchor = sb.anchors[static_cast<std::size_t>(i)];
         std::string name = "?";
@@ -327,7 +327,7 @@ void draw_soft_detail(Viewer& v, int index) {
         int rigid = anchor_rigid;
         anchor_rigid_combo("刚体", rigid, model);
         anchor_rigid = rigid;
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         ImGui::DragInt("顶点", &anchor_vertex, 0.2f, 0, max_vertex);
         anchor_vertex = std::clamp(anchor_vertex, 0, max_vertex);
         ImGui::SameLine();
@@ -378,7 +378,7 @@ void draw_soft_detail(Viewer& v, int index) {
     if (pin_count == 0) pin_row = -1;
     else pin_row = std::clamp(pin_row, 0, pin_count - 1);
 
-    ImGui::BeginChild("##soft_pins", ImVec2(0, 76), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##soft_pins", ImVec2(0, pmxui::scale(76.0f)), ImGuiChildFlags_Borders);
     for (int i = 0; i < pin_count; ++i) {
         char head[16];
         std::snprintf(head, sizeof head, "%02d · ", i);
@@ -392,7 +392,7 @@ void draw_soft_detail(Viewer& v, int index) {
 
     ImGui::PushID("pin");
     {
-        ImGui::SetNextItemWidth(-90.0f);
+        ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
         ImGui::DragInt("顶点", &pin_vertex, 0.2f, 0, max_vertex);
         pin_vertex = std::clamp(pin_vertex, 0, max_vertex);
 
@@ -461,7 +461,7 @@ void panel_soft(Viewer& v) {
     ImGui::EndDisabled();
 
     // ------------------------------------------------------------ 列表
-    ImGui::BeginChild("##soft_list", ImVec2(0, 200), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##soft_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     if (soft_count == 0) {
         ImGui::TextDisabled("尚无柔体（PMX 2.1 才能保存）");
     } else {
