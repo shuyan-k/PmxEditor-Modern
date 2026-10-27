@@ -7,6 +7,7 @@ nuitka-crash-report.xml
 
 # 原生构建中间文件（保留源码与脚本）
 native/obj/
+native/build/
 native/sources.rsp
 native/*.obj
 native/*.exp
@@ -68,6 +69,9 @@ tests/*.vmd
 settings.json
 settings.json.bak
 settings.json.tmp
+
+# ImGui 窗口布局（C++ 查看器运行时生成）
+imgui.ini
 
 # 代码签名证书与密码（私钥不入库）
 code_sign.pfx

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PmxStudio C++ vs Python · 残虹模型全量对比测试</title>
+<style>
+  :root{
+    --bg:#0f1319; --panel:#161c26; --panel2:#1b2431; --line:#27313f;
+    --text:#e8edf5; --dim:#9aa7b8; --faint:#6d7a8c;
+    --ok:#48b881; --bad:#e05c5c; --accent:#5b9dff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.65 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+  .wrap{max-width:1500px;margin:0 auto;padding:36px 28px 72px}
+  h1{font-size:28px;margin:0 0 6px;letter-spacing:.5px}
+  h2{font-size:20px;margin:44px 0 14px;padding-left:10px;border-left:4px solid var(--accent)}
+  h3{font-size:16px;margin:23px 0 10px;color:var(--dim);font-weight:600}
+  .sub{color:var(--dim);font-size:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .stat b{display:block;font-size:22px;color:var(--ok);margin-bottom:2px}
+  .stat span{color:var(--faint);font-size:12.5px}
+  table{width:100%;border-collapse:collapse;background:var(--panel);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13.5px}
+  th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--panel2);color:var(--dim);font-weight:600;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .ok{color:var(--ok);font-weight:600;white-space:nowrap}
+  .warn{color:#e8b45c;font-weight:600;white-space:nowrap}
+  .shot{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .shot img{display:block;width:100%;height:auto}
+  .shot .cap{padding:7px 10px;font-size:12.5px;color:var(--dim);border-top:1px solid var(--line)}
+  .shot .cap b{color:var(--text)}
+  .badshot{border-color:#5c2a2a}
+  .badshot .cap b{color:var(--bad)}
+  .tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:12px;
+       background:#223047;color:#9dc0ff;margin-left:6px}
+  ul{margin:8px 0 0 20px;padding:0}
+  li{margin:3px 0}
+  code{background:#0b0f15;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px}
+  .foot{color:var(--faint);font-size:12.5px;margin-top:40px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>PmxStudio C++ 版 · 物理修复与全量对比测试</h1>
+  <div class="sub">测试模型：残虹 / zankou（PMX 2.0 · 98404 顶点 · 134887 三角面 · 843 骨骼 · 157 形态 · 16 材质 · 718 刚体 · 930 关节 · 0 柔体）· 对比基准：Python 版</div>
+
+  <h2>一、测试结论</h2>
+  <div class="grid g4">
+    <div class="stat"><b>0 失败</b><span>pmx_tests · 205 项检查全部通过</span></div>
+    <div class="stat"><b>3 / 3 用例</b><span>PMX 读写三向校验（原始 / Python / C++）全部一致</span></div>
+    <div class="stat"><b>10 / 10 面板</b><span>各面板数据与 Python 版逐项一致</span></div>
+    <div class="stat"><b>物理稳定</b><span>开启后 2 / 8 / 16 秒均无拉伸爆炸</span></div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <b>修复内容（本轮）</b>
+    <ul>
+      <li><b>物理爆炸根因</b>：C++ 回写骨骼时使用“帧开始前的父骨骼世界矩阵”缓存，而 Python 版按 <code>eval_order</code> 逐骨累积世界矩阵。多级链（袖 / 裙 / 发）每深一层都会把父级位移再叠加一次，误差逐帧放大 → 布料被拉成巨面片。</li>
+      <li><b>修复方式</b>：<code>Physics::step</code> 改为按求值顺序逐骨累积 <code>bone_world</code>，与 Python 的 <code>physics_step</code> 完全同构；<code>BF_AFTER_PHYSICS</code> 骨骼仍参与累积但不写 override。</li>
+      <li><b>顺带修复</b>：物理每步之前会丢失骨骼形态，现改为 <code>step(pose, dt, &amp;morph_weights)</code> 并显式 <code>pose.apply(weights)</code>。</li>
+      <li><b>交互补齐</b>：设置页新增「物理演算」复选框（与 P 键等效），检查器默认宽度由 400 → 560，10 个标签不再被滚动箭头遮挡。</li>
+    </ul>
+  </div>
+
+  <h2>二、物理效果对比</h2>
+  <h3>2.1 修复前 → 修复后（C++，袖 / 裙被拉伸的爆炸现象已消失）</h3>
+  <div class="grid g2">
+    <div class="shot badshot">
+      <img src="phys_on.jpg" alt="修复前">
+      <div class="cap"><b>修复前 · 开启物理</b>：袖口与裙摆被拉出画面，红白巨面片 — 问题复现</div>
+    </div>
+    <div class="shot">
+      <img src="v2_on8.jpg" alt="修复后">
+      <div class="cap"><b>修复后 · 开启物理 8 秒</b>：整体轮廓完好，仅头发/袖口自然下垂</div>
+    </div>
+  </div>
+
+  <h3>2.2 修复后 C++ 时间序列：关闭 → 2s → 8s → 16s</h3>
+  <div class="grid g4">
+    <div class="shot"><img src="v2_off.jpg" alt="off"><div class="cap"><b>物理关闭</b> · 静止姿态</div></div>
+    <div class="shot"><img src="v2_on2.jpg" alt="on2"><div class="cap"><b>开启 2s</b> · 预热后开始演算</div></div>
+    <div class="shot"><img src="v2_on8.jpg" alt="on8"><div class="cap"><b>开启 8s</b> · 无位移漂移</div></div>
+    <div class="shot"><img src="v2_on16.jpg" alt="on16"><div class="cap"><b>开启 16s</b> · 无累积误差</div></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    关闭态与开启 2 秒态的整幅平均像素差仅 <b>4.8 / 255</b>（<code>v2_diff.jpg</code>），差异集中在发梢与袖口等悬挂件；16 秒无发散，说明逐骨累积回写已消除误差放大。
+  </div>
+
+  <h3>2.3 C++ vs Python：同模型、同视角、同阶段</h3>
+  <div class="grid g3">
+    <div class="shot"><img src="py_off.jpg" alt="py off"><div class="cap"><b>Python · 物理关闭</b></div></div>
+    <div class="shot"><img src="py_on2.jpg" alt="py on2"><div class="cap"><b>Python · 开启 2s</b>（工具栏「物理演算」已亮）</div></div>
+    <div class="shot"><img src="py_on8.jpg" alt="py on8"><div class="cap"><b>Python · 开启 8s</b> · 姿态收敛</div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="py_on8_status.jpg" alt="py status"><div class="cap"><b>Python 状态栏证据</b>：物理演算已开启 · 可同时摆姿</div></div>
+    <div class="shot"><img src="ui_phys_on8.jpg" alt="cpp toggle"><div class="cap"><b>C++ 新增设置项</b>：「物理演算」勾选后 8 秒，姿态与 Python 一致</div></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    两端在静止姿态下均只出现发梢/袖口的轻微下垂，轮廓一致；C++ 侧可通过「设置 → Bullet 物理 → 物理演算」或 <code>P</code> 键开关，Python 侧为工具栏开关 + <code>P</code> 键，行为等价。
+  </div>
+
+  <h2>三、面板逐项对比（C++ 标签页 / Python 左侧导航）</h2>
+  <table>
+    <thead>
+      <tr><th>面板</th><th>对比要点</th><th>实测数据</th><th>结论</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>信息 · 模型信息</td><td>统计、名称、描述、文件信息</td>
+          <td>顶点 98404 / 面 134887 / 骨骼 843 / 材质 16 / 形态 157 / 贴图 8 / 刚体 718 / 关节 930 / 柔体 0；名称 zankou；描述 Copyright 异环 · Rig 矩阵映画；版本 2.0 · UTF-16LE · 附加 UV 3 组</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>骨骼 · 骨骼</td><td>层级树、基本/显示/付与/IK 属性</td>
+          <td>843 骨骼；000 操作中心 → 001 全ての親 → 002 センター → 003 グルーブ → 004 腰 → 005 下半身 → 006 上半身…；父骨骼、变形阶层、位置、显示枠 一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>表示枠 · 表示枠</td><td>分组数量与项数</td>
+          <td>12 个表示枠：Root 1 项 / 表情 157 项 / センター 3 项 / I K 6 项 / 足 16 项 / 体 7 项 / 目 3 项 / 腕L 8 项…</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>顶点 · 顶点</td><td>索引、位置/法线/UV、蒙皮、诊断</td>
+          <td>共 98404 顶点；#0 BDEF1（010 腰，权重 1.0），边缩放 1.000000；诊断项齐全</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>材质 · 材质</td><td>数量、面数、颜色、贴图、球面</td>
+          <td>16 材质：服1 20852 / 肌1 6835 / 服2 8334 / 肌2 7574 / 服3 4768 / 口舌 912 / 白 3660 / 白目 216 / 眉 240 / 唇N 180 / 影 66 / 泪 1398 / 肌1B 1896…；贴图 T_player_036_zankou_new_01_d.jpg 等路径一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>面 · 面</td><td>总面数、材质起点/面数、面列表</td>
+          <td>134887 面 / 16 材质；材质起点 0 → 20852 → 27687 → 36021 → 43595…；面列表共 105 页（每页 200）</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>形态 · 形态</td><td>数量、类型、顶点偏移</td>
+          <td>157 形态：まばたき 2478 项 / 笑い 2810 / ウィンク右 1405 / ウィンク 1405 / ウィンク2右 1369 / 縮小 326；偏移数值一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>物理 · 物理</td><td>刚体 / 关节数量、绑定骨骼、形状</td>
+          <td>刚体 718 · 关节 930；上半身 / 上半身1 / 上半身2-1 / 上半身2-2 的骨骼绑定与组号一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>柔体 · 柔体</td><td>PMX 2.1 柔体</td>
+          <td>0 个；两端均提示「PMX 2.1 才能保存」，空列表状态一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>设置 · 设置</td><td>显示开关、叠加层、Bullet、主题</td>
+          <td>地面网格 / 骨骼 / 刚体 / 关节 / 模型网格 / 卡通光照 / 描边 / 线框；不透明度 0.85 / 0.55 / 0.75；重力 -9.8、迭代 30、显示地面、物理演算开关；深色 / 亮色主题</td>
+          <td class="ok">一致</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.1 面板截图对照（左：C++ · 右：Python）</h3>
+  <div class="grid g2">
+    <div class="shot"><img src="ui_info.jpg" alt=""><div class="cap"><b>C++ · 信息</b></div></div>
+    <div class="shot"><img src="pyui_info.jpg" alt=""><div class="cap"><b>Python · 模型信息</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_bone.jpg" alt=""><div class="cap"><b>C++ · 骨骼</b></div></div>
+    <div class="shot"><img src="pyui_bone.jpg" alt=""><div class="cap"><b>Python · 骨骼</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_frame.jpg" alt=""><div class="cap"><b>C++ · 表示枠</b></div></div>
+    <div class="shot"><img src="pyui_frame.jpg" alt=""><div class="cap"><b>Python · 表示枠</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_vertex.jpg" alt=""><div class="cap"><b>C++ · 顶点</b></div></div>
+    <div class="shot"><img src="pyui_vertex.jpg" alt=""><div class="cap"><b>Python · 顶点</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_material.jpg" alt=""><div class="cap"><b>C++ · 材质</b></div></div>
+    <div class="shot"><img src="pyui_material.jpg" alt=""><div class="cap"><b>Python · 材质</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_face.jpg" alt=""><div class="cap"><b>C++ · 面</b></div></div>
+    <div class="shot"><img src="pyui_face.jpg" alt=""><div class="cap"><b>Python · 面</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_morph.jpg" alt=""><div class="cap"><b>C++ · 形态</b></div></div>
+    <div class="shot"><img src="pyui_morph.jpg" alt=""><div class="cap"><b>Python · 形态</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_phys.jpg" alt=""><div class="cap"><b>C++ · 物理</b></div></div>
+    <div class="shot"><img src="pyui_phys.jpg" alt=""><div class="cap"><b>Python · 物理</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_soft.jpg" alt=""><div class="cap"><b>C++ · 柔体</b></div></div>
+    <div class="shot"><img src="pyui_soft.jpg" alt=""><div class="cap"><b>Python · 柔体</b></div></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="shot"><img src="ui_settings.jpg" alt=""><div class="cap"><b>C++ · 设置</b></div></div>
+    <div class="shot"><img src="pyui_settings.jpg" alt=""><div class="cap"><b>Python · 设置</b></div></div>
+  </div>
+
+  <h2>四、自动化测试记录</h2>
+  <table>
+    <thead><tr><th>项目</th><th>命令</th><th>结果</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td>C++ 单元测试</td><td><code>cpp\build\Release\pmx_tests.exe</code></td>
+          <td>PMX round-trip / 姿态与 IK / CPU 蒙皮 / Bullet 物理 / VPD 回读 / 中文路径，共 205 项检查，失败 0</td>
+          <td class="ok">通过</td></tr>
+      <tr><td>三向一致性 · 默认用例</td><td><code>python tools\parity_check.py</code></td>
+          <td>test_model.pmx 与 PMX 2.1 柔体用例：原始↔Python、原始↔C++、Python↔C++ 全部一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>三向一致性 · 残虹</td><td><code>python tools\parity_check.py C:\Temp\pmx_canhong\model.pmx</code></td>
+          <td>98404 顶点 / 843 骨骼 / 718 刚体 / 930 关节 全字段一致</td>
+          <td class="ok">一致</td></tr>
+      <tr><td>物理视觉回归</td><td>P 键 / 设置页复选框 × 2s·8s·16s</td>
+          <td>无爆炸、无漂移；与 Python 同阶段姿态一致</td>
+          <td class="ok">通过</td></tr>
+    </tbody>
+  </table>
+
+  <h2>五、已知差异（非缺陷）</h2>
+  <div class="card">
+    <ul>
+      <li><b>导航形态</b>：C++ 用检查器标签栏（默认宽度已调至 560，10 项全部可见），Python 用左侧导航栏 + 右侧详情页。</li>
+      <li><b>设置项多寡</b>：C++ 独有「GPU 蒙皮」开关；Python 独有「亮度调节（背景 / 模型）」与「材质透贴（Alpha 测试）」开关。两者均为平台实现差异，不影响模型数据与演算结果。</li>
+      <li><b>迭代次数默认值</b>：C++ 为 30（与 Python 视口默认一致），Python 界面当前显示 10（来自其已保存配置文件），可在设置页对齐。</li>
+      <li><b>物理开关</b>：Python 在工具栏常驻；C++ 为 <code>P</code> 键 + 设置页复选框（本轮新增），动作等价。</li>
+    </ul>
+  </div>
+
+  <div class="foot">截图来自 C++ 版与 Python 版运行实例（原图已压缩为 JPEG 存入本目录）；测试模型「残虹」仅本地临时使用，未入库。报告生成时间：2026-10-27。</div>
+</div>
+</body>
+</html>
+
