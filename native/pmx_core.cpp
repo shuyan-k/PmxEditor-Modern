@@ -15,6 +15,8 @@ struct BWWorld;
 extern "C" {
 __declspec(dllimport) void bw_set_body(
     BWWorld*, int, const float*, const float*);
+__declspec(dllimport) void bw_move_body(
+    BWWorld*, int, const float*, const float*, float);
 __declspec(dllimport) void bw_get_body(
     BWWorld*, int, float*, float*);
 __declspec(dllimport) void bw_step(BWWorld*, float, int);
@@ -1359,7 +1361,7 @@ void physics_step(
             const float position[3] = {
                 transform[3], transform[7], transform[11]};
             const auto rotation = matrix_quaternion(transform);
-            bw_set_body(handle, body, position, rotation.data());
+            bw_move_body(handle, body, position, rotation.data(), dt);
         }
 
         bw_step(handle, dt, 3);

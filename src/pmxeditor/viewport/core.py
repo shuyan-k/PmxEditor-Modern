@@ -792,7 +792,8 @@ class Viewport(QOpenGLWidget):
             self.ensure_physics()
             if self.physics._ready:
                 self.physics.reset(self.pose, self.morph_weights,
-                                   self.model.morphs if self.model else None)
+                                   self.model.morphs if self.model else None,
+                                   warmup=True)
                 self.physics.enabled = True
                 self._tick.start()
                 self.statusChanged.emit("物理演算已开启")
@@ -831,7 +832,8 @@ class Viewport(QOpenGLWidget):
                 self.physics.build(self.model)
                 if was:
                     self.physics.reset(self.pose, self.morph_weights,
-                                       self.model.morphs if self.model else None)
+                                       self.model.morphs if self.model else None,
+                                       warmup=True)
                     self.physics.enabled = True
         self._pose_dirty = True
         self._rb_dirty = True
@@ -872,7 +874,8 @@ class Viewport(QOpenGLWidget):
             self.ensure_physics()
         if was and self.physics._ready:
             self.physics.reset(self.pose, self.morph_weights,
-                               self.model.morphs if self.model else None)
+                               self.model.morphs if self.model else None,
+                               warmup=True)
             self.physics.enabled = True
         else:
             self._tick.stop()
@@ -899,8 +902,11 @@ class Viewport(QOpenGLWidget):
         self._rb_dirty = True
         self._joint_dirty = True
         # 物理只覆盖动态刚体所在的骨骼；按这些骨骼的子树做增量蒙皮，
-        # 避免每步全量重算 8 万个顶点。
-        self._mark_incremental_skin_dirty(self.physics.dynamic_bones())
+        # 避免每步全量重算 8 万个顶点。所有刚体本帧位移都低于阈值时
+        # （休眠或已收敛），蒙皮结果与上帧相同，跳过标记——残虹这类
+        # 动态骨骼占比 >30% 的模型，否则会每帧被迫走全量蒙皮。
+        if self.physics.last_max_delta > 8e-4:
+            self._mark_incremental_skin_dirty(self.physics.dynamic_bones())
         self.update()
 
     def reset_pose(self):

@@ -51,6 +51,10 @@ class _Bullet:
         lib.bw_add_body.argtypes = [vp, ctypes.c_int] + [f] * 14 + [ctypes.c_int] * 3
         lib.bw_set_body.argtypes = [vp, ctypes.c_int, p, p]
         lib.bw_get_body.argtypes = [vp, ctypes.c_int, p, p]
+        if hasattr(lib, "bw_move_body"):
+            lib.bw_move_body.argtypes = [vp, ctypes.c_int, p, p, f]
+        if hasattr(lib, "bw_set_limits"):
+            lib.bw_set_limits.argtypes = [vp, f, f, f, f]
         lib.bw_apply_impulse.argtypes = [vp, ctypes.c_int] + [f] * 6
         if hasattr(lib, "bw_set_body_mass"):
             lib.bw_set_body_mass.restype = ctypes.c_int
@@ -145,6 +149,13 @@ class MMDPhysics:
         self.gravity = -9.8
         self.iterations = 30
         self.ground = True
+        # 预热步数：开启物理/重建世界后先静默演算，让弹簧-约束系统进入
+        # 平衡态再显示，避免初始帧的爆炸式抖动；姿态重置不做预热。
+        self.warmup_steps = 30
+        # 上一步各刚体位置与本步最大位移：视口据此判断物理是否静止，
+        # 静止时跳过蒙皮刷新（显示停留在上帧，位移低于可见阈值）
+        self._last_step_positions = np.zeros((0, 3), dtype=np.float32)
+        self.last_max_delta = 1.0
         self.error = ""
         self._ready = False
 
@@ -227,6 +238,7 @@ class MMDPhysics:
         self._offsets_array = np.ascontiguousarray(self.offsets, dtype=np.float32)
         self._body_positions = np.empty((len(model.rigid), 3), dtype=np.float32)
         self._body_rotations = np.empty((len(model.rigid), 4), dtype=np.float32)
+        self._last_step_positions = np.empty((len(model.rigid), 3), dtype=np.float32)
         self._inverse_offsets_array = (
             np.ascontiguousarray(
                 [mat4_inverse(offset) for offset in self.offsets],
@@ -336,8 +348,11 @@ class MMDPhysics:
         self._override_translations = np.zeros((0, 3), dtype=np.float32)
         self._override_mask = np.zeros(0, dtype=np.uint8)
         self._pose_layout_id = None
+        self._last_step_positions = np.zeros((0, 3), dtype=np.float32)
+        self.last_max_delta = 1.0
 
-    def reset(self, pose: Pose, morph_weights=None, morphs=None):
+    def reset(self, pose: Pose, morph_weights=None, morphs=None,
+              warmup: bool = False):
         if not self._ready:
             return
         lib = _Bullet.get().lib
@@ -359,6 +374,20 @@ class MMDPhysics:
             self._body_positions[i] = pos
             self._body_rotations[i] = quat
         lib.bw_clear_forces(self.world)
+        if warmup and self.warmup_steps > 0:
+            # 静默演算若干步再回读：模型从已收敛的状态开始显示
+            for _ in range(self.warmup_steps):
+                lib.bw_step(self.world, 1.0 / 60.0, 1)
+            posbuf = (ctypes.c_float * 3)()
+            quatbuf = (ctypes.c_float * 4)()
+            for i, bi in enumerate(self.body_map):
+                if bi < 0:
+                    continue
+                lib.bw_get_body(self.world, bi, posbuf, quatbuf)
+                self._body_positions[i] = posbuf[:]
+                self._body_rotations[i] = quatbuf[:]
+        np.copyto(self._last_step_positions, self._body_positions)
+        self.last_max_delta = 1.0
 
     # ------------------------------------------------------------ 仿真
     def step(self, pose: Pose, dt: float, morph_weights=None, morphs=None):
@@ -401,6 +430,9 @@ class MMDPhysics:
         else:
             posbuf = (ctypes.c_float * 3)()
             quatbuf = (ctypes.c_float * 4)()
+            # 运动学刚体用差分速度同步（bw_move_body），求解器才能拿到
+            # 正确的相对速度；老 DLL 没有该入口时退回瞬移写法。
+            move = getattr(lib, "bw_move_body", None)
             for i, bi in enumerate(self.body_map):
                 if bi < 0 or self.modes[i] != 0:
                     continue
@@ -410,9 +442,13 @@ class MMDPhysics:
                 M = W[bone] @ self.offsets[i]
                 pos = [float(M[0, 3]), float(M[1, 3]), float(M[2, 3])]
                 q = mat_to_quat(M[:3, :3])
-                lib.bw_set_body(
-                    self.world, bi, _arr(pos),
-                    _arr([q[0], q[1], q[2], q[3]]))
+                if move is not None:
+                    move(self.world, bi, _arr(pos),
+                         _arr([q[0], q[1], q[2], q[3]]), float(dt))
+                else:
+                    lib.bw_set_body(
+                        self.world, bi, _arr(pos),
+                        _arr([q[0], q[1], q[2], q[3]]))
             lib.bw_step(self.world, float(dt), 3)
             for i, bi in enumerate(self.body_map):
                 if bi < 0:
@@ -458,5 +494,10 @@ class MMDPhysics:
                 R = np.eye(4, dtype=np.float32)
                 R[:3, :3] = quat_to_mat(q)
                 Wcur[bone] = Wp @ translation(*(pose.rest_off[bone] + t)) @ R
+        if self._last_step_positions.shape == self._body_positions.shape:
+            self.last_max_delta = float(
+                np.abs(self._body_positions
+                       - self._last_step_positions).max())
+            np.copyto(self._last_step_positions, self._body_positions)
         pose.apply(morph_weights, morphs)
         pose.world()
