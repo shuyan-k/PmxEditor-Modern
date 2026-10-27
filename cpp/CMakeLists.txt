@@ -21,11 +21,11 @@ option(PMX_BUILD_APP "Build the GLFW + ImGui viewer" ON)
 option(PMX_BUILD_TESTS "Build parity/unit tests" ON)
 option(PMX_ENABLE_PHYSICS "Build Bullet physics backend" ON)
 option(PMX_USE_SYSTEM_BULLET "Use an installed Bullet instead of the vendored source" OFF)
-option(PMX_FETCH_DEPS "Fetch GLFW/ImGui/stb when no local copy exists" ON)
+option(PMX_FETCH_DEPS "Fetch dependencies from the mirror when third_party/ is missing" OFF)
 set(PMX_DEPS_MIRROR "https://gitee.com/mirrors" CACHE STRING
-    "Git mirror used for dependencies (use https://github.com for upstream)")
-set(PMX_LOCAL_BULLET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../native/bullet_src"
-    CACHE PATH "Vendored Bullet 3.26 source tree")
+    "Git mirror used when PMX_FETCH_DEPS is enabled (use https://github.com for upstream)")
+set(PMX_BULLET_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bullet/src"
+    CACHE PATH "Vendored Bullet source tree")
 
 include(cmake/Dependencies.cmake)
 
@@ -84,11 +84,4 @@ if(PMX_BUILD_TESTS)
     # 与 Python 版做读写一致性校验的命令行探针（tools/parity_check.py 调用）。
     add_executable(pmx_parity_probe tests/parity_probe.cpp)
     target_link_libraries(pmx_parity_probe PRIVATE pmx_core)
-endif()
-
-# 把依赖的运行时 DLL 放到可执行文件旁边（Windows 开发期免安装）。
-if(WIN32 AND PMX_BUILD_APP)
-    add_custom_command(TARGET pmxstudio POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:glfw> $<TARGET_FILE_DIR:pmxstudio>)
 endif()

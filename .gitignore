@@ -1,80 +1,21 @@
-# 打包产物
-dist/
+# 构建产物（CMake）
+build/
 *.build/
-*.dist/
 *.onefile-build/
-nuitka-crash-report.xml
 
-# 原生构建中间文件（保留源码与脚本）
-native/obj/
-native/build/
-native/sources.rsp
-native/*.obj
-native/*.exp
-native/*.lib
-native/*.rsp
-native/*.pdb
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.pytest_cache/
-.venv/
-
-# 测试产物
-tests/report.json
-tests/shots/
-tests/*.pmx
-tests/*.vpd
-tests/onefiletmp/
-tests/tmproot/
-# parity 比对中间产物（由 side_orig/side_mod/cxop 在原版 PmxEditor 上运行生成）
-# 单向约 836 MB，不入库；compare_all.py 需要它们时按 tests/parity/REPORT.md 重新生成
-tests/parity/work/
+# 查看器运行时生成的文件
+imgui.ini
+settings.json
+settings.json.bak
+settings.json.tmp
+*.log
 
 # 编辑器 / 系统
 .vscode/
 .idea/
 Thumbs.db
 desktop.ini
-# test/build artifacts
-tests/*.png
-tests/*.txt
-tests/*.json
-tests/*.err
-tests/*.log
-native/*.txt
-native/*.log
-_test/
-!tests/test_model.pmx
-!tests/tex_body.png
-!tests/sph.png
-
-*.log
-
-# 主题图标由 theme.svg_assets() 在启动时生成，不入库
-assets/*.svg
-verify_native_report.json
-
-tests/action.vmd
-
-tests/*.npz
-/_t*.py
-tests/*.vmd
-
-# 本地设置文件（settings.json 由程序生成，不随仓库分发）
-settings.json
-settings.json.bak
-settings.json.tmp
-
-# ImGui 窗口布局（C++ 查看器运行时生成）
-imgui.ini
 
 # 代码签名证书与密码（私钥不入库）
 code_sign.pfx
 code_sign.pass
-
-# 打包临时目录（TEMP/NUITKA_CACHE_DIR 指向处）
-.build_tmp/

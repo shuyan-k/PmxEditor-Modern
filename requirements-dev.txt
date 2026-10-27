@@ -1,4 +1,0 @@
-# 开发与 CI 辅助依赖（运行时不需要；与 requirements.txt 一起使用）
-ruff==0.17.2
-# tests/gen_model.py 生成合成夹具时需要；CI 用的是仓库自带 test_model.pmx
-Pillow>=10

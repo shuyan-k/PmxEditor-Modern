@@ -1,6 +1,6 @@
 # PmxStudio C++ 版
 
-`cpp/` 是 PmxStudio 的原生 C++ 重写：不依赖 Python / PyQt5，直接用 C++20 + OpenGL 4.6 实现 PMX 查看与姿态编辑。Python 版仍保留在仓库根目录，两者共用同一套测试模型（`tests/test_model.pmx`）与同一份 Bullet 源码（`native/bullet_src`）。
+`cpp/` 是 PmxStudio 的原生 C++ 重写：不依赖 Python / PyQt5，直接用 C++20 + OpenGL 4.6 实现 PMX 查看与姿态编辑。Python 版独立维护在 `python` 分支；本分支与 `main` 同源，自带全部第三方源码（`cpp/third_party/`），断网也能构建。
 
 主要能力：PMX 2.0/2.1 读写、GPU Compute Shader 蒙皮（BDEF1/2/4、SDEF）、付与继承、CCD IK、形态（顶点/UV/材质/骨骼/组/翻转/刚体）、Bullet 物理与柔体预览、全量检查器编辑与撤销/重做、VPD 姿态导入导出、主题与偏好持久化、骨骼/刚体/关节叠加层与拾取。
 
@@ -11,7 +11,10 @@
 ```
 cpp/
 ├── CMakeLists.txt          构建入口：pmx_core / pmx_gpu / pmxstudio / pmx_tests
-├── cmake/Dependencies.cmake 依赖解析（本地 third_party 优先，否则 gitee 镜像拉取）
+├── build.bat               Windows 一键配置 + 编译
+├── setup_linux.sh          Linux 一键装依赖 + 配置 + 编译 + 自测
+├── third_party/            自带源码：glfw 3.4 / imgui v1.92.9b / stb / bullet 3.25
+├── cmake/Dependencies.cmake 依赖解析（本地 third_party 优先，可选联网兜底）
 ├── src/
 │   ├── core/               与图形无关的纯逻辑，可单测
 │   │   ├── pmx.hpp         PMX 数据模型（顶点 SoA、骨骼、材质、形态、刚体、关节、柔体）
@@ -47,44 +50,54 @@ cpp/
 
 ## 2. 依赖
 
-| 依赖 | 版本 | 来源 |
-| --- | --- | --- |
-| GLFW | 3.4 | `third_party/glfw` 或镜像拉取 |
-| Dear ImGui | v1.92.9b | 镜像拉取 |
-| stb_image | master | 镜像拉取 |
-| Bullet | 3.26 | 优先 `../native/bullet_src`，缺失时拉 3.25 |
+全部随仓库提供，克隆后无需联网：
 
-默认镜像 `https://gitee.com/mirrors`（GitHub 不可达时可用）；海外环境可设 `-DPMX_DEPS_MIRROR=https://github.com`。
+| 依赖 | 版本 | 位置 |
+| --- | --- | --- |
+| GLFW | 3.4 | `third_party/glfw` |
+| Dear ImGui | v1.92.9b | `third_party/imgui`（含 glfw / opengl3 后端） |
+| stb_image | master | `third_party/stb/stb_image.h` |
+| Bullet | 3.25 | `third_party/bullet/src` |
+
+需要系统提供的是编译器、CMake 与图形/窗口系统开发包，见下一节。若想改用联网拉取，可加 `-DPMX_FETCH_DEPS=ON`（默认 `https://gitee.com/mirrors`，可用 `-DPMX_DEPS_MIRROR` 改）。
 
 ## 3. 构建与运行
 
-需要 CMake ≥ 3.20、支持 C++20 的编译器（Windows 上为 MSVC 2019/2022）。
+需要 CMake ≥ 3.20 与支持 C++20 的编译器。
+
+**Windows**（MSVC 2019/2022，先装 Visual Studio 的「使用 C++ 的桌面开发」）：
 
 ```powershell
-# 配置 + 编译（多配置生成器产物在 Release 子目录）
-cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
-cmake --build cpp/build --config Release
-
-# 启动查看器（模型路径可省略，省略后用「打开 PMX…」选文件）
+cpp\build.bat                                  # 配置 + 编译 Release
 cpp\build\Release\pmxstudio.exe tests\test_model.pmx
-
-# 运行对照测试
-cpp\build\Release\pmx_tests.exe
+cpp\build\Release\pmx_tests.exe                # 205 项无窗口测试
 ```
+
+**Linux**：
+
+```bash
+bash cpp/setup_linux.sh                        # apt 安装依赖 + 编译 + 自测
+# 或手动：
+cmake -S cpp -B cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build -j"$(nproc)"
+./cpp/build/pmxstudio tests/test_model.pmx
+```
+
+Linux 需要 `build-essential cmake ninja-build libx11-dev libxrandr-dev libxinerama-dev
+libxcursor-dev libxi-dev`；中文界面还需要系统装有 Noto CJK 或文泉驿字体（`fonts-noto-cjk`）。
+无显示服务（纯 SSH 容器）时只能构建与跑测试，查看器需要 X11。
 
 ### CMake 选项
 
 | 选项 | 默认 | 说明 |
 | --- | --- | --- |
 | `PMX_BUILD_APP` | ON | 构建 GLFW + ImGui 查看器 |
-| `PMX_BUILD_TESTS` | ON | 构建 `pmx_tests` |
+| `PMX_BUILD_TESTS` | ON | 构建 `pmx_tests` 与 `pmx_parity_probe` |
 | `PMX_ENABLE_PHYSICS` | ON | 编译 Bullet 物理后端；关闭后物理接口退化为空实现 |
 | `PMX_USE_SYSTEM_BULLET` | OFF | 使用系统安装的 Bullet 而非仓库内源码 |
-| `PMX_FETCH_DEPS` | ON | 无本地 `third_party` 时联网拉取依赖 |
-| `PMX_DEPS_MIRROR` | gitee | 依赖镜像地址 |
-| `PMX_LOCAL_BULLET_DIR` | `../native/bullet_src` | 仓库自带 Bullet 源码位置 |
-
-Linux 下需额外准备 OpenGL 与窗口系统开发包，并自行处理中文路径编码（当前对话框封装为 Windows 专用）。
+| `PMX_FETCH_DEPS` | OFF | 本地 `third_party` 缺失时联网拉取依赖 |
+| `PMX_DEPS_MIRROR` | gitee | `PMX_FETCH_DEPS=ON` 时使用的镜像 |
+| `PMX_BULLET_SRC_DIR` | `third_party/bullet/src` | 自带 Bullet 源码位置 |
 
 ---
 
@@ -173,17 +186,10 @@ Bullet 固定 1/60 步进。刚体旋转按 PMX 的 YXZ 顺序组四元数，关
 
 ### 与 Python 版的一致性校验
 
-`tools/parity_check.py` 用两个用例（`tests/test_model.pmx`，以及在其上追加柔体后的 PMX 2.1 模型）验证三件事：
-
-1. Python 版读入再写出 → 与原文件语义一致
-2. C++ 探针 `pmx_parity_probe roundtrip` 读入再写出 → 与原文件语义一致
-3. Python 与 C++ 的输出互相比对 → 一致
-
-语义比较由 `tests/parity/pmxsem.py` 完成（逐字段求差，浮点带容差）。
-
-```powershell
-python tools\parity_check.py
-```
+跨实现比对脚本（`tools/parity_check.py` + `tests/parity/pmxsem.py`）位于 `python` 分支：该脚本用
+`tests/test_model.pmx` 与追加柔体后的 PMX 2.1 用例，分别让 Python 版与 C++ 探针
+`pmx_parity_probe roundtrip` 读入再写出，再做逐字段语义比较。本分支只保留探针本身，
+需要回归时把两个分支分别检出后运行脚本即可。
 
 其他调试手段：`PMX_GPU_CHECK=1` 启动，首次 GPU 蒙皮后打印与 CPU 参考实现的最大偏差与非法分量顶点数。
 
