@@ -9,6 +9,7 @@
 
 用法：python tools/parity_check.py [模型路径...]
 默认用例：tests/test_model.pmx，以及在此基础上追加 PMX 2.1 柔体的临时模型。
+C++ 版单独检出于其他目录时，可用环境变量 PMX_PROBE 指定 pmx_parity_probe 的完整路径。
 """
 from __future__ import annotations
 
@@ -26,6 +27,9 @@ import pmxsem  # noqa: E402
 
 
 def find_probe() -> str:
+    env = os.environ.get("PMX_PROBE")
+    if env and os.path.isfile(env):
+        return env
     names = ("pmx_parity_probe.exe", "pmx_parity_probe")
     for sub in ("build/Release", "build", "build/Debug", "build/RelWithDebInfo"):
         for name in names:

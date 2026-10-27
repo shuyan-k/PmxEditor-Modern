@@ -69,9 +69,6 @@ settings.json
 settings.json.bak
 settings.json.tmp
 
-# ImGui 窗口布局（C++ 查看器运行时生成）
-imgui.ini
-
 # 代码签名证书与密码（私钥不入库）
 code_sign.pfx
 code_sign.pass
