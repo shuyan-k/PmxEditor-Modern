@@ -1,4 +1,4 @@
-﻿# 打包产物
+# 打包产物
 dist/
 *.build/
 *.dist/
@@ -14,7 +14,6 @@ native/*.exp
 native/*.lib
 native/*.rsp
 native/*.pdb
-native/bullet_src/
 
 # Python
 __pycache__/
