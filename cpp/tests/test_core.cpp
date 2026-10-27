@@ -191,9 +191,20 @@ void test_skinning(const pmx::Model& model) {
         deform.deform(model.vertices.pos, model.vertices.nrm, w1, out_pos, out_nrm);
         check(max_abs_diff(model.vertices.pos, out_pos) > 1e-4, "旋转后蒙皮产生位移");
 
-        // 局部重算与全量重算一致
+        // 局部重算与全量重算一致：dirty 集合要覆盖世界矩阵真正变化的所有骨骼，
+        // 即被旋转骨骼自身及其全部后代（子骨骼的世界矩阵会随父级一起改变）。
         std::vector<pmx::Vec3> sub_pos = model.vertices.pos, sub_nrm = model.vertices.nrm;
         std::vector<int> dirty{bone};
+        std::vector<char> visited(model.bones.size(), 0);
+        visited[static_cast<std::size_t>(bone)] = 1;
+        for (std::size_t at = 0; at < dirty.size(); ++at) {
+            const int parent = dirty[at];
+            for (std::size_t k = 0; k < model.bones.size(); ++k) {
+                if (model.bones[k].parent != parent || visited[k]) continue;
+                visited[k] = 1;
+                dirty.push_back(static_cast<int>(k));
+            }
+        }
         deform.deform_subset(model.vertices.pos, model.vertices.nrm, w1, dirty, sub_pos, sub_nrm);
         check_near(max_abs_diff(sub_pos, out_pos), 0.0, 2e-4, "局部重算与全量重算一致");
     }
@@ -327,9 +338,11 @@ void test_utf8_paths(const pmx::Model& model, const std::filesystem::path& dir) 
 
 }  // namespace
 
-int main() {
-    const std::string path = PMX_TEST_MODEL;
-    if (!std::filesystem::exists(path)) {
+int main(int argc, char** argv) {
+    // 崩溃时也要保留已打印的进度，便于定位失败项。
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    const std::string path = argc > 1 ? argv[1] : PMX_TEST_MODEL;
+    if (!std::filesystem::exists(pmx::utf8_path(path))) {
         std::fprintf(stderr, "找不到测试模型：%s\n", path.c_str());
         return 2;
     }

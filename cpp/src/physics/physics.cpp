@@ -223,6 +223,9 @@ bool Physics::build(const Model& model) {
         const int ba = body_map_[static_cast<std::size_t>(a)];
         const int bb = body_map_[static_cast<std::size_t>(b)];
         if (ba < 0 || bb < 0) continue;
+        // Bullet 不允许约束两端是同一个刚体（btDiscreteDynamicsWorld::addConstraint 会断言），
+        // PMX 里自连的关节本身也无意义，直接跳过。
+        if (ba == bb) continue;
         btRigidBody* rbA = w->bodies[static_cast<std::size_t>(ba)];
         btRigidBody* rbB = w->bodies[static_cast<std::size_t>(bb)];
         const btTransform frame_world = make_transform(j.pos, joint_frame_euler(j.rot));
