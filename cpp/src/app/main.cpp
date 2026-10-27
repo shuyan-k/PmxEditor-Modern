@@ -342,19 +342,27 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
                 select(SelKind::None, -1);
                 status = "取消选择";
             }
+            reveal_selection = false;
+            reveal_frames = 0;
         } else {
             if (hit.kind == pmx::Selection::BONE) {
                 select(SelKind::Bone, hit.index);
+                reveal_tab = "骨骼";
                 status = "已选中「" + bone_name(hit.index) + "」：左键拖动位移 · 右键拖动旋转";
             } else if (hit.kind == pmx::Selection::RIGID) {
                 select(SelKind::Rigid, hit.index);
+                reveal_tab = "物理";
                 status = "已选中刚体「" +
                          model.rigid[static_cast<std::size_t>(hit.index)].name + "」";
             } else {
                 select(SelKind::Joint, hit.index);
+                reveal_tab = "物理";
                 status = "已选中关节「" +
                          model.joints[static_cast<std::size_t>(hit.index)].name + "」";
             }
+            // 切面板要等下一帧生效，保持两帧让 SetSelected 与滚动都落地。
+            reveal_frames = 2;
+            reveal_selection = true;
         }
     }
 
@@ -512,7 +520,12 @@ void Viewer::draw_ui() {
 
     if (ImGui::BeginTabBar("##inspector_tabs")) {
         auto tab = [this](const char* name, void (*fn)(Viewer&)) {
-            if (ImGui::BeginTabItem(name)) {
+            // 视口双击选中的对象在对应面板里可见：自动把该标签切到前台。
+            const ImGuiTabItemFlags flags =
+                reveal_tab && std::strcmp(reveal_tab, name) == 0
+                    ? ImGuiTabItemFlags_SetSelected
+                    : ImGuiTabItemFlags_None;
+            if (ImGui::BeginTabItem(name, nullptr, flags)) {
                 fn(*this);
                 ImGui::EndTabItem();
             }
@@ -528,6 +541,11 @@ void Viewer::draw_ui() {
         tab("柔体", &panel_soft);
         tab("设置", &panel_settings);
         ImGui::EndTabBar();
+    }
+    // 标签切换在下一帧生效，保持两帧后清零，避免一直强制选中。
+    if (reveal_frames > 0 && --reveal_frames == 0) {
+        reveal_tab = nullptr;
+        reveal_selection = false;
     }
     ImGui::End();
 }

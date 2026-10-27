@@ -84,6 +84,12 @@ struct Viewer {
     // 检查器选择（骨骼/刚体/关节同时驱动视口选中）。
     DocSelection sel;
 
+    // 视口双击选中后，把对应面板切到前台并把列表滚到该行。
+    // 标签切换要等下一帧 TabBarLayout 才生效，所以 reveal_tab 保持两帧。
+    const char* reveal_tab = nullptr;
+    int reveal_frames = 0;
+    bool reveal_selection = false;
+
     // 视口拖动状态：未选中骨骼时左键只旋转视角，选中后左键位移 / 右键旋转。
     enum DragMode { DRAG_NONE, DRAG_ORBIT, DRAG_PAN, DRAG_MOVE, DRAG_ROTATE };
     DragMode drag_mode = DRAG_NONE;

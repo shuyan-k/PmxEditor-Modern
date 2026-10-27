@@ -177,6 +177,8 @@ void panel_bone(Viewer& v) {
                     v.select(SelKind::Bone, i);
                     idx = i;
                 }
+                // 视口双击选中的骨骼可能在列表可视区外，滚到中间。
+                if (v.reveal_selection && i == idx) ImGui::SetScrollHereY(0.5f);
             }
         }
     }

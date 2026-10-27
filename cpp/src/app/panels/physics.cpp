@@ -445,6 +445,8 @@ void panel_physics(Viewer& v) {
                     v.select(kind == 0 ? SelKind::Rigid : SelKind::Joint, i);
                     idx = i;
                 }
+                // 视口双击选中的刚体/关节可能在列表可视区外，滚到中间。
+                if (v.reveal_selection && i == idx) ImGui::SetScrollHereY(0.5f);
             }
         }
     }
