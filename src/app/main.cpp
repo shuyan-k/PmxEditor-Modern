@@ -333,9 +333,12 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
         drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
 
-    // ---- 双击选中：骨骼 / 刚体 / 关节都可以（刚体、关节优先）
+    // ---- 双击选中：骨骼优先，没有骨骼时才退到刚体 / 关节。
+    // 刚体壳和关节球通常包住骨骼，若按最近距离混合排序，双击骨骼常会选中刚体。
     if (double_click) {
-        const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_ALL);
+        pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
+        if (hit.kind == pmx::Selection::NONE)
+            hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_RIGID | pmx::PICK_JOINT);
         drag_mode = DRAG_NONE;
         drag_bone = -1;
         if (hit.kind == pmx::Selection::NONE) {
