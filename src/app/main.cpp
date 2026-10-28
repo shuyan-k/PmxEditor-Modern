@@ -731,6 +731,7 @@ void Viewer::draw_scene(int fb_w, int fb_h) {
     settings.joint_alpha = joint_alpha;
     settings.focus_selection = focus_overlay;
     settings.toon = toon;
+    settings.rim = rim;
     settings.background = {bg[0], bg[1], bg[2]};
     settings.light_dir = {light[0], light[1], light[2]};
 

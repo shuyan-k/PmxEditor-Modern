@@ -22,6 +22,12 @@ void panel_settings(Viewer& v) {
     ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::SliderFloat("关节##joint_alpha", &v.joint_alpha, 0.0f, 1.0f, "%.2f");
 
+    // ------------------------------------------------------------ 卡通着色
+    ImGui::SeparatorText("卡通着色");
+    ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
+    ImGui::SliderFloat("边缘光##rim", &v.rim, 0.0f, 0.6f, "%.2f");
+    ImGui::SetItemTooltip("沿轮廓叠加本体色的强度；0 为关闭，接近 MMD 原版效果");
+
     // ------------------------------------------------------------ Bullet 物理
     ImGui::SeparatorText("Bullet 物理");
     ImGui::SetNextItemWidth(pmxui::scale(-90.0f));

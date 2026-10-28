@@ -31,6 +31,7 @@ struct RenderSettings {
     float rigid_alpha = 0.55f;
     float joint_alpha = 0.75f;
     float toon = 1.0f;
+    float rim = 0.18f;  // 边缘光强度
     Vec3 background{0.13f, 0.14f, 0.16f};
     Vec3 light_dir{0.35f, 0.72f, 0.45f};
 };
@@ -122,6 +123,12 @@ private:
     GLuint grid_vao_ = 0;
     GLuint grid_vbo_ = 0;
     GLuint grid_vertex_count_ = 0;
+    // MMD 内置 toon01..toon10 的程序化替代：竖直灰度渐变，低编号硬边、高编号柔和。
+    GLuint toon_ramps_[10] = {};
+    // 半透明材质的距离排序：面区间包围中心（静止坐标）+ 最大权重骨骼锚点。
+    std::vector<Vec3> range_centers_;
+    std::vector<int> range_bones_;
+    std::vector<Mat4> skin_cpu_;
 
     ShaderProgram skin_program_;
     ShaderProgram mesh_program_;
@@ -138,11 +145,14 @@ private:
 
     void build_templates();
     void build_grid();
+    void build_toon_ramps();
     void rebuild_bone_overlay(const Model& model, Pose& pose, const RenderSettings& settings,
                               const Selection& selection);
     void build_instances(const Model& model, Pose& pose, Physics* physics,
                          const RenderSettings& settings, const Selection& selection);
     Texture& texture_for(const Model& model, int index);
+    // 材质卡通光照用的 toon 贴图：材质自带贴图或内置 toon01..10。
+    Texture toon_for(const Model& model, const Material& mt);
     void bind_material(const Model& model, const Material& mt, const RenderSettings& settings);
     void upload_skin_matrices(const Model& model, Pose& pose);
     void dispatch_gpu_skin();

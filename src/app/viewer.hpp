@@ -68,6 +68,7 @@ struct Viewer {
     float rigid_alpha = 0.55f;
     float joint_alpha = 0.75f;
     float toon = 1.0f;
+    float rim = 0.18f;
     float bg[3] = {0.13f, 0.14f, 0.16f};
     float light[3] = {0.35f, 0.72f, 0.45f};
 

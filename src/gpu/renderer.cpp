@@ -249,15 +249,20 @@ in vec3 vWorld;
 out vec4 fragColor;
 uniform sampler2D uTex;
 uniform sampler2D uSphereTex;
+uniform sampler2D uToonTex;
 uniform int uUseTex;
 uniform int uUseSphere;
 uniform int uSphereMode;
+uniform int uUseToonTex;
 uniform vec4 uDiffuse;
 uniform vec3 uAmbient;
 uniform vec3 uSpecular;
 uniform float uSpecCoef;
 uniform float uToon;
+uniform float uRim;
 uniform vec3 uLightDir;
+uniform vec3 uEye;
+uniform mat4 uView;
 void main() {
     vec4 tex = uUseTex == 1 ? texture(uTex, vUV) : vec4(1.0);
     if (tex.a < 0.02) discard;
@@ -265,21 +270,58 @@ void main() {
     vec3 n = normalize(vN);
     if (!gl_FrontFacing) n = -n;
     vec3 light = normalize(uLightDir);
-    float ndl = max(dot(n, light), 0.0);
-    float lambert = 0.54 + 0.16 * ndl;
-    float toon = 0.58 + 0.12 * smoothstep(0.20, 0.80, ndl);
-    float shade = mix(lambert, toon, uToon);
+    float ndl = dot(n, light);
+    float lambert = 0.54 + 0.16 * max(ndl, 0.0);
+    // Toon 光照：优先采样 ramp 贴图（内置 toon01..10 或材质自带 toon），
+    // 缺失时退回解析式两段阈值。MMD 的 toon 贴图是按 N·L(0..1) 排布的
+    // 竖直渐变，直接用它做 v 坐标；若再映射到 [-1,1] 会把明暗分界推到背面，
+    // 受光面几乎全亮、失去卡通分层。
+    float shade;
+    if (uUseToonTex == 1) {
+        shade = mix(lambert, texture(uToonTex, vec2(0.5, clamp(ndl, 0.0, 1.0))).r, uToon);
+    } else {
+        float toon = 0.58 + 0.12 * smoothstep(0.20, 0.80, max(ndl, 0.0));
+        shade = mix(lambert, toon, uToon);
+    }
     vec3 col = base.rgb * shade + uAmbient * base.rgb * 0.06;
     float spec = pow(max(ndl, 0.0), 14.0) * uSpecCoef;
     col += uSpecular * spec;
+    // 球面贴图按相机空间法线的 XY 采样（MMD 约定），转动视角时高光会滑动。
     if (uUseSphere == 1) {
-        vec2 suv = n.xy * 0.5 + 0.5;
+        vec3 nv = normalize(mat3(uView) * n);
+        vec2 suv = nv.xy * 0.5 + 0.5;
         vec4 sp = texture(uSphereTex, suv);
         if (uSphereMode == 1) col = col * (sp.rgb * 1.6);
         else if (uSphereMode == 2) col = col + sp.rgb * sp.a;
         else if (uSphereMode == 3) col = mix(col, sp.rgb, sp.a);
     }
+    // 边缘光：贴着轮廓的位置补一点本体色，增强立体感又不破坏卡通分层。
+    vec3 view_dir = normalize(uEye - vWorld);
+    float rim = smoothstep(0.6, 1.0, 1.0 - max(dot(n, view_dir), 0.0));
+    col += base.rgb * (uRim * rim);
     fragColor = vec4(clamp(col, 0.0, 1.0), base.a);
+}
+)";
+
+const char* kOutlineVS = R"(#version 460 core
+layout(std430, binding = 2) readonly buffer VertIn { vec4 verts[]; };
+layout(std430, binding = 3) readonly buffer PosOut { vec4 outPos[]; };
+layout(std430, binding = 4) readonly buffer NrmOut { vec4 outNrm[]; };
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform float uWidth;   // 描边半宽（NDC），屏幕像素宽度恒定
+out vec2 vUV;
+void main() {
+    uint i = uint(gl_VertexID);
+    vec3 p = outPos[i].xyz;
+    vec3 n = outNrm[i].xyz;
+    vUV = verts[i * 8u + 2u].xy;
+    vec4 vp = uView * vec4(p, 1.0);
+    // 视空间沿法线外扩，偏移量乘深度：投影后描边在屏幕上宽度恒定，
+    // 相机拉远不会消失，拉近也不会变成粗黑边。
+    float k = uWidth * (-vp.z) / uProj[1][1];
+    vp.xyz += (mat3(uView) * n) * k;
+    gl_Position = uProj * vp;
 }
 )";
 
@@ -556,6 +598,10 @@ SceneRenderer::~SceneRenderer() {
         glDeleteVertexArrays(1, &grid_vao_);
         grid_vao_ = 0;
     }
+    for (GLuint& ramp : toon_ramps_) {
+        if (ramp) glDeleteTextures(1, &ramp);
+        ramp = 0;
+    }
 }
 
 bool SceneRenderer::init(std::string* error) {
@@ -565,7 +611,7 @@ bool SceneRenderer::init(std::string* error) {
         return false;
     }
     if (!mesh_program_.build(kMeshVS, kMeshFS, &err) ||
-        !outline_program_.build(kMeshVS, kOutlineFS, &err) ||
+        !outline_program_.build(kOutlineVS, kOutlineFS, &err) ||
         !solid_program_.build(kSolidVS, kSolidFS, &err) ||
         !inst_program_.build(kInstVS, kSolidFS, &err) ||
         !line_program_.build(kLineVS, kLineFS, &err)) {
@@ -575,6 +621,7 @@ bool SceneRenderer::init(std::string* error) {
     glGenBuffers(1, &overlay_instance_ssbo_);
     gpu_check_enabled_ = std::getenv("PMX_GPU_CHECK") != nullptr;
     build_templates();
+    build_toon_ramps();
     build_grid();
     ready_ = true;
     return true;
@@ -644,6 +691,44 @@ void SceneRenderer::build_grid() {
     glVertexAttribPointer(1, 4, glc::GL_FLOAT, glc::GL_FALSE, stride,
                           reinterpret_cast<const void*>(3 * sizeof(float)));
     glBindVertexArray(0);
+}
+
+void SceneRenderer::build_toon_ramps() {
+    // 内置 toon01..10 的程序化近似：竖直灰度渐变，底部暗、顶部亮。
+    // 低编号接近 MMD 的硬边两色，编号越大过渡越柔和。
+    const int height = 64;
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(height) * 4);
+    for (int i = 0; i < 10; ++i) {
+        const float step = 9.0f - i * 0.55f;           // 越大越硬
+        const float edge = 0.40f + i * 0.015f;         // 明暗分界
+        for (int y = 0; y < height; ++y) {
+            const float v = static_cast<float>(y) / static_cast<float>(height - 1);
+            const float t = clampf((v - edge) * step + 0.5f, 0.0f, 1.0f);
+            const auto c = static_cast<unsigned char>((0.42f + 0.58f * t) * 255.0f + 0.5f);
+            const std::size_t o = static_cast<std::size_t>(y) * 4;
+            pixels[o + 0] = c;
+            pixels[o + 1] = c;
+            pixels[o + 2] = c;
+            pixels[o + 3] = 255;
+        }
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(glc::GL_TEXTURE_2D, tex);
+        glPixelStorei(glc::GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(glc::GL_TEXTURE_2D, 0, glc::GL_RGBA8, 1, height, 0, glc::GL_RGBA,
+                     glc::GL_UNSIGNED_BYTE, pixels.data());
+        glTexParameteri(glc::GL_TEXTURE_2D, glc::GL_TEXTURE_MIN_FILTER,
+                        static_cast<GLint>(glc::GL_LINEAR));
+        glTexParameteri(glc::GL_TEXTURE_2D, glc::GL_TEXTURE_MAG_FILTER,
+                        static_cast<GLint>(glc::GL_LINEAR));
+        glTexParameteri(glc::GL_TEXTURE_2D, glc::GL_TEXTURE_WRAP_S,
+                        static_cast<GLint>(glc::GL_CLAMP_TO_EDGE));
+        glTexParameteri(glc::GL_TEXTURE_2D, glc::GL_TEXTURE_WRAP_T,
+                        static_cast<GLint>(glc::GL_CLAMP_TO_EDGE));
+        toon_ramps_[i] = tex;
+    }
+    glPixelStorei(glc::GL_UNPACK_ALIGNMENT, 4);
+    glBindTexture(glc::GL_TEXTURE_2D, 0);
 }
 
 void SceneRenderer::release_model() {
@@ -750,6 +835,38 @@ bool SceneRenderer::upload_model(const Model& model, std::string* error) {
     model_.ranges = material_ranges(model);
     model_.path = model.path;
 
+    // 半透明材质排序用的面区间中心与骨骼锚点：中心取静止坐标平均值，
+    // 锚点取区间首顶点权重最大的骨骼，蒙皮后中心跟着骨骼走。
+    range_centers_.assign(model_.ranges.size(), Vec3{});
+    range_bones_.assign(model_.ranges.size(), -1);
+    for (std::size_t r = 0; r < model_.ranges.size(); ++r) {
+        const MaterialRange& range = model_.ranges[r];
+        if (range.count == 0 || range.start >= model.indices.size()) continue;
+        Vec3 sum{};
+        std::size_t n = 0;
+        const std::size_t end = std::min(range.start + range.count, model.indices.size());
+        for (std::size_t k = range.start; k < end; ++k) {
+            const std::uint32_t vi = model.indices[k];
+            if (vi >= model.vertices.size()) continue;
+            sum += model.vertices.pos[vi];
+            ++n;
+        }
+        if (n > 0) range_centers_[r] = sum * (1.0f / static_cast<float>(n));
+
+        const std::uint32_t v0 = model.indices[range.start];
+        if (v0 >= model.vertices.size()) continue;
+        float best_weight = 0.0f;
+        for (int c = 0; c < 4; ++c) {
+            const int b = model.vertices.bones[v0][static_cast<std::size_t>(c)];
+            const float w = model.vertices.weights[v0][static_cast<std::size_t>(c)];
+            if (b >= 0 && w > best_weight) {
+                best_weight = w;
+                range_bones_[r] = b;
+            }
+        }
+    }
+    skin_cpu_.clear();
+
     // 骨骼静止位置只随模型结构变化，先上传一次。
     std::vector<float> rest(static_cast<std::size_t>(std::max(1, nb)) * 4, 0.0f);
     for (int i = 0; i < nb; ++i) {
@@ -828,10 +945,13 @@ void SceneRenderer::upload_skin_matrices(const Model& model, Pose& pose) {
     const std::vector<Mat4>& W = pose.world();
     const std::size_t nb = std::max<std::size_t>(1, model.bones.size());
     skin_matrices_.assign(nb * 16, 0.0f);
+    // 半透明排序要用同一套 skin 矩阵把静止中心变换到当前姿态。
+    skin_cpu_.assign(nb, identity4());
     for (std::size_t i = 0; i < model.bones.size(); ++i) {
         // skin = W * T(-rest)：等价于世界矩阵作用于 (p - rest)。
         // SSBO 里的 mat4 是列主序，必须转置后再写。
         Mat4 skin = mul(W[i], translation(-model.bones[i].pos));
+        skin_cpu_[i] = skin;
         store_column_major(skin, skin_matrices_.data() + i * 16);
     }
     glBindBuffer(glc::GL_SHADER_STORAGE_BUFFER, model_.bone_ssbo);
@@ -920,6 +1040,15 @@ SceneRenderer::Texture& SceneRenderer::texture_for(const Model& model, int index
     return res.first->second;
 }
 
+SceneRenderer::Texture SceneRenderer::toon_for(const Model& model, const Material& mt) {
+    if (mt.toon_shared == 0) return texture_for(model, mt.toon);
+    const int index = std::clamp(static_cast<int>(mt.toon), 0, 9);
+    Texture builtin;
+    builtin.id = toon_ramps_[index];
+    builtin.valid = builtin.id != 0;
+    return builtin;
+}
+
 void SceneRenderer::bind_material(const Model& model, const Material& mt,
                                   const RenderSettings& settings) {
     mesh_program_.set4f("uDiffuse", mt.diffuse.x, mt.diffuse.y, mt.diffuse.z, mt.diffuse.w);
@@ -941,6 +1070,12 @@ void SceneRenderer::bind_material(const Model& model, const Material& mt,
     mesh_program_.set1i("uSphereTex", 1);
     mesh_program_.set1i("uUseSphere", sph.valid ? 1 : 0);
     mesh_program_.set1i("uSphereMode", static_cast<int>(mt.sphere_mode));
+
+    const Texture toon = toon_for(model, mt);
+    glActiveTexture(glc::GL_TEXTURE0 + 2);
+    glBindTexture(glc::GL_TEXTURE_2D, toon.valid ? toon.id : 0);
+    mesh_program_.set1i("uToonTex", 2);
+    mesh_program_.set1i("uUseToonTex", toon.valid ? 1 : 0);
     glActiveTexture(glc::GL_TEXTURE0);
 }
 
@@ -1176,6 +1311,11 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
         std::vector<int> opaque, alpha;
         // PMX 面片在右手系视图中是顺时针朝外（MMD 用左手系），需与模板几何分开处理绕序。
         glFrontFace(glc::GL_CW);
+        // 相机位置与视图矩阵是全局 uniform，逐材质只改材质参数。
+        mesh_program_.use();
+        mesh_program_.set_mat4("uView", view);
+        mesh_program_.set3f("uEye", eye);
+        mesh_program_.set1f("uRim", settings.rim);
         for (std::size_t r = 0; r < model_.ranges.size(); ++r) {
             const int mi = model_.ranges[r].material;
             const float a = mi >= 0 ? model.materials[static_cast<std::size_t>(mi)].diffuse.w : 1.0f;
@@ -1191,8 +1331,10 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
                                      : Material{};
             if (outline) {
                 outline_program_.use();
-                outline_program_.set_mat4("uMVP", vp);
-                outline_program_.set1f("uExpand", 0.0015f + mt.edge_size * 0.0006f);
+                outline_program_.set_mat4("uView", view);
+                outline_program_.set_mat4("uProj", proj);
+                // NDC 半宽：投影后约 0.4~1.2 像素，且不随相机距离变化。
+                outline_program_.set1f("uWidth", 0.0009f + mt.edge_size * 0.00045f);
                 outline_program_.set4f("uOutlineColor", mt.edge_color.x, mt.edge_color.y,
                                        mt.edge_color.z, std::min(1.0f, mt.edge_color.w * 0.9f));
                 // 外壳沿用材质贴图做 alpha 裁剪，避免填满贴图的镂空区域。
@@ -1279,6 +1421,19 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
 
         // 半透明材质最后画，才能正确覆盖前面已经完成的描边。
         if (!alpha.empty()) {
+            // 关掉深度写入后，绘制顺序就是最终叠加顺序：按面区间中心到相机的
+            // 距离从远到近排序（中心随锚点骨骼蒙皮），否则固定材质顺序会让
+            // 远侧布料盖住近侧。
+            auto range_distance = [&](int ri) {
+                const std::size_t k = static_cast<std::size_t>(ri);
+                Vec3 center = k < range_centers_.size() ? range_centers_[k] : Vec3{};
+                const int bone = k < range_bones_.size() ? range_bones_[k] : -1;
+                if (bone >= 0 && static_cast<std::size_t>(bone) < skin_cpu_.size())
+                    center = transform_point(skin_cpu_[static_cast<std::size_t>(bone)], center);
+                return length(center - eye);
+            };
+            std::sort(alpha.begin(), alpha.end(),
+                      [&](int a, int b) { return range_distance(a) > range_distance(b); });
             glEnable(glc::GL_BLEND);
             glBlendFunc(glc::GL_SRC_ALPHA, glc::GL_ONE_MINUS_SRC_ALPHA);
             glDepthMask(glc::GL_FALSE);
