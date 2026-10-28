@@ -95,6 +95,11 @@ struct Viewer {
     // 取消选择后恢复隐藏。
     bool focus_overlay = false;
 
+    // 双击落点附近有多个可选中对象时，在鼠标旁列出候选让用户点选。
+    std::vector<pmx::Selection> pick_choices;
+    float pick_choice_pos[2] = {0.0f, 0.0f};
+    int pick_choice_frame = -1;  // 打开那一帧不再判定「点击外部关闭」
+
     // 视口拖动状态：未选中骨骼时左键只旋转视角，选中后左键位移 / 右键旋转。
     enum DragMode { DRAG_NONE, DRAG_ORBIT, DRAG_PAN, DRAG_MOVE, DRAG_ROTATE };
     DragMode drag_mode = DRAG_NONE;
@@ -127,12 +132,19 @@ struct Viewer {
     void apply_morphs();
     void reset_physics();
     void draw_ui();
+    // 双击候选框：悬浮在鼠标旁，点选后提交选择。
+    void draw_pick_choices();
     void handle_input(GLFWwindow* window, int fb_w, int fb_h);
     void handle_shortcuts();
     void draw_scene(int fb_w, int fb_h);
     std::string window_title() const;
 
     pmx::Selection pick_at(float sx, float sy, int fb_w, int fb_h, int kinds);
+    // 落点附近所有可选中对象（按距离升序），双击多于一个时弹候选框。
+    std::vector<pmx::Selection> pick_candidates_at(float sx, float sy, int fb_w, int fb_h,
+                                                   int kinds);
+    // 应用一次拾取结果：选中并联动检查器，NONE 则取消选择。
+    void apply_pick(const pmx::Selection& hit);
     const char* bone_drag_block(int index, bool move) const;
     std::string bone_name(int index) const;
     PoseEntry capture_pose() const;

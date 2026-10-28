@@ -192,6 +192,95 @@ pmx::Selection Viewer::pick_at(float sx, float sy, int fb_w, int fb_h, int kinds
                          fb_w, fb_h, sx, sy, 12.0f, kinds);
 }
 
+std::vector<pmx::Selection> Viewer::pick_candidates_at(float sx, float sy, int fb_w, int fb_h,
+                                                       int kinds) {
+    if (!pose) return {};
+    return renderer.pick_candidates(
+        model, *pose, physics_ptr, camera.view(),
+        camera.projection(static_cast<float>(fb_w) / static_cast<float>(std::max(1, fb_h))), fb_w,
+        fb_h, sx, sy, 12.0f, kinds);
+}
+
+void Viewer::apply_pick(const pmx::Selection& hit) {
+    if (hit.kind == pmx::Selection::NONE) {
+        if (sel.kind != SelKind::None) {
+            select(SelKind::None, -1);
+            status = "取消选择";
+        }
+        reveal_selection = false;
+        reveal_frames = 0;
+        focus_overlay = false;
+        return;
+    }
+    if (hit.kind == pmx::Selection::BONE) {
+        select(SelKind::Bone, hit.index);
+        reveal_tab = "骨骼";
+        status = "已选中「" + bone_name(hit.index) + "」：左键拖动位移 · 右键拖动旋转";
+    } else if (hit.kind == pmx::Selection::RIGID) {
+        select(SelKind::Rigid, hit.index);
+        reveal_tab = "物理";
+        status = "已选中刚体「" + model.rigid[static_cast<std::size_t>(hit.index)].name + "」";
+    } else {
+        select(SelKind::Joint, hit.index);
+        reveal_tab = "物理";
+        status = "已选中关节「" + model.joints[static_cast<std::size_t>(hit.index)].name + "」";
+    }
+    // 切面板要等下一帧生效，保持两帧让 SetSelected 与滚动都落地。
+    reveal_frames = 2;
+    reveal_selection = true;
+    // 骨骼/刚体/关节被整体隐藏时，这一项临时显示并高亮，取消选择后恢复。
+    focus_overlay = true;
+}
+
+void Viewer::draw_pick_choices() {
+    if (pick_choices.empty()) return;
+
+    auto label_of = [this](const pmx::Selection& c) {
+        if (c.kind == pmx::Selection::BONE) {
+            const std::string name = bone_name(c.index);
+            return "骨骼  " + (name.empty() ? "#" + std::to_string(c.index) : name);
+        }
+        if (c.kind == pmx::Selection::RIGID) {
+            const std::string& name = model.rigid[static_cast<std::size_t>(c.index)].name;
+            return "刚体  " + (name.empty() ? "#" + std::to_string(c.index) : name);
+        }
+        const std::string& name = model.joints[static_cast<std::size_t>(c.index)].name;
+        return "关节  " + (name.empty() ? "#" + std::to_string(c.index) : name);
+    };
+
+    // 真正的 ImGui Popup：点外部自动关闭，也不会被工作区其它窗口抢走点击。
+    if (pick_choice_frame == ImGui::GetFrameCount()) ImGui::OpenPopup("###pmx_pick_choices");
+    ImGui::SetNextWindowPos(ImVec2(pick_choice_pos[0] + 8.0f, pick_choice_pos[1] + 8.0f),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.96f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pmxui::scale(8.0f),
+                                                            pmxui::scale(6.0f)));
+    if (ImGui::BeginPopup("###pmx_pick_choices")) {
+        ImGui::TextDisabled("选择对象（%d 个重叠）", static_cast<int>(pick_choices.size()));
+        ImGui::Separator();
+        int chosen = -1;
+        for (std::size_t i = 0; i < pick_choices.size(); ++i) {
+            // 名称可能重复，追加编号保证控件 ID 唯一。
+            const std::string label = label_of(pick_choices[i]) + "##" + std::to_string(i);
+            if (ImGui::Selectable(label.c_str())) chosen = static_cast<int>(i);
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Esc 或点击空白处取消");
+        if (chosen >= 0) {
+            apply_pick(pick_choices[static_cast<std::size_t>(chosen)]);
+            pick_choices.clear();
+            ImGui::CloseCurrentPopup();
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            pick_choices.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    } else if (pick_choice_frame != ImGui::GetFrameCount()) {
+        pick_choices.clear();  // 点击外部时 popup 已自动关闭
+    }
+    ImGui::PopStyleVar();
+}
+
 const char* Viewer::bone_drag_block(int index, bool move) const {
     if (index < 0 || index >= static_cast<int>(model.bones.size())) return "不可操作";
     const std::uint16_t flags = model.bones[static_cast<std::size_t>(index)].flags;
@@ -333,43 +422,21 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
         drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
 
-    // ---- 双击选中：骨骼优先，没有骨骼时才退到刚体 / 关节。
-    // 刚体壳和关节球通常包住骨骼，若按最近距离混合排序，双击骨骼常会选中刚体。
+    // ---- 双击选中：落点有多个可选中对象时，在鼠标旁弹候选框由用户指定。
     if (double_click) {
-        pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
-        if (hit.kind == pmx::Selection::NONE)
-            hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_RIGID | pmx::PICK_JOINT);
         drag_mode = DRAG_NONE;
         drag_bone = -1;
-        if (hit.kind == pmx::Selection::NONE) {
-            if (sel.kind != SelKind::None) {
-                select(SelKind::None, -1);
-                status = "取消选择";
-            }
-            reveal_selection = false;
-            reveal_frames = 0;
-            focus_overlay = false;
+        const std::vector<pmx::Selection> hits =
+            pick_candidates_at(mx, my, fb_w, fb_h, pmx::PICK_ALL);
+        pick_choices.clear();
+        if (hits.size() > 1) {
+            pick_choices = hits;
+            pick_choice_pos[0] = io.MousePos.x;
+            pick_choice_pos[1] = io.MousePos.y;
+            pick_choice_frame = ImGui::GetFrameCount();
+            status = "落点有 " + std::to_string(hits.size()) + " 个可选中对象：请在候选框中选择";
         } else {
-            if (hit.kind == pmx::Selection::BONE) {
-                select(SelKind::Bone, hit.index);
-                reveal_tab = "骨骼";
-                status = "已选中「" + bone_name(hit.index) + "」：左键拖动位移 · 右键拖动旋转";
-            } else if (hit.kind == pmx::Selection::RIGID) {
-                select(SelKind::Rigid, hit.index);
-                reveal_tab = "物理";
-                status = "已选中刚体「" +
-                         model.rigid[static_cast<std::size_t>(hit.index)].name + "」";
-            } else {
-                select(SelKind::Joint, hit.index);
-                reveal_tab = "物理";
-                status = "已选中关节「" +
-                         model.joints[static_cast<std::size_t>(hit.index)].name + "」";
-            }
-            // 切面板要等下一帧生效，保持两帧让 SetSelected 与滚动都落地。
-            reveal_frames = 2;
-            reveal_selection = true;
-            // 骨骼/刚体/关节被整体隐藏时，这一项临时显示并高亮，取消选择后恢复。
-            focus_overlay = true;
+            apply_pick(hits.empty() ? pmx::Selection{} : hits.front());
         }
     }
 
@@ -1021,6 +1088,7 @@ static int run_viewer(const std::vector<std::string>& args) {
 
         viewer.draw_scene(fb_w, fb_h);
         viewer.draw_ui();
+        viewer.draw_pick_choices();  // 双击候选框画在最上层
 
         static std::string last_title;
         const std::string title = viewer.window_title();

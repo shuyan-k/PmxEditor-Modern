@@ -74,6 +74,13 @@ public:
                    const Mat4& proj, int width, int height, float sx, float sy,
                    float max_px, int kinds = PICK_ALL) const;
 
+    // 落点附近所有可拾取对象，按屏幕距离升序（距离接近时骨骼在前）。
+    // 双击时若不止一个，用它弹出候选列表让用户指定。
+    std::vector<Selection> pick_candidates(const Model& model, Pose& pose, Physics* physics,
+                                           const Mat4& view, const Mat4& proj, int width,
+                                           int height, float sx, float sy, float max_px,
+                                           int kinds = PICK_ALL) const;
+
     int gpu_skin_dispatch_count = 0;
     std::string error;
 
@@ -151,6 +158,16 @@ private:
     std::vector<float> inst_data_;
     std::vector<float> bone_verts_;
     std::vector<float> line_verts_;
+
+    // 单次拾取的原始命中：对象 + 到鼠标的屏幕像素距离。
+    struct PickHit {
+        Selection sel;
+        float dist = 0.0f;
+    };
+    // 收集 max_px 范围内的全部命中，供 pick / pick_candidates 共用。
+    void collect_picks(const Model& model, Pose& pose, Physics* physics, const Mat4& view,
+                       const Mat4& proj, int width, int height, float sx, float sy,
+                       float max_px, int kinds, std::vector<PickHit>& out) const;
 
     void build_templates();
     void build_grid();

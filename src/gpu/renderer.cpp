@@ -1398,16 +1398,14 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
     glBindBuffer(glc::GL_SHADER_STORAGE_BUFFER, 0);
 }
 
-Selection SceneRenderer::pick(const Model& model, Pose& pose, Physics* physics, const Mat4& view,
-                              const Mat4& proj, int width, int height, float sx, float sy,
-                              float max_px, int kinds) const {
-    Selection bone_hit;
-    Selection overlay_hit;
-    if (model_.vao == 0) return bone_hit;
+void SceneRenderer::collect_picks(const Model& model, Pose& pose, Physics* physics,
+                                  const Mat4& view, const Mat4& proj, int width, int height,
+                                  float sx, float sy, float max_px, int kinds,
+                                  std::vector<PickHit>& out) const {
+    out.clear();
+    if (model_.vao == 0) return;
     const Mat4 vp = project_view_proj(view, proj);
     const std::vector<Mat4>& W = pose.world();
-    float bone_dist = max_px;
-    float overlay_dist = max_px;
 
     // 骨骼：线段（头 → 尾）距离
     const int nb = static_cast<int>(model.bones.size());
@@ -1428,16 +1426,10 @@ Selection SceneRenderer::pick(const Model& model, Pose& pose, Physics* physics, 
         if (!project_to_screen(vp, head, width, height, hx, hy)) continue;
         if (!project_to_screen(vp, tail, width, height, tx, ty)) continue;
         // 命中半径随投影长度变化：远处骨骼投影只有几像素，固定阈值会误抓整片区域。
-        float radius = max_px;
-        if (kinds & PICK_BONE) {
-            const float seg_px = std::hypot(tx - hx, ty - hy);
-            radius = std::min(std::max(max_px, 0.4f * seg_px), 16.0f);
-        }
+        const float seg_px = std::hypot(tx - hx, ty - hy);
+        const float radius = std::min(std::max(max_px, 0.4f * seg_px), 16.0f);
         const float d = point_segment_distance(sx, sy, hx, hy, tx, ty);
-        if (d < radius && d < bone_dist) {
-            bone_dist = d;
-            bone_hit = {Selection::BONE, i};
-        }
+        if (d < radius) out.push_back({Selection{Selection::BONE, i}, d});
     }
 
     // 刚体/关节：中心投影距离
@@ -1450,10 +1442,7 @@ Selection SceneRenderer::pick(const Model& model, Pose& pose, Physics* physics, 
         float px, py;
         if (!project_to_screen(vp, pos, width, height, px, py)) continue;
         const float d = std::hypot(px - sx, py - sy);
-        if (d < overlay_dist) {
-            overlay_dist = d;
-            overlay_hit = {Selection::RIGID, i};
-        }
+        if (d < max_px) out.push_back({Selection{Selection::RIGID, i}, d});
     }
     const int nj = static_cast<int>(model.joints.size());
     for (int i = 0; (kinds & PICK_JOINT) && i < nj; ++i) {
@@ -1461,14 +1450,54 @@ Selection SceneRenderer::pick(const Model& model, Pose& pose, Physics* physics, 
         float px, py;
         if (!project_to_screen(vp, j.pos, width, height, px, py)) continue;
         const float d = std::hypot(px - sx, py - sy);
-        if (d < overlay_dist) {
-            overlay_dist = d;
-            overlay_hit = {Selection::JOINT, i};
+        if (d < max_px) out.push_back({Selection{Selection::JOINT, i}, d});
+    }
+}
+
+Selection SceneRenderer::pick(const Model& model, Pose& pose, Physics* physics, const Mat4& view,
+                              const Mat4& proj, int width, int height, float sx, float sy,
+                              float max_px, int kinds) const {
+    std::vector<PickHit> hits;
+    collect_picks(model, pose, physics, view, proj, width, height, sx, sy, max_px, kinds, hits);
+    // 刚体/关节画在最上层，全量拾取时优先命中它们（与 Python 版双击语义一致）。
+    Selection overlay_hit;
+    Selection bone_hit;
+    float overlay_dist = max_px;
+    float bone_dist = max_px;
+    for (const PickHit& h : hits) {
+        if (h.sel.kind == Selection::BONE) {
+            if (h.dist < bone_dist) {
+                bone_dist = h.dist;
+                bone_hit = h.sel;
+            }
+        } else if (h.dist < overlay_dist) {
+            overlay_dist = h.dist;
+            overlay_hit = h.sel;
         }
     }
-    // 刚体/关节画在最上层，全量拾取时优先命中它们（与 Python 版双击语义一致）。
     if (overlay_hit.kind != Selection::NONE) return overlay_hit;
     return bone_hit;
+}
+
+std::vector<Selection> SceneRenderer::pick_candidates(const Model& model, Pose& pose,
+                                                      Physics* physics, const Mat4& view,
+                                                      const Mat4& proj, int width, int height,
+                                                      float sx, float sy, float max_px,
+                                                      int kinds) const {
+    std::vector<PickHit> hits;
+    collect_picks(model, pose, physics, view, proj, width, height, sx, sy, max_px, kinds, hits);
+    std::sort(hits.begin(), hits.end(), [](const PickHit& a, const PickHit& b) {
+        // 距离相差超过 1 像素才按远近；近似重合时骨骼在前（Kind 枚举 BONE=1）。
+        if (std::fabs(a.dist - b.dist) > 1.0f) return a.dist < b.dist;
+        return static_cast<int>(a.sel.kind) < static_cast<int>(b.sel.kind);
+    });
+    std::vector<Selection> out;
+    out.reserve(std::min<std::size_t>(hits.size(), 12));
+    for (const PickHit& h : hits) {
+        if (out.size() >= 12) break;  // 极密集处只列最近的一批
+        out.push_back(h.sel);
+    }
+    return out;
 }
 
 }  // namespace pmx
