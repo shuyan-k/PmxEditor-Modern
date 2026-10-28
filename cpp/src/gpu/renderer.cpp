@@ -956,6 +956,9 @@ void SceneRenderer::rebuild_bone_overlay(const Model& model, Pose& pose,
         }
     };
     for (int i = 0; i < nb; ++i) {
+        const bool selected = selection.kind == Selection::BONE && selection.index == i;
+        // 骨骼整体隐藏时，只把双击选中的那一根画出来（高亮），取消选择后恢复隐藏。
+        if (!settings.show_bones && !(settings.focus_selection && selected)) continue;
         const Bone& b = model.bones[static_cast<std::size_t>(i)];
         if (!(b.flags & BF_VISIBLE) || !(b.flags & BF_ENABLED)) continue;
         const Mat4& M = W[static_cast<std::size_t>(i)];
@@ -986,7 +989,6 @@ void SceneRenderer::rebuild_bone_overlay(const Model& model, Pose& pose,
             side = normalize(side);
             up2 = normalize(up2);
         }
-        const bool selected = selection.kind == Selection::BONE && selection.index == i;
         const float width = std::max(0.008f, len * (selected ? 0.05f : 0.035f));
         const Vec3 mid = head + dir * (len * 0.22f);
         const Vec3 ring[4] = {mid + side * width, mid + up2 * width, mid - side * width,
@@ -1033,9 +1035,15 @@ void SceneRenderer::build_instances(const Model& model, Pose& pose, Physics* phy
         return s;
     };
 
-    if (settings.show_rigid) {
+    // 叠加层整体隐藏时，只绘制双击选中的那一个刚体/关节（高亮），取消选择后恢复隐藏。
+    const bool focus_rigid = settings.focus_selection && selection.kind == Selection::RIGID;
+    const bool focus_joint = settings.focus_selection && selection.kind == Selection::JOINT;
+
+    if (settings.show_rigid || focus_rigid) {
         const int nr = static_cast<int>(model.rigid.size());
         for (int i = 0; i < nr; ++i) {
+            const bool sel = selection.kind == Selection::RIGID && selection.index == i;
+            if (!settings.show_rigid && !sel) continue;
             const RigidBody& rb = model.rigid[static_cast<std::size_t>(i)];
             Vec3 pos = rb.pos;
             Quat q = rigid_euler_quat(rb.rot.x, rb.rot.y, rb.rot.z);
@@ -1048,7 +1056,6 @@ void SceneRenderer::build_instances(const Model& model, Pose& pose, Physics* phy
             const Mat4 rot = from_quat_pos(q, pos);
             const float sx = std::fabs(rb.size.x), sy = std::fabs(rb.size.y),
                         sz = std::fabs(rb.size.z);
-            const bool sel = selection.kind == Selection::RIGID && selection.index == i;
             // PMX 以 mode == 0 表示「跟随骨骼」，即静态（运动学）刚体。
             Vec4 color = rigid_static;
             if (rb.mode != 0) {
@@ -1078,12 +1085,13 @@ void SceneRenderer::build_instances(const Model& model, Pose& pose, Physics* phy
         }
     }
 
-    if (settings.show_joints) {
+    if (settings.show_joints || focus_joint) {
         const int nj = static_cast<int>(model.joints.size());
         for (int i = 0; i < nj; ++i) {
+            const bool sel = selection.kind == Selection::JOINT && selection.index == i;
+            if (!settings.show_joints && !sel) continue;
             const Joint& j = model.joints[static_cast<std::size_t>(i)];
             const Mat4 m = from_quat_pos(rigid_euler_quat(j.rot.x, j.rot.y, j.rot.z), j.pos);
-            const bool sel = selection.kind == Selection::JOINT && selection.index == i;
             // 关节只显示为实体球：选中略大，弹簧（type 0）橙色，6DOF（type 1）蓝色。
             const float radius = sel ? 0.055f : 0.048f;
             joints.emplace_back(mul(m, scale_mat(radius, radius, radius)),
@@ -1275,7 +1283,13 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
     glDisable(glc::GL_DEPTH_TEST);
     glDisable(glc::GL_CULL_FACE);
 
-    if (settings.show_bones) {
+    // 叠加层整体隐藏时仍要画选中的那一个（双击临时显示）。
+    const bool focus_bone = settings.focus_selection && selection.kind == Selection::BONE;
+    const bool focus_overlay_inst = settings.focus_selection &&
+                                    (selection.kind == Selection::RIGID ||
+                                     selection.kind == Selection::JOINT);
+
+    if (settings.show_bones || focus_bone) {
         rebuild_bone_overlay(model, pose, settings, selection);
         if (!bone_verts_.empty()) {
             solid_program_.use();
@@ -1288,7 +1302,7 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
         }
     }
 
-    if (settings.show_rigid || settings.show_joints) {
+    if (settings.show_rigid || settings.show_joints || focus_overlay_inst) {
         build_instances(model, pose, physics, settings, selection);
         if (!inst_data_.empty()) {
             glBindBuffer(glc::GL_SHADER_STORAGE_BUFFER, overlay_instance_ssbo_);

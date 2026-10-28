@@ -282,6 +282,8 @@ void Viewer::select(SelKind kind, int index) {
             break;
         default:
             selection = pmx::Selection{};
+            // 取消选择后，双击临时显示的叠加层对象恢复隐藏。
+            focus_overlay = false;
             break;
     }
 }

@@ -344,6 +344,7 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
             }
             reveal_selection = false;
             reveal_frames = 0;
+            focus_overlay = false;
         } else {
             if (hit.kind == pmx::Selection::BONE) {
                 select(SelKind::Bone, hit.index);
@@ -363,6 +364,8 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
             // 切面板要等下一帧生效，保持两帧让 SetSelected 与滚动都落地。
             reveal_frames = 2;
             reveal_selection = true;
+            // 骨骼/刚体/关节被整体隐藏时，这一项临时显示并高亮，取消选择后恢复。
+            focus_overlay = true;
         }
     }
 
@@ -563,6 +566,7 @@ void Viewer::draw_scene(int fb_w, int fb_h) {
     settings.bone_alpha = bone_alpha;
     settings.rigid_alpha = rigid_alpha;
     settings.joint_alpha = joint_alpha;
+    settings.focus_selection = focus_overlay;
     settings.toon = toon;
     settings.background = {bg[0], bg[1], bg[2]};
     settings.light_dir = {light[0], light[1], light[2]};

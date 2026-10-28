@@ -21,6 +21,8 @@ struct RenderSettings {
     bool show_bones = true;
     bool show_rigid = true;
     bool show_joints = true;
+    // 叠加层整体隐藏时是否仍绘制当前选中的那一个（双击选中后临时显示并高亮）。
+    bool focus_selection = false;
     bool use_gpu_skinning = true;
     bool wireframe = false;
     bool grid = true;

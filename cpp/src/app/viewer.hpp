@@ -90,6 +90,10 @@ struct Viewer {
     int reveal_frames = 0;
     bool reveal_selection = false;
 
+    // 骨骼/刚体/关节被整体隐藏时，双击选中的对象临时显示并高亮；
+    // 取消选择后恢复隐藏。
+    bool focus_overlay = false;
+
     // 视口拖动状态：未选中骨骼时左键只旋转视角，选中后左键位移 / 右键旋转。
     enum DragMode { DRAG_NONE, DRAG_ORBIT, DRAG_PAN, DRAG_MOVE, DRAG_ROTATE };
     DragMode drag_mode = DRAG_NONE;
