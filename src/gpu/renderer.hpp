@@ -11,6 +11,7 @@
 #include "core/pose.hpp"
 #include "gpu/gl_api.hpp"
 #include "gpu/shader.hpp"
+#include "gpu/toon.hpp"
 
 namespace pmx {
 
@@ -129,6 +130,14 @@ private:
     std::vector<Vec3> range_centers_;
     std::vector<int> range_bones_;
     std::vector<Mat4> skin_cpu_;
+
+    // 最近一帧的相机状态：供叠加层投影、拾取与描边宽度计算读取。
+    // render() 每帧刷新，拾取等只读路径可直接使用。
+    Mat4 view_;
+    Mat4 view_proj_;
+    Vec3 eye_;
+    int viewport_w_ = 0;
+    int viewport_h_ = 0;
 
     ShaderProgram skin_program_;
     ShaderProgram mesh_program_;
