@@ -10,6 +10,7 @@
 
 #include "app/document_ops.hpp"
 #include "app/panels/common.hpp"
+#include "app/theme.hpp"
 
 namespace {
 
@@ -101,7 +102,7 @@ bool rigid_combo(const char* label, int& value, const pmx::Model& model, const c
 }
 
 void warning_text(const char* text) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.72f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::warning());
     ImGui::TextWrapped("%s", text);
     ImGui::PopStyleColor();
 }

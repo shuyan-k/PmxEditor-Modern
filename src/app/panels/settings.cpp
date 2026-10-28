@@ -1,4 +1,4 @@
-// 设置页：显示开关、叠加层透明度、物理参数、界面主题与快捷键。
+// 设置页：叠加层透明度、物理参数与快捷键。显示开关与主题统一放在「视图」菜单。
 #include "app/panels.hpp"
 
 #include <string>
@@ -11,34 +11,7 @@
 void panel_settings(Viewer& v) {
     ImGui::BeginChild("##settings_scroll", ImVec2(0, 0));
 
-    // ------------------------------------------------------------ 视图显示
-    ImGui::SeparatorText("视图显示");
-    if (ImGui::BeginTable("##settings_display", 2, ImGuiTableFlags_SizingStretchSame)) {
-        struct Toggle {
-            const char* label;
-            bool* value;
-        };
-        const Toggle toggles[] = {
-            {"地面网格##show_grid", &v.grid},
-            {"骨骼##show_bones", &v.show_bones},
-            {"刚体##show_rigid", &v.show_rigid},
-            {"关节##show_joints", &v.show_joints},
-            {"模型网格##show_mesh", &v.show_mesh},
-            {"GPU 蒙皮##use_gpu", &v.use_gpu},
-            {"线框##wireframe", &v.wireframe},
-            {"描边##outline", &v.outline},
-        };
-        for (const Toggle& toggle : toggles) {
-            ImGui::TableNextColumn();
-            ImGui::Checkbox(toggle.label, toggle.value);
-        }
-        ImGui::TableNextColumn();
-        {
-            bool toon = v.toon > 0.5f;
-            if (ImGui::Checkbox("卡通光照##toon", &toon)) v.toon = toon ? 1.0f : 0.0f;
-        }
-        ImGui::EndTable();
-    }
+    ImGui::TextDisabled("显示开关、物理开关与界面主题见顶部「视图」菜单。");
 
     // ------------------------------------------------------------ 叠加层透明度
     ImGui::SeparatorText("叠加层不透明度");
@@ -56,30 +29,11 @@ void panel_settings(Viewer& v) {
     ImGui::SetNextItemWidth(pmxui::scale(-90.0f));
     ImGui::DragInt("迭代次数", &v.iterations, 1.0f, 1, 60);
     ImGui::Checkbox("显示地面", &v.ground);
-    if (ImGui::Checkbox("物理演算##physics_enabled", &v.physics_enabled)) {
-        v.reset_physics();
-    }
-    ImGui::SetItemTooltip("与 P 键等效：开启时先按当前形态预热，再逐帧演算");
     if (ImGui::Button("应用物理参数")) {
         v.reset_physics();
         pmxtheme::save_settings(v);
     }
     ImGui::SetItemTooltip("按当前重力 / 迭代次数重建物理世界，并写入配置文件");
-
-    // ------------------------------------------------------------ 界面主题
-    ImGui::SeparatorText("界面主题");
-    const bool light = v.theme == "light";
-    if (ImGui::RadioButton("深色", !light) && light) {
-        v.theme = "dark";
-        pmxtheme::apply_theme(v.theme);
-        pmxtheme::save_settings(v);
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("亮色", light) && !light) {
-        v.theme = "light";
-        pmxtheme::apply_theme(v.theme);
-        pmxtheme::save_settings(v);
-    }
 
     // ------------------------------------------------------------ 配置文件
     ImGui::SeparatorText("配置文件");

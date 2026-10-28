@@ -284,9 +284,17 @@ void main() {
 )";
 
 const char* kOutlineFS = R"(#version 460 core
+in vec2 vUV;
 out vec4 fragColor;
+uniform sampler2D uTex;
+uniform int uUseTex;
 uniform vec4 uOutlineColor;
-void main() { fragColor = uOutlineColor; }
+void main() {
+    // 与网格同一套 alpha 裁剪：否则蕾丝/纱这类贴图镂空的材质，外扩壳会
+    // 填满被网格丢弃的透明像素，整片变成描边色（红褐色）。
+    if (uUseTex == 1 && texture(uTex, vUV).a < 0.02) discard;
+    fragColor = uOutlineColor;
+}
 )";
 
 const char* kSolidVS = R"(#version 460 core
@@ -1187,6 +1195,12 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
                 outline_program_.set1f("uExpand", 0.0015f + mt.edge_size * 0.0006f);
                 outline_program_.set4f("uOutlineColor", mt.edge_color.x, mt.edge_color.y,
                                        mt.edge_color.z, std::min(1.0f, mt.edge_color.w * 0.9f));
+                // 外壳沿用材质贴图做 alpha 裁剪，避免填满贴图的镂空区域。
+                Texture& tex = texture_for(model, mt.texture);
+                glActiveTexture(glc::GL_TEXTURE0);
+                glBindTexture(glc::GL_TEXTURE_2D, tex.valid ? tex.id : 0);
+                outline_program_.set1i("uTex", 0);
+                outline_program_.set1i("uUseTex", tex.valid ? 1 : 0);
             } else {
                 mesh_program_.use();
                 mesh_program_.set_mat4("uMVP", vp);
@@ -1213,18 +1227,9 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
             draw_range(ri, false);
         }
 
-        if (!alpha.empty()) {
-            glEnable(glc::GL_BLEND);
-            glBlendFunc(glc::GL_SRC_ALPHA, glc::GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(glc::GL_FALSE);
-            glDisable(glc::GL_CULL_FACE);
-            for (int ri : alpha) draw_range(ri, false);
-            glDepthMask(glc::GL_TRUE);
-            glDisable(glc::GL_BLEND);
-        }
-
         // 倒置壳描边必须在网格之后：网格已写好深度，外壳只在轮廓外侧露出；
-        // 若先画外壳会把整个可见面涂成描边色。
+        // 若先画外壳会把整个可见面涂成描边色。描边又要画在透明材质之前：
+        // 透明材质不写深度，若描边后画，外壳会盖在纱/布表面，露出大块描边色。
         if (settings.outline) {
             bool any_edge = false;
             for (int ri : opaque) {
@@ -1270,6 +1275,17 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
                 glDepthMask(glc::GL_TRUE);
                 glDisable(glc::GL_BLEND);
             }
+        }
+
+        // 半透明材质最后画，才能正确覆盖前面已经完成的描边。
+        if (!alpha.empty()) {
+            glEnable(glc::GL_BLEND);
+            glBlendFunc(glc::GL_SRC_ALPHA, glc::GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(glc::GL_FALSE);
+            glDisable(glc::GL_CULL_FACE);
+            for (int ri : alpha) draw_range(ri, false);
+            glDepthMask(glc::GL_TRUE);
+            glDisable(glc::GL_BLEND);
         }
         glBindVertexArray(0);
         glFrontFace(glc::GL_CCW);

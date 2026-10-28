@@ -1,0 +1,3 @@
+// 应用图标：GLFW 在 Windows 上会从 exe 的 GLFW_ICON 资源读取窗口图标，
+// 同时作为资源管理器中的可执行文件图标。
+GLFW_ICON ICON "icon.ico"

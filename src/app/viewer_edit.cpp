@@ -41,7 +41,7 @@ void trim_stack(std::vector<Viewer::UndoEntry>& stack) {
 }  // namespace
 
 std::string Viewer::window_title() const {
-    std::string title = "PmxStudio C++";
+    std::string title = "PmxStudio";
     if (!model_path.empty() || !model.name.empty()) {
         title += " — ";
         title += model.name.empty() ? model_path : model.name;

@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+#include <dwmapi.h>
 #endif
 
 #include <GLFW/glfw3.h>
@@ -420,75 +421,48 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
 }
 
 void Viewer::draw_ui() {
-    const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float margin = pmxui::scale(8.0f);
-    ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(pmxui::scale(560.0f), pmxui::scale(780.0f)),
-                             ImGuiCond_FirstUseEver);
-    // 小分辨率（如 1280×720）下默认 780 高的面板会超出窗口底部，内容被裁掉且滚动条
-    // 触不到底；限制最大尺寸让面板始终完整落在视口内，内容改由滚动条访问。
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(pmxui::scale(320.0f), pmxui::scale(240.0f)),
-        ImVec2(std::max(pmxui::scale(320.0f), display.x - margin * 2.0f),
-               std::max(pmxui::scale(240.0f), display.y - margin * 2.0f)));
-    ImGui::Begin("检查器");
+    static bool vpd_include_all = false;
 
-    ImGui::TextWrapped("%s", status.c_str());
-    if (!error.empty()) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", error.c_str());
-        if (ImGui::Button("清除错误")) error.clear();
-    }
-    ImGui::Text("FPS %.1f | 顶点 %zu | 面 %zu | 骨骼 %zu | 刚体 %zu | 关节 %zu",
-                fps, model.vertices.size(), model.n_faces(), model.bones.size(),
-                model.rigid.size(), model.joints.size());
-    ImGui::TextDisabled("相机 %.1f | GPU dispatch %d | %s", camera.distance,
-                        renderer.gpu_skin_dispatch_count, dirty ? "未保存" : "无修改");
-
-    if (ImGui::Button("打开 PMX…")) {
+    auto open_pmx = [this]() {
         const std::string path = pick_open_file(kPmxFilter, L"打开 PMX 模型");
-        if (!path.empty()) {
-            std::string err;
-            if (load_model(path, &err)) error.clear();
-            else error = err;
+        if (path.empty()) return;
+        std::string err;
+        if (load_model(path, &err)) error.clear();
+        else error = err;
+    };
+    auto import_vpd = [this]() {
+        if (!pose) {
+            error = "尚未加载模型";
+            return;
         }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("导入 VPD…")) {
         const std::string path = pick_open_file(kVpdFilter, L"导入 VPD 姿态");
-        if (!path.empty()) {
-            std::string err;
-            if (apply_vpd_file(path, &err)) error.clear();
-            else error = err;
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("保存")) {
+        if (path.empty()) return;
+        std::string err;
+        if (apply_vpd_file(path, &err)) error.clear();
+        else error = err;
+    };
+    auto save = [this]() {
         std::string target = model_path;
         if (target.empty())
             target = pick_save_file(kPmxFilter, L"保存 PMX 模型",
                                     model.name.empty() ? std::string() : model.name + ".pmx",
                                     L"pmx");
-        if (!target.empty()) {
-            std::string err;
-            if (save_model(target, &err)) error.clear();
-            else error = err;
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("另存为…")) {
+        if (target.empty()) return;
+        std::string err;
+        if (save_model(target, &err)) error.clear();
+        else error = err;
+    };
+    auto save_as = [this]() {
         const std::string target = pick_save_file(
             kPmxFilter, L"另存为 PMX 模型",
             model_path.empty() ? std::string() : model_path, L"pmx");
-        if (!target.empty()) {
-            std::string err;
-            if (save_model(target, &err)) error.clear();
-            else error = err;
-        }
-    }
-    static bool vpd_include_all = false;
-    ImGui::Checkbox("导出全部骨骼", &vpd_include_all);
-    ImGui::SameLine();
-    if (ImGui::Button("导出 VPD…") && pose) {
+        if (target.empty()) return;
+        std::string err;
+        if (save_model(target, &err)) error.clear();
+        else error = err;
+    };
+    auto export_vpd = [this]() {
+        if (!pose) return;
         std::string default_path = model_path;
         if (!default_path.empty()) {
             const std::size_t dot = default_path.find_last_of('.');
@@ -498,28 +472,217 @@ void Viewer::draw_ui() {
             default_path += ".vpd";
         }
         const std::string out = pick_save_file(kVpdFilter, L"导出 VPD 姿态", default_path, L"vpd");
-        if (!out.empty()) {
-            try {
-                const pmx::VpdExport res =
-                    pmx::save_vpd(out, model, *pose, &morph_weights, "", vpd_include_all);
-                status = "已导出 VPD " + res.path + "（" + std::to_string(res.bones) +
-                         " 骨骼 / " + std::to_string(res.morphs) + " 形态，" +
-                         res.encoding + "）";
-                error.clear();
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        if (out.empty()) return;
+        try {
+            const pmx::VpdExport res =
+                pmx::save_vpd(out, model, *pose, &morph_weights, "", vpd_include_all);
+            status = "已导出 VPD " + res.path + "（" + std::to_string(res.bones) +
+                     " 骨骼 / " + std::to_string(res.morphs) + " 形态，" +
+                     res.encoding + "）";
+            error.clear();
+        } catch (const std::exception& e) {
+            error = e.what();
         }
+    };
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = pmxui::scale(8.0f);
+    const float menu_h = ImGui::GetFrameHeight();
+    const float status_h = ImGui::GetFrameHeight() + pmxui::scale(4.0f);
+
+    // ------------------------------------------------------------ 顶部菜单栏
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("文件")) {
+            if (ImGui::MenuItem("打开 PMX…", "Ctrl+O")) open_pmx();
+            if (ImGui::MenuItem("导入 VPD…", nullptr, false, pose != nullptr)) import_vpd();
+            ImGui::Separator();
+            if (ImGui::MenuItem("保存", "Ctrl+S", false, pose != nullptr)) save();
+            if (ImGui::MenuItem("另存为…", "Ctrl+Shift+S", false, pose != nullptr)) save_as();
+            ImGui::Separator();
+            if (ImGui::MenuItem("导出 VPD…", nullptr, false, pose != nullptr)) export_vpd();
+            ImGui::MenuItem("导出全部骨骼", nullptr, &vpd_include_all);
+            ImGui::Separator();
+            if (ImGui::MenuItem("退出", "Alt+F4")) {
+                if (GLFWwindow* current = glfwGetCurrentContext())
+                    glfwSetWindowShouldClose(current, 1);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("视图")) {
+            ImGui::MenuItem("模型网格", nullptr, &show_mesh);
+            ImGui::MenuItem("骨骼", nullptr, &show_bones);
+            ImGui::MenuItem("刚体", nullptr, &show_rigid);
+            ImGui::MenuItem("关节", nullptr, &show_joints);
+            ImGui::MenuItem("地面网格", nullptr, &grid);
+            ImGui::Separator();
+            ImGui::MenuItem("线框", nullptr, &wireframe);
+            ImGui::MenuItem("描边", nullptr, &outline);
+            ImGui::MenuItem("GPU 蒙皮", nullptr, &use_gpu);
+            bool flat_toon = toon > 0.5f;
+            if (ImGui::MenuItem("卡通光照", nullptr, &flat_toon))
+                toon = flat_toon ? 1.0f : 0.0f;
+            ImGui::Separator();
+            if (ImGui::MenuItem("重置姿态", "R")) reset_pose();
+            if (ImGui::MenuItem("相机居中", "F")) fit_camera();
+            if (ImGui::MenuItem("物理演算", "P", physics_enabled)) {
+                physics_enabled = !physics_enabled;
+                reset_physics();
+            }
+            ImGui::Separator();
+            if (ImGui::BeginMenu("主题")) {
+                const bool light = theme == "light";
+                if (ImGui::MenuItem("深色", nullptr, !light) && light) {
+                    theme = "dark";
+                    pmxtheme::apply_theme(theme);
+                    pmxtheme::save_settings(*this);
+                }
+                if (ImGui::MenuItem("亮色", nullptr, light) && !light) {
+                    theme = "light";
+                    pmxtheme::apply_theme(theme);
+                    pmxtheme::save_settings(*this);
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("帮助")) {
+            if (ImGui::MenuItem("快捷键…")) {
+                // 快捷键表在「设置」标签里，直接切过去。
+                reveal_tab = "设置";
+                reveal_frames = 2;
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("PmxStudio 0.1.0 · GPLv3");
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
     }
+
+    // ------------------------------------------------------------ 底部状态栏
+    char stats[256];
+    std::snprintf(stats, sizeof stats,
+                  "FPS %.1f · 顶点 %zu · 面 %zu · 骨骼 %zu · 刚体 %zu · 关节 %zu · 相机 %.1f",
+                  fps, model.vertices.size(), model.n_faces(), model.bones.size(),
+                  model.rigid.size(), model.joints.size(), camera.distance);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(pmxui::scale(10.0f), pmxui::scale(3.0f)));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::GetStyleColorVec4(ImGuiCol_TitleBg));
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - status_h));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, status_h));
+    ImGui::Begin("###pmx_status", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+    {
+        const ImVec2 bar = ImGui::GetWindowPos();
+        ImGui::GetWindowDrawList()->AddLine(
+            ImVec2(bar.x, bar.y + 0.5f),
+            ImVec2(bar.x + ImGui::GetWindowWidth(), bar.y + 0.5f),
+            ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+        // 状态文本按剩余宽度裁剪，避免长路径盖住右侧统计。
+        const ImVec2 text_pos = ImGui::GetCursorScreenPos();
+        const float stats_w = ImGui::CalcTextSize(stats).x;
+        const float left_w =
+            std::max(0.0f, ImGui::GetWindowWidth() - stats_w - pmxui::scale(28.0f));
+        ImGui::PushClipRect(
+            text_pos,
+            ImVec2(text_pos.x + left_w, text_pos.y + ImGui::GetTextLineHeight() + 2.0f), true);
+        ImGui::TextUnformatted(status.c_str());
+        ImGui::PopClipRect();
+        ImGui::SameLine(
+            std::max(0.0f, ImGui::GetWindowWidth() - stats_w - pmxui::scale(10.0f)));
+        ImGui::TextDisabled("%s", stats);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+
+    // ------------------------------------------------------------ 检查器
+    const float max_w = std::max(pmxui::scale(320.0f), viewport->Size.x - margin * 2.0f);
+    const float max_h = std::max(pmxui::scale(240.0f),
+                                 viewport->Size.y - menu_h - status_h - margin * 2.0f);
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + margin, viewport->Pos.y + menu_h + margin),
+                            ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(std::min(pmxui::scale(580.0f), max_w), max_h),
+                             ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(pmxui::scale(320.0f), pmxui::scale(240.0f)),
+                                        ImVec2(max_w, max_h));
+    ImGui::Begin("检查器");
+
+    // 模型名 + 脏标记 + 文件路径，作为检查器标题区的上下文。
+    const std::string doc_name =
+        !model.name.empty() ? model.name
+                            : (model_path.empty() ? std::string("未加载模型")
+                                                  : std::string("未命名模型"));
+    ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::accent());
+    ImGui::TextUnformatted(doc_name.c_str());
+    ImGui::PopStyleColor();
+    if (dirty) {
+        ImGui::SameLine();
+        ImGui::TextColored(pmxtheme::warning(), "● 未保存");
+    }
+    // 标题区只放文件名，完整路径留作悬停提示，避免长路径被窗口边缘截断。
+    std::string file_label = model_path;
+    const std::size_t last_slash = file_label.find_last_of("/\\");
+    if (last_slash != std::string::npos && last_slash + 1 < file_label.size())
+        file_label = file_label.substr(last_slash + 1);
+    ImGui::TextDisabled("%s", model_path.empty() ? "拖入 .pmx / .vpd 文件即可载入"
+                                                 : file_label.c_str());
+    if (!model_path.empty()) ImGui::SetItemTooltip("%s", model_path.c_str());
+
+    if (!error.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::danger());
+        ImGui::TextWrapped("%s", error.c_str());
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("清除")) error.clear();
+    }
+    ImGui::Spacing();
+
+    // 主操作按钮用强调色，次要操作保持常规按钮。
+    const ImVec4 accent = pmxtheme::accent();
+    const ImVec4 accent_hover(std::min(1.0f, accent.x * 1.15f),
+                              std::min(1.0f, accent.y * 1.12f),
+                              std::min(1.0f, accent.z * 1.05f), accent.w);
+    const ImVec4 accent_active(accent.x * 0.85f, accent.y * 0.85f, accent.z * 0.85f, accent.w);
+    ImGui::PushStyleColor(ImGuiCol_Button, accent);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, accent_hover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, accent_active);
+    ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::accent_text());
+    if (ImGui::Button("打开 PMX…", ImVec2(pmxui::scale(120.0f), 0.0f))) open_pmx();
+    ImGui::PopStyleColor(4);
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(pose == nullptr);
+    if (ImGui::Button("保存")) save();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("保存到当前文件（Ctrl+S）");
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
     ImGui::BeginDisabled(!can_undo());
     if (ImGui::Button("撤销")) undo();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_undo())
+        ImGui::SetTooltip("撤销：%s", undo_label().c_str());
     ImGui::EndDisabled();
+
     ImGui::SameLine();
     ImGui::BeginDisabled(!can_redo());
     if (ImGui::Button("重做")) redo();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_redo())
+        ImGui::SetTooltip("重做：%s", redo_label().c_str());
     ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", model_path.empty() ? "(未加载)" : model_path.c_str());
+
+    if (!pose) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("尚未加载模型：拖入 .pmx 文件，或使用「文件 → 打开 PMX…」");
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
 
     if (ImGui::BeginTabBar("##inspector_tabs")) {
         auto tab = [this](const char* name, void (*fn)(Viewer&)) {
@@ -634,6 +797,20 @@ void on_drop(GLFWwindow* window, int count, const char** paths) {
 }
 
 
+#ifdef _WIN32
+// 让系统标题栏跟随深色主题；Win10 20H1+ 用属性 20，旧版本回退到 19。
+void apply_native_title_bar(GLFWwindow* window, bool dark) {
+    HWND hwnd = glfwGetWin32Window(window);
+    if (!hwnd) return;
+    const BOOL value = dark ? TRUE : FALSE;
+    if (FAILED(DwmSetWindowAttribute(hwnd, 20, &value, sizeof(value))))
+        DwmSetWindowAttribute(hwnd, 19, &value, sizeof(value));
+    // 部分系统不会立即重绘非客户区，强制一次框架刷新让标题栏换色可见。
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+#endif
+
 // 以 GUI 子系统启动时没有控制台，错误信息需要同时弹窗，否则会静默退出。
 static void report_error(const std::string& message) {
     std::fprintf(stderr, "%s\n", message.c_str());
@@ -663,7 +840,7 @@ static int run_viewer(const std::vector<std::string>& args) {
     // 描边依赖模板缓冲（与 Python 版相同的倒置壳遮罩算法）。
     glfwWindowHint(GLFW_STENCIL_BITS, 8);
 
-    GLFWwindow* window = glfwCreateWindow(1440, 900, "PmxStudio C++", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1440, 900, "PmxStudio", nullptr, nullptr);
     if (!window) {
         report_error("无法创建 OpenGL 4.6 窗口");
         glfwTerminate();
@@ -787,6 +964,15 @@ static int run_viewer(const std::vector<std::string>& args) {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+#ifdef _WIN32
+        // 首帧或切换主题时把原生标题栏同步成深色 / 浅色。
+        static std::string last_theme;
+        if (viewer.theme != last_theme) {
+            apply_native_title_bar(window, viewer.theme != "light");
+            last_theme = viewer.theme;
+        }
+#endif
 
         // 跨显示器拖动或系统缩放变化时重新计算 UI 缩放；style 只能在帧间修改。
         {

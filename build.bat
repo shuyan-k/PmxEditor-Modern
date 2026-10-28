@@ -16,6 +16,6 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo 构建完成：
-echo   %~dp0build\Release\pmxstudio.exe
+echo   %~dp0pmxstudio.exe
 echo   %~dp0build\Release\pmx_tests.exe
 endlocal

@@ -12,6 +12,7 @@
 #include <misc/cpp/imgui_stdlib.h>
 
 #include "app/panels/common.hpp"
+#include "app/theme.hpp"
 
 namespace {
 
@@ -247,11 +248,11 @@ void panel_info(Viewer& v) {
     {
         const std::vector<std::string> issues = validate_model(model);
         if (issues.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.85f, 0.55f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::success());
             ImGui::TextUnformatted("未发现结构问题");
             ImGui::PopStyleColor();
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.80f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::warning());
             for (const std::string& issue : issues) ImGui::Text("· %s", issue.c_str());
             ImGui::PopStyleColor();
         }

@@ -1,21 +1,28 @@
-# 构建产物（CMake）
+# 构建产物（CMake / Ninja / VS）
 build/
-*.build/
-*.onefile-build/
+out/
+dist/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
 
-# 查看器运行时生成的文件
+# 根目录构建产物（pmxstudio 的 RUNTIME_OUTPUT_DIRECTORY 指向仓库根）
+/pmxstudio.exe
+/pmxstudio.pdb
+/pmxstudio.ilk
+
+# 查看器运行时生成
 imgui.ini
-settings.json
-settings.json.bak
-settings.json.tmp
-*.log
+settings.ini
 
 # 编辑器 / 系统
 .vscode/
 .idea/
+*.swp
+.DS_Store
 Thumbs.db
 desktop.ini
 
-# 代码签名证书与密码（私钥不入库）
-code_sign.pfx
-code_sign.pass
+# 临时文件
+*.log
+*.tmp

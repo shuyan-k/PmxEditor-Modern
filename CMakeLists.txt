@@ -3,7 +3,12 @@ cmake_minimum_required(VERSION 3.20)
 # CMake 4 默认拒绝 cmake_minimum_required < 3.5 的第三方工程，GLFW 3.4 仍使用旧式声明。
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
-project(PmxStudioCpp VERSION 0.1.0 LANGUAGES C CXX)
+project(PmxStudio VERSION 0.1.0 LANGUAGES C CXX)
+
+# Windows 资源脚本（exe / 窗口图标）由 RC 编译器处理。
+if(WIN32)
+    enable_language(RC)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,9 +88,20 @@ if(PMX_BUILD_APP)
     target_link_libraries(pmxstudio PRIVATE pmx_gpu imgui glfw)
     if(WIN32)
         # GUI 子系统：启动时不带控制台窗口，入口为 main.cpp 里的 WinMain。
-        set_target_properties(pmxstudio PROPERTIES WIN32_EXECUTABLE ON)
-        # 资源管理器文件对话框（comdlg32）与宽字符命令行解析（shell32）。
-        target_link_libraries(pmxstudio PRIVATE comdlg32 shell32)
+        # 产物直接输出到仓库根目录，构建完即可双击运行；多配置生成器需要逐配置
+        # 指定目录，否则 CMake 会自动追加 Release/Debug 子目录。
+        set_target_properties(pmxstudio PROPERTIES
+            WIN32_EXECUTABLE ON
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_SOURCE_DIR}")
+        # 应用图标：GLFW_ICON 资源同时用于窗口图标与 exe 文件图标。
+        target_sources(pmxstudio PRIVATE assets/icon.rc)
+        # 资源管理器文件对话框（comdlg32）、宽字符命令行解析（shell32）、
+        # 原生深色标题栏（DwmSetWindowAttribute，dwmapi）。
+        target_link_libraries(pmxstudio PRIVATE comdlg32 shell32 dwmapi)
     endif()
 endif()
 
@@ -94,7 +110,7 @@ if(PMX_BUILD_TESTS)
     add_executable(pmx_tests tests/test_core.cpp)
     target_link_libraries(pmx_tests PRIVATE pmx_core)
     target_compile_definitions(pmx_tests PRIVATE
-        PMX_TEST_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_model.pmx")
+        PMX_TEST_MODEL="${CMAKE_CURRENT_SOURCE_DIR}/tests/test_model.pmx")
 
     # 与 Python 版做读写一致性校验的命令行探针（tools/parity_check.py 调用）。
     add_executable(pmx_parity_probe tests/parity_probe.cpp)

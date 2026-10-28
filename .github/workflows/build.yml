@@ -21,13 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # C++ 版不需要 LFS 里的 Python 便携运行时。
+          # 第三方依赖全部随仓库提供，无需 LFS。
           lfs: false
 
       # 单文件 exe 的关键：静态 CRT（/MT）+ 仓库内静态 GLFW/ImGui/Bullet。
       - name: Configure
         run: >
-          cmake -S cpp -B cpp/build
+          cmake -S . -B build
           -G "Visual Studio 17 2022" -A x64
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
@@ -36,10 +36,10 @@ jobs:
           -DPMX_ENABLE_PHYSICS=ON
 
       - name: Build
-        run: cmake --build cpp/build --config Release --parallel
+        run: cmake --build build --config Release --parallel
 
       - name: Run core tests
-        run: cpp\build\Release\pmx_tests.exe
+        run: build\Release\pmx_tests.exe
 
       # 确认没有 VCRUNTIME/MSVCP/GLFW/Bullet 等非系统 DLL 依赖，否则不是单文件分发。
       - name: Verify self-contained exe
@@ -52,7 +52,7 @@ jobs:
             Select-Object -First 1
           if (-not $dumpbin) { throw "dumpbin not found" }
 
-          $exe = "cpp\build\Release\pmxstudio.exe"
+          $exe = "pmxstudio.exe"
           if (-not (Test-Path $exe)) { throw "executable not produced" }
           $imports = & $dumpbin.FullName /DEPENDENTS $exe
           $imports | Write-Output
@@ -63,7 +63,7 @@ jobs:
       - name: Package single-file exe
         shell: pwsh
         run: |
-          $src = "cpp\build\Release\pmxstudio.exe"
+          $src = "pmxstudio.exe"
           $dir = "dist\release"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item $src (Join-Path $dir "PmxStudio.exe")

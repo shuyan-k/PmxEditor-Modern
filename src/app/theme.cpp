@@ -115,31 +115,205 @@ bool parse_int(const std::string& text, int& out) {
 
 int as_bit(bool on) { return on ? 1 : 0; }
 
+struct ThemeColors {
+    ImVec4 accent;
+    ImVec4 accent_text;
+    ImVec4 success;
+    ImVec4 warning;
+    ImVec4 danger;
+};
+
+ThemeColors g_colors;
+
+// 深色主题：深海军蓝底 + 冰蓝强调色，与项目图标同一套色系。
+void apply_dark_palette(ImGuiStyle& style) {
+    ImVec4* c = style.Colors;
+    const ImVec4 accent(0.52f, 0.76f, 0.98f, 1.0f);
+    c[ImGuiCol_Text] = ImVec4(0.87f, 0.90f, 0.95f, 1.00f);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.47f, 0.53f, 0.61f, 1.00f);
+    c[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.067f, 0.086f, 0.98f);
+    c[ImGuiCol_ChildBg] = ImVec4(0.071f, 0.086f, 0.108f, 0.92f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.075f, 0.090f, 0.115f, 0.98f);
+    c[ImGuiCol_Border] = ImVec4(0.27f, 0.33f, 0.41f, 0.45f);
+    c[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    c[ImGuiCol_FrameBg] = ImVec4(0.11f, 0.13f, 0.16f, 1.00f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.16f, 0.20f, 0.25f, 1.00f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.25f, 0.32f, 1.00f);
+    c[ImGuiCol_TitleBg] = ImVec4(0.060f, 0.075f, 0.095f, 1.00f);
+    c[ImGuiCol_TitleBgActive] = ImVec4(0.080f, 0.098f, 0.122f, 1.00f);
+    c[ImGuiCol_TitleBgCollapsed] = ImVec4(0.060f, 0.075f, 0.095f, 0.80f);
+    c[ImGuiCol_MenuBarBg] = ImVec4(0.060f, 0.075f, 0.095f, 1.00f);
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0.03f, 0.04f, 0.05f, 0.45f);
+    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.28f, 0.33f, 0.40f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.37f, 0.44f, 0.53f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.46f, 0.57f, 0.70f, 1.00f);
+    c[ImGuiCol_CheckMark] = accent;
+    c[ImGuiCol_SliderGrab] = ImVec4(0.40f, 0.60f, 0.82f, 1.00f);
+    c[ImGuiCol_SliderGrabActive] = accent;
+    c[ImGuiCol_Button] = ImVec4(0.13f, 0.16f, 0.20f, 1.00f);
+    c[ImGuiCol_ButtonHovered] = ImVec4(0.19f, 0.24f, 0.31f, 1.00f);
+    c[ImGuiCol_ButtonActive] = ImVec4(0.23f, 0.30f, 0.39f, 1.00f);
+    c[ImGuiCol_Header] = ImVec4(0.16f, 0.21f, 0.27f, 0.85f);
+    c[ImGuiCol_HeaderHovered] = ImVec4(0.21f, 0.28f, 0.36f, 1.00f);
+    c[ImGuiCol_HeaderActive] = ImVec4(0.25f, 0.33f, 0.42f, 1.00f);
+    c[ImGuiCol_Separator] = ImVec4(0.35f, 0.42f, 0.51f, 0.35f);
+    c[ImGuiCol_SeparatorHovered] = ImVec4(0.50f, 0.70f, 0.90f, 0.60f);
+    c[ImGuiCol_SeparatorActive] = accent;
+    c[ImGuiCol_ResizeGrip] = ImVec4(0.45f, 0.62f, 0.82f, 0.18f);
+    c[ImGuiCol_ResizeGripHovered] = ImVec4(0.50f, 0.72f, 0.95f, 0.55f);
+    c[ImGuiCol_ResizeGripActive] = ImVec4(0.55f, 0.78f, 1.00f, 0.85f);
+    c[ImGuiCol_Tab] = ImVec4(0.09f, 0.11f, 0.14f, 1.00f);
+    c[ImGuiCol_TabHovered] = ImVec4(0.30f, 0.42f, 0.55f, 1.00f);
+    c[ImGuiCol_TabSelected] = ImVec4(0.14f, 0.18f, 0.23f, 1.00f);
+    c[ImGuiCol_TabSelectedOverline] = accent;
+    c[ImGuiCol_TabDimmed] = ImVec4(0.08f, 0.10f, 0.12f, 1.00f);
+    c[ImGuiCol_TabDimmedSelected] = ImVec4(0.12f, 0.15f, 0.19f, 1.00f);
+    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.40f, 0.56f, 0.72f, 1.00f);
+    c[ImGuiCol_PlotLines] = ImVec4(0.55f, 0.76f, 0.96f, 1.00f);
+    c[ImGuiCol_PlotLinesHovered] = ImVec4(0.75f, 0.85f, 1.00f, 1.00f);
+    c[ImGuiCol_PlotHistogram] = ImVec4(0.65f, 0.80f, 0.95f, 1.00f);
+    c[ImGuiCol_PlotHistogramHovered] = ImVec4(0.80f, 0.90f, 1.00f, 1.00f);
+    c[ImGuiCol_TableHeaderBg] = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
+    c[ImGuiCol_TableBorderStrong] = ImVec4(0.24f, 0.30f, 0.38f, 1.00f);
+    c[ImGuiCol_TableBorderLight] = ImVec4(0.18f, 0.22f, 0.28f, 1.00f);
+    c[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    c[ImGuiCol_TableRowBgAlt] = ImVec4(1.00f, 1.00f, 1.00f, 0.025f);
+    c[ImGuiCol_TextSelectedBg] = ImVec4(0.35f, 0.55f, 0.78f, 0.45f);
+    c[ImGuiCol_DragDropTarget] = accent;
+    c[ImGuiCol_DragDropTargetBg] = ImVec4(0.35f, 0.55f, 0.78f, 0.20f);
+    c[ImGuiCol_NavCursor] = accent;
+    c[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
+    c[ImGuiCol_NavWindowingDimBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.20f);
+    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.02f, 0.03f, 0.04f, 0.60f);
+
+    g_colors = ThemeColors{
+        accent,
+        ImVec4(0.04f, 0.06f, 0.09f, 1.0f),
+        ImVec4(0.42f, 0.83f, 0.58f, 1.0f),
+        ImVec4(1.00f, 0.72f, 0.30f, 1.0f),
+        ImVec4(1.00f, 0.42f, 0.45f, 1.0f),
+    };
+}
+
+// 亮色主题：冷灰白底，强调色加深以保证对比度。
+void apply_light_palette(ImGuiStyle& style) {
+    ImVec4* c = style.Colors;
+    const ImVec4 accent(0.13f, 0.42f, 0.70f, 1.0f);
+    c[ImGuiCol_Text] = ImVec4(0.11f, 0.13f, 0.17f, 1.00f);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.45f, 0.49f, 0.55f, 1.00f);
+    c[ImGuiCol_WindowBg] = ImVec4(0.945f, 0.957f, 0.973f, 0.98f);
+    c[ImGuiCol_ChildBg] = ImVec4(0.972f, 0.979f, 0.988f, 0.92f);
+    c[ImGuiCol_PopupBg] = ImVec4(1.00f, 1.00f, 1.00f, 0.98f);
+    c[ImGuiCol_Border] = ImVec4(0.70f, 0.75f, 0.81f, 0.80f);
+    c[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    c[ImGuiCol_FrameBg] = ImVec4(0.885f, 0.902f, 0.925f, 1.00f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.835f, 0.862f, 0.895f, 1.00f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.780f, 0.820f, 0.870f, 1.00f);
+    c[ImGuiCol_TitleBg] = ImVec4(0.900f, 0.917f, 0.940f, 1.00f);
+    c[ImGuiCol_TitleBgActive] = ImVec4(0.955f, 0.965f, 0.978f, 1.00f);
+    c[ImGuiCol_TitleBgCollapsed] = ImVec4(0.900f, 0.917f, 0.940f, 0.80f);
+    c[ImGuiCol_MenuBarBg] = ImVec4(0.955f, 0.965f, 0.978f, 1.00f);
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0.85f, 0.87f, 0.90f, 0.50f);
+    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.68f, 0.72f, 0.78f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.60f, 0.65f, 0.72f, 1.00f);
+    c[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.50f, 0.56f, 0.64f, 1.00f);
+    c[ImGuiCol_CheckMark] = accent;
+    c[ImGuiCol_SliderGrab] = ImVec4(0.30f, 0.56f, 0.80f, 1.00f);
+    c[ImGuiCol_SliderGrabActive] = ImVec4(0.13f, 0.46f, 0.76f, 1.00f);
+    c[ImGuiCol_Button] = ImVec4(0.88f, 0.90f, 0.93f, 1.00f);
+    c[ImGuiCol_ButtonHovered] = ImVec4(0.82f, 0.87f, 0.93f, 1.00f);
+    c[ImGuiCol_ButtonActive] = ImVec4(0.76f, 0.83f, 0.91f, 1.00f);
+    c[ImGuiCol_Header] = ImVec4(0.80f, 0.86f, 0.93f, 1.00f);
+    c[ImGuiCol_HeaderHovered] = ImVec4(0.74f, 0.82f, 0.91f, 1.00f);
+    c[ImGuiCol_HeaderActive] = ImVec4(0.68f, 0.78f, 0.89f, 1.00f);
+    c[ImGuiCol_Separator] = ImVec4(0.55f, 0.60f, 0.67f, 0.45f);
+    c[ImGuiCol_SeparatorHovered] = ImVec4(0.16f, 0.45f, 0.72f, 0.60f);
+    c[ImGuiCol_SeparatorActive] = accent;
+    c[ImGuiCol_ResizeGrip] = ImVec4(0.16f, 0.45f, 0.72f, 0.18f);
+    c[ImGuiCol_ResizeGripHovered] = ImVec4(0.16f, 0.45f, 0.72f, 0.55f);
+    c[ImGuiCol_ResizeGripActive] = ImVec4(0.13f, 0.42f, 0.70f, 0.85f);
+    c[ImGuiCol_Tab] = ImVec4(0.90f, 0.915f, 0.94f, 1.00f);
+    c[ImGuiCol_TabHovered] = ImVec4(0.84f, 0.88f, 0.93f, 1.00f);
+    c[ImGuiCol_TabSelected] = ImVec4(0.972f, 0.981f, 0.992f, 1.00f);
+    c[ImGuiCol_TabSelectedOverline] = accent;
+    c[ImGuiCol_TabDimmed] = ImVec4(0.88f, 0.90f, 0.93f, 1.00f);
+    c[ImGuiCol_TabDimmedSelected] = ImVec4(0.94f, 0.95f, 0.965f, 1.00f);
+    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.55f, 0.68f, 0.82f, 1.00f);
+    c[ImGuiCol_PlotLines] = ImVec4(0.16f, 0.45f, 0.72f, 1.00f);
+    c[ImGuiCol_PlotLinesHovered] = ImVec4(0.10f, 0.35f, 0.60f, 1.00f);
+    c[ImGuiCol_PlotHistogram] = ImVec4(0.20f, 0.50f, 0.76f, 1.00f);
+    c[ImGuiCol_PlotHistogramHovered] = ImVec4(0.13f, 0.42f, 0.70f, 1.00f);
+    c[ImGuiCol_TableHeaderBg] = ImVec4(0.89f, 0.91f, 0.94f, 1.00f);
+    c[ImGuiCol_TableBorderStrong] = ImVec4(0.70f, 0.75f, 0.81f, 1.00f);
+    c[ImGuiCol_TableBorderLight] = ImVec4(0.82f, 0.85f, 0.89f, 1.00f);
+    c[ImGuiCol_TableRowBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    c[ImGuiCol_TableRowBgAlt] = ImVec4(0.00f, 0.00f, 0.00f, 0.03f);
+    c[ImGuiCol_TextSelectedBg] = ImVec4(0.13f, 0.42f, 0.70f, 0.25f);
+    c[ImGuiCol_DragDropTarget] = accent;
+    c[ImGuiCol_DragDropTargetBg] = ImVec4(0.13f, 0.42f, 0.70f, 0.15f);
+    c[ImGuiCol_NavCursor] = accent;
+    c[ImGuiCol_NavWindowingHighlight] = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+    c[ImGuiCol_NavWindowingDimBg] = ImVec4(0.60f, 0.62f, 0.66f, 0.25f);
+    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.20f, 0.22f, 0.26f, 0.35f);
+
+    g_colors = ThemeColors{
+        accent,
+        ImVec4(1.00f, 1.00f, 1.00f, 1.0f),
+        ImVec4(0.16f, 0.55f, 0.32f, 1.0f),
+        ImVec4(0.78f, 0.45f, 0.05f, 1.0f),
+        ImVec4(0.78f, 0.18f, 0.22f, 1.0f),
+    };
+}
+
 }  // namespace
 
 void pmxtheme::apply_theme(const std::string& name) {
     ImGuiStyle& style = ImGui::GetStyle();
     // 先回到默认尺寸再统一缩放：主题切换或 DPI 变化后重复调用结果一致，不会叠加。
     style = ImGuiStyle();
-    if (name == "light") ImGui::StyleColorsLight();
-    else ImGui::StyleColorsDark();
+    const bool light = name == "light";
+    if (light) {
+        ImGui::StyleColorsLight();
+        apply_light_palette(style);
+    } else {
+        ImGui::StyleColorsDark();
+        apply_dark_palette(style);
+    }
 
     const float s = pmxui::ui_scale();
     style.ScaleAllSizes(s);
     style.FontScaleDpi = s;  // 1.92 动态字体图集会按缩放后的字号重新光栅化，不会模糊
-    style.WindowRounding = 6.0f * s;
-    style.ChildRounding = 6.0f * s;
-    style.FrameRounding = 4.0f * s;
-    style.GrabRounding = 4.0f * s;
-    style.PopupRounding = 5.0f * s;
-    style.ScrollbarRounding = 6.0f * s;
-    style.TabRounding = 4.0f * s;
+
+    style.WindowRounding = 9.0f * s;
+    style.ChildRounding = 7.0f * s;
+    style.FrameRounding = 5.0f * s;
+    style.GrabRounding = 5.0f * s;
+    style.PopupRounding = 7.0f * s;
+    style.ScrollbarRounding = 7.0f * s;
+    style.TabRounding = 5.0f * s;
     style.WindowBorderSize = 1.0f * s;
     style.ChildBorderSize = 1.0f * s;
-    style.WindowPadding = ImVec2(10.0f * s, 10.0f * s);
-    style.FramePadding = ImVec2(8.0f * s, 4.0f * s);
-    style.ItemSpacing = ImVec2(8.0f * s, 6.0f * s);
+    style.PopupBorderSize = 1.0f * s;
+    style.TabBarBorderSize = 1.0f * s;
+    style.WindowPadding = ImVec2(12.0f * s, 12.0f * s);
+    style.FramePadding = ImVec2(9.0f * s, 5.0f * s);
+    style.CellPadding = ImVec2(6.0f * s, 3.0f * s);
+    style.ItemSpacing = ImVec2(8.0f * s, 7.0f * s);
+    style.ItemInnerSpacing = ImVec2(6.0f * s, 4.0f * s);
+    style.IndentSpacing = 18.0f * s;
+    style.ScrollbarSize = 12.0f * s;
+    style.GrabMinSize = 10.0f * s;
+    style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
+    style.WindowMenuButtonPosition = ImGuiDir_None;
+    style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+    style.DisabledAlpha = 0.45f;
 }
+
+const ImVec4& pmxtheme::accent() { return g_colors.accent; }
+const ImVec4& pmxtheme::accent_text() { return g_colors.accent_text; }
+const ImVec4& pmxtheme::success() { return g_colors.success; }
+const ImVec4& pmxtheme::warning() { return g_colors.warning; }
+const ImVec4& pmxtheme::danger() { return g_colors.danger; }
 
 std::string pmxtheme::settings_path() {
 #ifdef _WIN32

@@ -6,7 +6,7 @@ set(PMX_THIRD_PARTY "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 function(pmx_missing_dep NAME)
     message(FATAL_ERROR
-        "缺少依赖 cpp/third_party/${NAME}。仓库应自带该目录；"
+        "缺少依赖 third_party/${NAME}。仓库应自带该目录；"
         "如确需联网获取，请加 -DPMX_FETCH_DEPS=ON。")
 endfunction()
 
@@ -130,7 +130,7 @@ if(PMX_ENABLE_PHYSICS)
             add_library(bullet ALIAS bullet_impl)
         else()
             message(FATAL_ERROR
-                "找不到 Bullet 源码：${BULLET_SRC}。仓库自带 cpp/third_party/bullet/src，"
+                "找不到 Bullet 源码：${BULLET_SRC}。仓库自带 third_party/bullet/src，"
                 "请检查后重试；或加 -DPMX_FETCH_DEPS=ON 联网获取。")
         endif()
     endif()

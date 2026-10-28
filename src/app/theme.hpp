@@ -3,12 +3,21 @@
 
 #include <string>
 
+#include <imgui.h>
+
 struct Viewer;
 
 namespace pmxtheme {
 
 // "light" 使用亮色主题，其余值统一按深色处理。
 void apply_theme(const std::string& name);
+
+// 当前主题的强调色与语义色，供面板与标题区统一使用。
+const ImVec4& accent();
+const ImVec4& accent_text();
+const ImVec4& success();
+const ImVec4& warning();
+const ImVec4& danger();
 
 // Windows: %APPDATA%/PmxStudioCpp/settings.ini；取不到 APPDATA 时退回当前目录。
 std::string settings_path();
