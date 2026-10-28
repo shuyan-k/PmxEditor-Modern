@@ -2,9 +2,6 @@
 // 单独成模块，渲染器与外部工具共用同一份 GLSL，避免着色器文本重复维护。
 #pragma once
 
-#include <cstdint>
-#include <vector>
-
 namespace pmx {
 namespace toon {
 
@@ -130,29 +127,21 @@ void main() {
 )";
 
 // ---- 共用 toon 渐变（MMD 内置 toon01.bmp 的等价物）
-// 1×N 单通道贴图（R8），横向坐标即 N·L：0 为暗部，1 为亮部。
-// 上传示例：glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, shared_ramp_size, 1, 0,
-//                        GL_RED, GL_UNSIGNED_BYTE, shared_ramp_bytes);
-inline constexpr int shared_ramp_size = 64;
+// 10 档竖直渐变，采样时 v 坐标即 N·L(0..1)：0 为暗部，1 为亮部。
+// 编号越小明暗分界越硬（接近 MMD 默认的两段卡通），越大过渡越柔和。
+// 渲染器据此生成 toon_ramps_ 贴图，着色器与渐变曲线只此一处。
+inline constexpr int toon_ramp_count = 10;
+inline constexpr int toon_ramp_height = 64;
 
-inline const std::uint8_t* shared_ramp_data() {
-    static const std::vector<std::uint8_t> data = [] {
-        std::vector<std::uint8_t> px(static_cast<std::size_t>(shared_ramp_size));
-        for (int i = 0; i < shared_ramp_size; ++i) {
-            const float v = static_cast<float>(i) / static_cast<float>(shared_ramp_size - 1);
-            // 两段硬边 + 窄过渡：接近 MMD 默认 toon 的卡通分层观感。
-            const float t = v <= 0.45f ? 0.0f : (v >= 0.55f ? 1.0f : (v - 0.45f) * 10.0f);
-            const float c = 0.46f + 0.54f * t;
-            px[static_cast<std::size_t>(i)] =
-                static_cast<std::uint8_t>(c * 255.0f + 0.5f);
-        }
-        return px;
-    }();
-    return data.data();
+// 返回第 index 档在 N·L = v 处的亮度（0..1）。
+inline float toon_ramp_value(int index, float v) {
+    const int i = index < 0 ? 0 : (index >= toon_ramp_count ? toon_ramp_count - 1 : index);
+    const float step = 9.0f - i * 0.55f;    // 越大越硬
+    const float edge = 0.40f + i * 0.015f;  // 明暗分界
+    float t = (v - edge) * step + 0.5f;
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return 0.42f + 0.58f * t;
 }
-
-// 直接作为 glTexImage2D 的像素数据指针使用。
-inline const std::uint8_t* const shared_ramp_bytes = shared_ramp_data();
 
 }  // namespace toon
 }  // namespace pmx
