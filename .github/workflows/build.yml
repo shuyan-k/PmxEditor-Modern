@@ -14,15 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  PYTHON_VERSION: "3.12"
-  PYTHONUTF8: "1"
-  PYTHONIOENCODING: "utf-8"
-  NUITKA_VERSION: "4.3.1"
-  # 上游 bullet3 没有 3.26 tag；pybullet 3.2.7 的 sdist 内置 Bullet 3.26 源码。
-  PYBULLET_VERSION: "3.2.7"
-  BULLET_VERSION: "3.26"
-
 jobs:
   windows-exe:
     runs-on: windows-latest
@@ -30,138 +21,70 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # CI 自行编译原生二进制，不拉取 LFS 里的便携运行时，避免每次多下载约 220 MB。
+          # C++ 版不需要 LFS 里的 Python 便携运行时。
           lfs: false
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+      # 单文件 exe 的关键：静态 CRT（/MT）+ 仓库内静态 GLFW/ImGui/Bullet。
+      - name: Configure
+        run: >
+          cmake -S cpp -B cpp/build
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          -DPMX_STATIC_RUNTIME=ON
+          -DPMX_BUILD_TESTS=ON
+          -DPMX_ENABLE_PHYSICS=ON
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt "nuitka==$env:NUITKA_VERSION"
-          python -m pip check
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
 
-      # 静态检查仅供参考：规则集见 ruff.toml，偶发误报不阻断打包。
-      - name: Lint (ruff)
-        continue-on-error: true
-        run: |
-          python -m pip install -r requirements-dev.txt
-          ruff check src tools tests --output-format concise
+      - name: Run core tests
+        run: cpp\build\Release\pmx_tests.exe
 
-      - name: Cache Bullet source archive
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/pybullet-${{ env.PYBULLET_VERSION }}.tar.gz
-          key: pybullet-${{ env.PYBULLET_VERSION }}-bullet-${{ env.BULLET_VERSION }}
-
-      - name: Fetch Bullet 3.26 sources
+      # 确认没有 VCRUNTIME/MSVCP/GLFW/Bullet 等非系统 DLL 依赖，否则不是单文件分发。
+      - name: Verify self-contained exe
         shell: pwsh
         run: |
-          $tar = Join-Path $env:RUNNER_TEMP "pybullet-$env:PYBULLET_VERSION.tar.gz"
-          if (-not (Test-Path $tar) -or (Get-Item $tar).Length -lt 50MB) {
-            curl.exe -L --fail --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 600 `
-              -o $tar "https://files.pythonhosted.org/packages/source/p/pybullet/pybullet-$env:PYBULLET_VERSION.tar.gz"
-            if ($LASTEXITCODE -ne 0) { throw "pybullet source download failed" }
-          }
-          tar -xzf $tar -C $env:RUNNER_TEMP
-          $src = Join-Path $env:RUNNER_TEMP "pybullet-$env:PYBULLET_VERSION\src"
-          if (-not (Test-Path (Join-Path $src "btBulletDynamicsCommon.h"))) {
-            throw "Bullet headers not found in pybullet sdist"
-          }
-          $version = Select-String -Path (Join-Path $src "LinearMath\btScalar.h") `
-            -Pattern '#define BT_BULLET_VERSION (\d+)'
-          if (-not $version -or $version.Matches[0].Groups[1].Value -ne "326") {
-            throw "expected Bullet 3.26 sources"
-          }
-          if (Test-Path native\bullet_src) { Remove-Item native\bullet_src -Recurse -Force }
-          New-Item -ItemType Directory -Force native\bullet_src | Out-Null
-          Copy-Item -Recurse -Force $src native\bullet_src\src
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { throw "Visual Studio not found" }
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+            Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin not found" }
 
-      - name: Build Bullet physics DLL
-        run: powershell -ExecutionPolicy Bypass -File native\build.ps1
+          $exe = "cpp\build\Release\pmxstudio.exe"
+          if (-not (Test-Path $exe)) { throw "executable not produced" }
+          $imports = & $dumpbin.FullName /DEPENDENTS $exe
+          $imports | Write-Output
 
-      - name: Build native compute backend
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File native\build_core.ps1 -Python (Get-Command python).Source
+          $bad = $imports | Select-String -Pattern 'VCRUNTIME|MSVCP|ucrtbase|api-ms-win|glfw3\.dll|bullet'
+          if ($bad) { throw "found non-system DLL dependencies: $($bad -join '; ')" }
 
-      - name: Verify native artifacts
+      - name: Package single-file exe
         shell: pwsh
         run: |
-          $dll = Get-Item native\bullet_phys.dll
-          if ($dll.Length -lt 100KB) {
-            throw "bullet_phys.dll looks like an LFS pointer ($($dll.Length) bytes)"
-          }
-          $pyd = Get-ChildItem src\pmxeditor\_pmx_core*.pyd | Select-Object -First 1
-          if (-not $pyd -or $pyd.Length -lt 50KB) {
-            throw "native core extension was not produced"
-          }
+          $src = "cpp\build\Release\pmxstudio.exe"
+          $dir = "dist\release"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item $src (Join-Path $dir "PmxStudio.exe")
 
-      - name: Syntax check
-        run: python -m compileall -q src tools tests main.py
+          $dst = Join-Path $dir "PmxStudio.exe"
+          $hash = (Get-FileHash $dst -Algorithm SHA256).Hash.ToLower()
+          "$hash  PmxStudio.exe" | Set-Content "$dst.sha256" -Encoding ascii
 
-      - name: Performance benchmark smoke test
-        run: python tools\bench_perf.py tests\test_model.pmx --runs 1
-
-      # 原生后端与 NumPy 参考路径的数值对拍（姿态/蒙皮/形态/物理，26 项）。
-      # tests/test_model.pmx 是仓库自带夹具，CI 不依赖 tests/parity/work。
-      - name: Verify native backend
-        run: python tools\verify_native_backend.py tests\test_model.pmx --in-process --runs 1
-
-      - name: Prepare UI assets
-        run: |
-          python -c "import sys; sys.path.insert(0, 'src'); from pmxeditor import theme; theme.svg_assets()"
-          if ($LASTEXITCODE -ne 0) { Write-Warning "svg_assets() failed; icons are regenerated at first launch" }
-          if (-not (Test-Path assets)) { New-Item -ItemType Directory -Force assets | Out-Null }
-
-      - name: Package onefile executable
-        env:
-          PYTHONPATH: ${{ github.workspace }}\src
-        run: |
-          python -m nuitka --standalone --onefile --enable-plugin=pyqt5 `
-            --windows-console-mode=disable --msvc=latest --assume-yes-for-downloads `
-            --output-dir=dist\release --output-filename=PmxStudio.exe `
-            --include-data-dir=assets=assets `
-            --include-data-files=native/bullet_phys.dll=native/bullet_phys.dll `
-            --include-data-files=src/pmxeditor/_pmx_core.cp312-win_amd64.pyd=pmxeditor/_pmx_core.cp312-win_amd64.pyd `
-            --include-module=pmxeditor._pmx_core --include-module=tools.verify_native_backend `
-            --include-module=OpenGL.GL --include-package=OpenGL.arrays --include-package=OpenGL.platform `
-            --company-name=PmxStudio --product-name=PmxStudio `
-            --file-description="PMX model editor" `
-            --file-version=1.0.1.0 --product-version=1.0.1.0 main.py
-
-      # SignPath metadata requirements: product name must match the project and
-      # product version must be identical across builds.
-      - name: Verify executable metadata
-        run: |
-          $vi = (Get-Item dist\release\PmxStudio.exe).VersionInfo
-          "ProductName=$($vi.ProductName) ProductVersion=$($vi.ProductVersion)"
-          if ($vi.ProductName -ne "PmxStudio") { throw "unexpected ProductName: $($vi.ProductName)" }
-          if ($vi.ProductVersion -ne "1.0.1.0") { throw "unexpected ProductVersion: $($vi.ProductVersion)" }
-          if (-not (Test-Path dist\release\PmxStudio.exe)) { throw "executable not produced" }
-
-      - name: Generate release metadata
-        shell: pwsh
-        run: |
-          $exe = "dist\release\PmxStudio.exe"
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  PmxStudio.exe" | Set-Content "dist\release\PmxStudio.exe.sha256" -Encoding ascii
-          $nuitka = (& python -m nuitka --version | Select-Object -First 1)
+          $cmake = (cmake --version | Select-Object -First 1)
           @(
             "product=PmxStudio"
+            "engine=cpp"
             "commit=$env:GITHUB_SHA"
             "ref=$env:GITHUB_REF"
             "built_at=$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
-            "python=$env:PYTHON_VERSION"
-            "nuitka=$nuitka"
-            "bullet=$env:BULLET_VERSION (pybullet $env:PYBULLET_VERSION)"
-          ) | Set-Content "dist\release\BUILD_INFO.txt" -Encoding utf8
-          Get-Content "dist\release\BUILD_INFO.txt"
+            "cmake=$cmake"
+            "generator=Visual Studio 17 2022 x64 (Release, /MT)"
+            "deps=GLFW 3.4, Dear ImGui v1.92.9b, Bullet 3.25"
+            "size=$((Get-Item $dst).Length)"
+          ) | Set-Content (Join-Path $dir "BUILD_INFO.txt") -Encoding utf8
+          Get-Content (Join-Path $dir "BUILD_INFO.txt")
 
       - uses: actions/upload-artifact@v4
         with:

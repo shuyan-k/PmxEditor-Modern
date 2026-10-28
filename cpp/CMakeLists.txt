@@ -22,10 +22,18 @@ option(PMX_BUILD_TESTS "Build parity/unit tests" ON)
 option(PMX_ENABLE_PHYSICS "Build Bullet physics backend" ON)
 option(PMX_USE_SYSTEM_BULLET "Use an installed Bullet instead of the vendored source" OFF)
 option(PMX_FETCH_DEPS "Fetch dependencies from the mirror when third_party/ is missing" OFF)
+option(PMX_STATIC_RUNTIME "Statically link the MSVC runtime for a single-file exe" ON)
 set(PMX_DEPS_MIRROR "https://gitee.com/mirrors" CACHE STRING
     "Git mirror used when PMX_FETCH_DEPS is enabled (use https://github.com for upstream)")
 set(PMX_BULLET_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bullet/src"
     CACHE PATH "Vendored Bullet source tree")
+
+# 静态 CRT：Windows 产物是单个 exe，不依赖 VCRUNTIME/MSVCP DLL。
+# 必须在 add_subdirectory(third_party) 之前设置——目录属性只对之后创建的目标生效。
+if(MSVC AND PMX_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
+    add_compile_options($<$<CONFIG:Debug>:/MTd> $<$<NOT:$<CONFIG:Debug>>:/MT>)
+endif()
 
 include(cmake/Dependencies.cmake)
 
@@ -74,9 +82,10 @@ if(PMX_BUILD_APP)
     add_executable(pmxstudio ${PMX_APP_SOURCES})
     target_link_libraries(pmxstudio PRIVATE pmx_gpu imgui glfw)
     if(WIN32)
-        set_target_properties(pmxstudio PROPERTIES WIN32_EXECUTABLE OFF)
-        # 资源管理器文件对话框（GetOpenFileNameW / GetSaveFileNameW）
-        target_link_libraries(pmxstudio PRIVATE comdlg32)
+        # GUI 子系统：启动时不带控制台窗口，入口为 main.cpp 里的 WinMain。
+        set_target_properties(pmxstudio PROPERTIES WIN32_EXECUTABLE ON)
+        # 资源管理器文件对话框（comdlg32）与宽字符命令行解析（shell32）。
+        target_link_libraries(pmxstudio PRIVATE comdlg32 shell32)
     endif()
 endif()
 

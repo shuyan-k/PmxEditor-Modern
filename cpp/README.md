@@ -87,6 +87,10 @@ Linux 需要 `build-essential cmake ninja-build libx11-dev libxrandr-dev libxine
 libxcursor-dev libxi-dev`；中文界面还需要系统装有 Noto CJK 或文泉驿字体（`fonts-noto-cjk`）。
 无显示服务（纯 SSH 容器）时只能构建与跑测试，查看器需要 X11。
 
+Windows 下默认静态链接 CRT 与 GLFW/Bullet，`pmxstudio.exe` 可直接单文件分发；以 GUI
+子系统链接（`WinMain` 入口），启动不弹控制台窗口。CI 在 `.github/workflows/build.yml`
+中构建并校验产物只依赖系统 DLL。
+
 ### CMake 选项
 
 | 选项 | 默认 | 说明 |
@@ -94,6 +98,7 @@ libxcursor-dev libxi-dev`；中文界面还需要系统装有 Noto CJK 或文泉
 | `PMX_BUILD_APP` | ON | 构建 GLFW + ImGui 查看器 |
 | `PMX_BUILD_TESTS` | ON | 构建 `pmx_tests` 与 `pmx_parity_probe` |
 | `PMX_ENABLE_PHYSICS` | ON | 编译 Bullet 物理后端；关闭后物理接口退化为空实现 |
+| `PMX_STATIC_RUNTIME` | ON | MSVC 静态 CRT（`/MT`），产物为不依赖 VC 运行时 DLL 的单文件 exe |
 | `PMX_USE_SYSTEM_BULLET` | OFF | 使用系统安装的 Bullet 而非仓库内源码 |
 | `PMX_FETCH_DEPS` | OFF | 本地 `third_party` 缺失时联网拉取依赖 |
 | `PMX_DEPS_MIRROR` | gitee | `PMX_FETCH_DEPS=ON` 时使用的镜像 |

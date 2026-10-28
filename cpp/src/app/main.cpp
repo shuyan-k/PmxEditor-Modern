@@ -630,12 +630,26 @@ void on_drop(GLFWwindow* window, int count, const char** paths) {
 }
 
 
-int main(int argc, char** argv) {
-    // CRT 的 argv 在 Windows 上按 ANSI 代码页解码，中文/日文路径会变成乱码，
-    // 这里统一还原成 UTF-8 后再交给内部路径处理（fs.hpp）。
-    const std::vector<std::string> args = pmx::utf8_args(argc, argv);
+// 以 GUI 子系统启动时没有控制台，错误信息需要同时弹窗，否则会静默退出。
+static void report_error(const std::string& message) {
+    std::fprintf(stderr, "%s\n", message.c_str());
+#ifdef _WIN32
+    const int len = ::MultiByteToWideChar(CP_UTF8, 0, message.data(),
+                                          static_cast<int>(message.size()), nullptr, 0);
+    if (len > 0) {
+        std::wstring wide(static_cast<std::size_t>(len), L'\0');
+        ::MultiByteToWideChar(CP_UTF8, 0, message.data(), static_cast<int>(message.size()),
+                              wide.data(), len);
+        ::MessageBoxW(nullptr, wide.c_str(), L"PmxStudio", MB_OK | MB_ICONERROR);
+    }
+#endif
+}
+
+// args 已在入口处由 pmx::utf8_args 转成 UTF-8：Windows 的 CRT argv 按 ANSI 代码页解码，
+// 中文/日文路径会变成乱码，所以不直接用 argv。
+static int run_viewer(const std::vector<std::string>& args) {
     if (!glfwInit()) {
-        std::fprintf(stderr, "GLFW 初始化失败\n");
+        report_error("GLFW 初始化失败");
         return 1;
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -647,7 +661,7 @@ int main(int argc, char** argv) {
 
     GLFWwindow* window = glfwCreateWindow(1440, 900, "PmxStudio C++", nullptr, nullptr);
     if (!window) {
-        std::fprintf(stderr, "无法创建 OpenGL 4.6 窗口\n");
+        report_error("无法创建 OpenGL 4.6 窗口");
         glfwTerminate();
         return 1;
     }
@@ -700,7 +714,7 @@ int main(int argc, char** argv) {
 
     const char* missing = glapi::load();
     if (missing && *missing) {
-        std::fprintf(stderr, "缺少 OpenGL 入口：%s\n", missing);
+        report_error(std::string("缺少 OpenGL 入口：") + missing);
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
@@ -715,7 +729,7 @@ int main(int argc, char** argv) {
 
     std::string err;
     if (!viewer.renderer.init(&err)) {
-        std::fprintf(stderr, "渲染器初始化失败：%s\n", err.c_str());
+        report_error("渲染器初始化失败：" + err);
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
@@ -843,3 +857,13 @@ int main(int argc, char** argv) {
     glfwTerminate();
     return 0;
 }
+
+#ifdef _WIN32
+// Windows 下以 GUI 子系统链接（无控制台窗口），入口是 WinMain。
+// CRT 在本子系统下不提供可靠的 argc/argv，用 pmx::utf8_args 重新解析宽字符命令行。
+extern "C" int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    return run_viewer(pmx::utf8_args(0, nullptr));
+}
+#else
+int main(int argc, char** argv) { return run_viewer(pmx::utf8_args(argc, argv)); }
+#endif
