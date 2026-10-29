@@ -375,6 +375,8 @@ bool Viewer::save_model(const std::string& path, std::string* err) {
 void Viewer::handle_shortcuts() {
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput) return;
+    // 退出确认框是模态的：弹窗期间不响应其它快捷键（Esc 由弹窗自己处理）。
+    if (close_requested) return;
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_M, false)) set_preview_mode(!preview_mode);
     if (ImGui::IsKeyPressed(ImGuiKey_F, false) && !io.KeyCtrl) fit_camera();
     if (ImGui::IsKeyPressed(ImGuiKey_R, false) && !io.KeyCtrl) reset_pose();
@@ -391,18 +393,8 @@ void Viewer::handle_shortcuts() {
     // 预览模式模型只读：保存不可用（载入模型仍然允许）。
     if (!preview_mode) {
         const bool ctrl_s = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false);
-        if (ctrl_s && !model_path.empty() && !io.KeyShift) {
-            std::string err;
-            if (!save_model(model_path, &err)) error = err;
-        } else if (ctrl_s) {
-            const std::string target = pick_save_file(
-                kPmxFilter, L"另存为 PMX 模型",
-                model_path.empty() ? std::string() : model_path, L"pmx");
-            if (!target.empty()) {
-                std::string err;
-                if (!save_model(target, &err)) error = err;
-            }
-        }
+        // Ctrl+S 覆盖保存，Ctrl+Shift+S 另存为；与菜单保存走同一入口。
+        if (ctrl_s) save_model_dialog(io.KeyShift);
     }
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) {
         const std::string path = pick_open_file(kPmxFilter, L"打开 PMX 模型");
@@ -593,26 +585,8 @@ void Viewer::draw_ui() {
         if (load_vmd_file(path, &err)) error.clear();
         else error = err;
     };
-    auto save = [this]() {
-        std::string target = model_path;
-        if (target.empty())
-            target = pick_save_file(kPmxFilter, L"保存 PMX 模型",
-                                    model.name.empty() ? std::string() : model.name + ".pmx",
-                                    L"pmx");
-        if (target.empty()) return;
-        std::string err;
-        if (save_model(target, &err)) error.clear();
-        else error = err;
-    };
-    auto save_as = [this]() {
-        const std::string target = pick_save_file(
-            kPmxFilter, L"另存为 PMX 模型",
-            model_path.empty() ? std::string() : model_path, L"pmx");
-        if (target.empty()) return;
-        std::string err;
-        if (save_model(target, &err)) error.clear();
-        else error = err;
-    };
+    auto save = [this]() { save_model_dialog(false); };
+    auto save_as = [this]() { save_model_dialog(true); };
     auto export_vpd = [this]() {
         if (!pose) return;
         std::string default_path = model_path;
@@ -695,8 +669,10 @@ void Viewer::draw_ui() {
         }
         if (ImGui::BeginMenu("文件")) {
             if (ImGui::MenuItem("打开 PMX…", "Ctrl+O")) open_pmx();
-            if (ImGui::MenuItem("导入 VPD…", nullptr, false, pose != nullptr)) import_vpd();
-            if (ImGui::MenuItem("导入 VMD…", nullptr, false, pose != nullptr)) import_vmd();
+            // 姿态与动作属于预览模式（PmxEditor 的 TransformView），编辑模式不叠加。
+            const bool can_pose_file = pose != nullptr && preview_mode;
+            if (ImGui::MenuItem("导入 VPD…", nullptr, false, can_pose_file)) import_vpd();
+            if (ImGui::MenuItem("导入 VMD…", nullptr, false, can_pose_file)) import_vmd();
             ImGui::Separator();
             const bool can_edit = pose != nullptr && !preview_mode;
             if (ImGui::MenuItem("保存", "Ctrl+S", false, can_edit)) save();
@@ -707,8 +683,12 @@ void Viewer::draw_ui() {
             ImGui::MenuItem("导出全部骨骼", nullptr, &vpd_include_all, can_edit);
             ImGui::Separator();
             if (ImGui::MenuItem("退出", "Alt+F4")) {
-                if (GLFWwindow* current = glfwGetCurrentContext())
+                // 有未保存修改时先弹确认框，由 draw_close_confirm 决定是否真的退出。
+                if (dirty) {
+                    close_requested = true;
+                } else if (GLFWwindow* current = glfwGetCurrentContext()) {
                     glfwSetWindowShouldClose(current, 1);
+                }
             }
             ImGui::EndMenu();
         }
@@ -926,7 +906,6 @@ void Viewer::draw_ui() {
             tab("材质", &panel_material);
             tab("面", &panel_face);
             tab("形态", &panel_morph);
-            tab("动作", &panel_motion);
             tab("物理", &panel_physics);
             tab("柔体", &panel_soft);
             tab("设置", &panel_settings);
@@ -939,6 +918,49 @@ void Viewer::draw_ui() {
         reveal_selection = false;
     }
     ImGui::End();
+}
+
+void Viewer::draw_close_confirm() {
+    if (!close_requested) return;
+    const char* title = "未保存的修改###pmx_close_confirm";
+    if (!ImGui::IsPopupOpen(title)) {
+        ImGui::OpenPopup(title);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
+    }
+    if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("模型有未保存的修改。");
+        ImGui::TextDisabled("退出后这些修改会丢失。");
+        ImGui::Separator();
+        const float w = pmxui::scale(88.0f);
+        if (ImGui::Button("保存并退出", ImVec2(w, 0))) {
+            if (save_model_dialog(false)) {
+                close_requested = false;
+                ImGui::CloseCurrentPopup();
+                if (GLFWwindow* current = glfwGetCurrentContext())
+                    glfwSetWindowShouldClose(current, 1);
+            } else {
+                status = "保存未完成（已取消或保存失败），仍停留在编辑器中";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("不保存退出", ImVec2(w, 0))) {
+            close_requested = false;
+            ImGui::CloseCurrentPopup();
+            if (GLFWwindow* current = glfwGetCurrentContext())
+                glfwSetWindowShouldClose(current, 1);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("取消", ImVec2(w, 0)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            close_requested = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    } else {
+        // 弹窗被外部关闭（例如点击窗口关闭按钮的二次请求）时取消退出。
+        close_requested = false;
+    }
 }
 
 
@@ -975,6 +997,11 @@ bool Viewer::apply_vpd_file(const std::string& path, std::string* err) {
         if (err) *err = "尚未加载模型";
         return false;
     }
+    // VPD 姿态同样属于预览模式：编辑视图只显示模型原始姿态。
+    if (!preview_mode) {
+        if (err) *err = "VPD 姿态只在预览模式使用，请先切换到预览模式（Ctrl+M）";
+        return false;
+    }
     try {
         const pmx::VpdFile vpd = pmx::load_vpd(path);
         push_pose_undo("导入 VPD");
@@ -1003,6 +1030,11 @@ bool Viewer::apply_vpd_file(const std::string& path, std::string* err) {
 bool Viewer::load_vmd_file(const std::string& path, std::string* err) {
     if (!pose) {
         if (err) *err = "尚未加载模型";
+        return false;
+    }
+    // VMD 动作只在预览模式使用（PmxEditor 的 TransformView），编辑模式只改数据。
+    if (!preview_mode) {
+        if (err) *err = "VMD 动作只在预览模式使用，请先切换到预览模式（Ctrl+M）";
         return false;
     }
     try {
@@ -1078,6 +1110,9 @@ void Viewer::apply_motion_frame() {
 
 void Viewer::update_motion(float dt) {
     if (!motion || !pose) return;
+    // VMD 动作只在预览模式（PmxEditor 的 TransformView）使用；编辑模式始终显示
+    // 模型原始姿态，避免动作覆盖与物理回写混进数据编辑视图。
+    if (!preview_mode) return;
     bool jumped = false;
     if (motion_playing) {
         const float end = static_cast<float>(std::max(0, motion->max_frame));
@@ -1240,6 +1275,14 @@ static int run_viewer(const std::vector<std::string>& args) {
 
     Viewer viewer;
     glfwSetWindowUserPointer(window, &viewer);
+    // 点窗口关闭按钮 / Alt+F4 时若模型有未保存修改，先拦下关闭请求并弹确认框。
+    glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
+        auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(w));
+        if (v && v->dirty) {
+            glfwSetWindowShouldClose(w, GLFW_FALSE);
+            v->close_requested = true;
+        }
+    });
 
     // 偏好先于模型加载：配置文件里的 last_model 只在没有命令行参数时生效。
     std::string settings_err;
@@ -1343,18 +1386,23 @@ static int run_viewer(const std::vector<std::string>& args) {
         if (viewer.pose) {
             if (viewer.morph_dirty) viewer.apply_morphs();
             else viewer.pose->apply(&viewer.morph_weights);
-            viewer.pose->solve_ik();
+            // IK 与物理只在预览模式求值：编辑模式（PmxEditor 的 PmxView）只画模型
+            // 原始姿态，姿态覆盖与物理回写都不会混进数据编辑视图。
+            if (viewer.preview_mode) {
+                viewer.pose->solve_ik();
 #ifdef PMX_ENABLE_PHYSICS
-            if (viewer.physics_ptr && viewer.physics_ptr->enabled) {
-                viewer.physics_ptr->step(*viewer.pose, 1.0f / 60.0f,
-                                         &viewer.morph_weights);
-            }
+                if (viewer.physics_ptr && viewer.physics_ptr->enabled) {
+                    viewer.physics_ptr->step(*viewer.pose, 1.0f / 60.0f,
+                                             &viewer.morph_weights);
+                }
 #endif
+            }
             viewer.pose->world();
         }
 
         viewer.draw_scene(fb_w, fb_h);
         viewer.draw_ui();
+        viewer.draw_close_confirm();
         viewer.draw_pick_choices();  // 双击候选框画在最上层
 
         static std::string last_title;

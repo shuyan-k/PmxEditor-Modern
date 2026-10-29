@@ -161,15 +161,57 @@ void Viewer::push_pose_undo(const std::string& label, const std::string& coalesc
 void Viewer::set_preview_mode(bool preview) {
     if (preview_mode == preview) return;
     preview_mode = preview;
+    // 两个视图各有一套姿态：切过去时先清掉拖动状态与手动摆姿记录。
+    drag_mode = DRAG_NONE;
+    drag_bone = -1;
+    pick_choices.clear();
+    clear_manual_pose();
     if (preview_mode) {
-        // 进入预览：只清掉拖动状态，选择保留，切过来就能接着摆姿。
-        drag_mode = DRAG_NONE;
-        drag_bone = -1;
-        pick_choices.clear();
-        status = "已切换到预览模式：可摆骨骼，模型数据只读";
+        // 进入预览（PmxEditor 的 TransformView）：按当前动作帧重新落姿态，
+        // 物理也以该帧为初始姿态复位，之后才允许播放动作 / 演算 / 摆姿。
+        if (motion) apply_motion_frame();
+        if (physics_enabled) reset_physics();
+        status = "已切换到预览模式：可播放动作 / 演算物理 / 摆骨骼，模型数据只读";
     } else {
-        status = "已切换到编辑模式：只改数据，摆姿请用预览模式";
+        // 回到编辑（PmxEditor 的 PmxView）：暂停动作，并把姿态、形态、物理回写
+        // 全部复位成模型原始状态——编辑视图只显示模型数据本身。
+        motion_playing = false;
+        motion_dirty = false;
+        morph_weights.clear();
+        std::fill(morph_values.begin(), morph_values.end(), 0.0f);
+        morph_dirty = true;
+        if (pose) {
+            pose->reset();
+            pose->solve_ik();
+            pose->world();
+#ifdef PMX_ENABLE_PHYSICS
+            // 刚体叠加层也落回静止位置，编辑视图里不残留上次演算的姿态。
+            if (physics_ptr) physics.reset(*pose, &morph_weights, false);
+#endif
+        }
+        status = "已切换到编辑模式：姿态与动作已复位，只改数据";
     }
+}
+
+bool Viewer::save_model_dialog(bool always_ask) {
+    if (!pose) return false;
+    std::string target = always_ask ? std::string() : model_path;
+    if (target.empty()) {
+        // 另存为时用当前路径作为初始文件名（没有路径就退回模型名）。
+        const std::string default_path =
+            !model_path.empty() ? model_path
+                                : (model.name.empty() ? std::string() : model.name + ".pmx");
+        target = pick_save_file(kPmxFilter, always_ask ? L"另存为 PMX 模型" : L"保存 PMX 模型",
+                                default_path, L"pmx");
+    }
+    if (target.empty()) return false;  // 用户取消对话框
+    std::string err;
+    if (!save_model(target, &err)) {
+        error = err;
+        return false;
+    }
+    error.clear();
+    return true;
 }
 
 void Viewer::edit(const std::string& label, const std::function<void(pmx::Model&)>& fn,
