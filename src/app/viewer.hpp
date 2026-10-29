@@ -11,6 +11,7 @@
 #include "core/morph.hpp"
 #include "core/pmx.hpp"
 #include "core/pose.hpp"
+#include "core/vmd.hpp"
 #include "gpu/renderer.hpp"
 #ifdef PMX_ENABLE_PHYSICS
 #include "physics/physics.hpp"
@@ -20,6 +21,7 @@
 struct GLFWwindow;
 extern const wchar_t* kPmxFilter;
 extern const wchar_t* kVpdFilter;
+extern const wchar_t* kVmdFilter;
 std::string pick_open_file(const wchar_t* filter, const wchar_t* title);
 std::string pick_save_file(const wchar_t* filter, const wchar_t* title,
                            const std::string& default_path, const wchar_t* def_ext);
@@ -52,6 +54,7 @@ struct Viewer {
 
     std::string model_path;
     std::string vpd_path;
+    std::string vmd_path;
     std::string status = "未加载模型";
     std::string error;
     bool dirty = false;
@@ -72,11 +75,26 @@ struct Viewer {
     float bg[3] = {0.13f, 0.14f, 0.16f};
     float light[3] = {0.35f, 0.72f, 0.45f};
 
+    // VMD 动作：导入后按 30 fps 时间轴播放；暂停时保留当前帧姿态。
+    std::unique_ptr<pmx::VmdMotion> motion;
+    pmx::VmdBinding motion_binding;
+    float motion_frame = 0.0f;
+    float motion_speed = 1.0f;
+    bool motion_playing = false;
+    bool motion_loop = true;
+    bool motion_dirty = false;  // 帧号变化，下一帧需要重新写入姿态
+
     bool physics_enabled = false;
     float gravity = -9.8f;
     int iterations = 30;
     bool ground = true;
     std::string theme = "dark";
+
+    // 编辑模式：可修改模型（骨骼 / 材质 / 形态定义 / 物理刚体等）。
+    // 预览模式：模型数据只读，只保留视角、物理、动作（VMD）与形态控制，
+    // 与 PmxEditor 的预览窗口一致。
+    bool preview_mode = false;
+    void set_preview_mode(bool preview);
 
     double fps_time = 0.0;
     float fps = 0.0f;
@@ -128,9 +146,15 @@ struct Viewer {
 
     bool load_model(const std::string& path, std::string* err);
     bool apply_vpd_file(const std::string& path, std::string* err);
+    bool load_vmd_file(const std::string& path, std::string* err);
+    void clear_motion();
+    void update_motion(float dt);
+    void apply_motion_frame();
     bool save_model(const std::string& path, std::string* err);
     void apply_morphs();
     void reset_physics();
+    // 播放中的「软复位」：只清速度，不重摆刚体（MMD/Blender 播放时就是这种行为）。
+    void settle_physics();
     void draw_ui();
     // 双击候选框：悬浮在鼠标旁，点选后提交选择。
     void draw_pick_choices();

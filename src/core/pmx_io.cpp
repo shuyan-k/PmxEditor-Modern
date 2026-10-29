@@ -673,6 +673,10 @@ Model load_pmx(const std::string& path) {
         rb.name = r.text();
         rb.name_en = r.text();
         rb.bone = r.sindex(m.bsz);
+        // MMD（以及 saba 的实现）是把 PMX 的组号直接当 Bullet 的 filterGroup 位
+        // （`1 << 组号`），掩码也原样当 filterMask 使用，两者都不做换算。
+        // 组号是 1..16，掩码 bit=1 表示「与该组碰撞」（字段名「非衝突グループ」
+        // 是历史命名，MMD 实际按碰撞掩码解释）。
         rb.group = r.u8();
         rb.mask = r.u16();
         rb.shape = r.u8();
@@ -720,6 +724,7 @@ Model load_pmx(const std::string& path) {
             s.shape = r.u8();
             s.material = r.sindex(m.msz);
             s.group = r.u8();
+            // 同刚体：组号与掩码按 PMX 原样保存。
             s.mask = r.u16();
             s.flags = r.u8();
             s.b_link_dist = r.i32();

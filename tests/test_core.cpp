@@ -12,6 +12,7 @@
 #include "core/pose.hpp"
 #include "core/skinning.hpp"
 #include "core/utf8_args.hpp"
+#include "core/vmd.hpp"
 #include "core/vpd.hpp"
 #ifdef PMX_ENABLE_PHYSICS
 #include "physics/physics.hpp"
@@ -310,7 +311,111 @@ void test_vpd(const pmx::Model& model, const std::filesystem::path& dir) {
     check(all_text.find("Bone0{") != std::string::npos, "include_all 导出全部骨骼");
 }
 
-// ---------------------------------------------------------------- UTF-8 路径
+// ---------------------------------------------------------------- VMD 导出与采样
+void test_vmd(const pmx::Model& model, const std::filesystem::path& dir) {
+    std::printf("[7] VMD 导出、解析与采样\n");
+    if (model.bones.empty()) {
+        check(false, "模型含骨骼");
+        return;
+    }
+    const int bone = 0;
+    pmx::Pose pose(model);
+    pose.reset();
+    pose.base_rot[static_cast<std::size_t>(bone)] = pmx::euler_to_quat(0.1f, 0.2f, 0.3f);
+    pose.base_trans[static_cast<std::size_t>(bone)] = pmx::Vec3{0.4f, 0.5f, 0.6f};
+    pmx::MorphWeights weights;
+    const bool has_morph = !model.morphs.empty();
+    if (has_morph) weights.emplace_back(0, 0.6f);
+
+    const std::string path = (dir / "pmxstudio_export.vmd").string();
+    const pmx::VmdExport result = pmx::save_vmd(path, model, pose, &weights);
+    check(std::filesystem::exists(path), "VMD 文件写出");
+    check(result.bones == 1, "导出骨骼轨道数 = 1");
+    check(result.morphs == (has_morph ? 1 : 0), "导出形态轨道数");
+
+    const pmx::VmdMotion motion = pmx::load_vmd(path);
+    check(motion.version == "0002", "VMD 版本 0002");
+    check(motion.bone_tracks.size() == 1, "回读骨骼轨道数 = 1");
+    if (!motion.bone_tracks.empty()) {
+        check(motion.bone_tracks[0].keys.size() == 1, "回读关键帧数 = 1");
+        check(motion.bone_tracks[0].name == model.bones[static_cast<std::size_t>(bone)].name,
+              "回读骨骼名");
+        check_near(motion.bone_tracks[0].keys[0].pos.x, 0.4, 1e-5, "回读位移 x");
+        check_near(motion.bone_tracks[0].keys[0].rot.w,
+                   pose.base_rot[static_cast<std::size_t>(bone)].w, 1e-5, "回读旋转 w");
+    }
+    if (has_morph) {
+        check(motion.morph_tracks.size() == 1, "回读形态轨道数 = 1");
+        if (!motion.morph_tracks.empty())
+            check_near(motion.morph_tracks[0].keys[0].weight, 0.6, 1e-5, "回读形态权重");
+    }
+
+    const pmx::VmdBinding binding = pmx::bind_vmd(model, motion);
+    check(binding.bone_matched == 1, "绑定到模型骨骼");
+    if (has_morph) check(binding.morph_matched == 1, "绑定到模型形态");
+    pmx::Pose target(model);
+    pmx::MorphWeights out;
+    pmx::evaluate_vmd(motion, binding, 0.0, target, &out);
+    check_near(target.base_trans[static_cast<std::size_t>(bone)].x, 0.4, 1e-5, "采样位移 x");
+    check_near(target.base_rot[static_cast<std::size_t>(bone)].w,
+               pose.base_rot[static_cast<std::size_t>(bone)].w, 1e-5, "采样旋转 w");
+    if (has_morph) {
+        check(out.size() == 1, "采样形态数 = 1");
+        if (!out.empty()) check_near(out[0].second, 0.6, 1e-5, "采样形态权重");
+    }
+    if (model.bones.size() > 1)
+        check(target.base_trans[1].x == 0.0f && target.base_trans[1].y == 0.0f,
+              "未绑定骨骼保持静止");
+
+    // 两关键帧：线性缓动下第 15 帧应为前后值的平均。
+    pmx::VmdMotion synth;
+    synth.model_name = "synth";
+    pmx::VmdBoneTrack track;
+    track.name = model.bones[static_cast<std::size_t>(bone)].name;
+    track.keys.push_back(pmx::VmdBoneKey{0, pmx::Vec3{}, pmx::identity_quat(), {}});
+    pmx::VmdBoneKey end_key;
+    end_key.frame = 30;
+    end_key.pos = pmx::Vec3{1.0f, 0.0f, 0.0f};
+    end_key.rot = pmx::euler_to_quat(0.0f, pmx::kPi, 0.0f);
+    track.keys.push_back(end_key);
+    synth.bone_tracks.push_back(track);
+    if (has_morph) {
+        pmx::VmdMorphTrack morph_track;
+        morph_track.name = model.morphs[0].name;
+        morph_track.keys.push_back(pmx::VmdMorphKey{0, 0.0f});
+        morph_track.keys.push_back(pmx::VmdMorphKey{30, 1.0f});
+        synth.morph_tracks.push_back(morph_track);
+    }
+    synth.max_frame = 30;
+    const pmx::VmdBinding synth_binding = pmx::bind_vmd(model, synth);
+    check(synth_binding.bone_matched == 1, "合成动作绑定骨骼");
+    pmx::Pose mid(model);
+    pmx::MorphWeights mid_weights;
+    pmx::evaluate_vmd(synth, synth_binding, 15.0, mid, &mid_weights);
+    check_near(mid.base_trans[static_cast<std::size_t>(bone)].x, 0.5, 1e-5, "线性插值位移中点");
+    check_near(mid.base_rot[static_cast<std::size_t>(bone)].w, std::sqrt(0.5), 1e-4,
+               "四元数半程插值");
+    if (has_morph && !mid_weights.empty())
+        check_near(mid_weights[0].second, 0.5, 1e-5, "形态线性插值");
+
+    // 未匹配名称进入 missing 列表。
+    pmx::VmdMotion unknown;
+    pmx::VmdBoneTrack unknown_track;
+    unknown_track.name = "不存在的骨骼";
+    unknown_track.keys.push_back(pmx::VmdBoneKey{0, pmx::Vec3{}, pmx::identity_quat(), {}});
+    unknown.bone_tracks.push_back(unknown_track);
+    const pmx::VmdBinding unknown_binding = pmx::bind_vmd(model, unknown);
+    check(unknown_binding.bone_matched == 0, "未知骨骼不绑定");
+    check(unknown_binding.missing_bones.size() == 1, "未知骨骼记入未匹配");
+
+    // 静止姿态全量导出：应包含模型全部骨骼。
+    pmx::Pose idle(model);
+    idle.reset();
+    const std::string all_path = (dir / "pmxstudio_export_all.vmd").string();
+    const pmx::VmdExport all = pmx::save_vmd(all_path, model, idle, nullptr, "", true);
+    check(all.bones == static_cast<int>(model.bones.size()), "全量导出包含全部骨骼");
+}
+
 void test_utf8_paths(const pmx::Model& model, const std::filesystem::path& dir) {
     std::printf("[6] 中文路径读写\n");
     const std::string sub_dir =
@@ -366,6 +471,7 @@ int main(int argc, char** argv) {
         test_physics(model);
         test_vpd(model, out.parent_path());
         test_utf8_paths(model, out.parent_path());
+        test_vmd(model, out.parent_path());
     } catch (const std::exception& e) {
         std::fprintf(stderr, "异常：%s\n", e.what());
         return 1;

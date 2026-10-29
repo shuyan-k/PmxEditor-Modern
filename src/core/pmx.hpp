@@ -146,7 +146,12 @@ struct RigidBody {
     std::string name;
     std::string name_en;
     int bone = -1;
+    // 所属碰撞组。PMX 文件里是 1..16（1 基），读写时统一换算成 0..15，
+    // 与掩码位一一对应（bit g 即第 g 组）。
     std::uint8_t group = 0;
+    // 碰撞掩码（bit=1 表示与改组碰撞）。PMX 文件里存的是「非衝突グループ」
+    // （bit=1 表示不与该组碰撞），读写时已反转，因此这里与 Bullet 的
+    // filterMask 语义一致。
     std::uint16_t mask = 0xFFFF;
     std::uint8_t shape = 0;
     Vec3 size{1.0f, 1.0f, 1.0f};
@@ -187,7 +192,9 @@ struct SoftBody {
     std::string name_en;
     std::uint8_t shape = 0;
     int material = -1;
+    // 同 RigidBody：组号已换算成 0..15。
     std::uint8_t group = 0;
+    // 同 RigidBody：bit=1 表示与改组碰撞（读写时已由 PMX 非衝突グループ反转）。
     std::uint16_t mask = 0xFFFF;
     std::uint8_t flags = 0;
     int b_link_dist = 0;

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace pmx {
 namespace {
@@ -37,8 +38,17 @@ Quat from_bt(btQuaternion q) { return Quat(q.x(), q.y(), q.z(), q.w()); }
 
 Vec3 from_bt(btVector3 v) { return Vec3(v.x(), v.y(), v.z()); }
 
-// 6DOF 限位：把「锁死在某非零值」的轴改为锁定在静止位，否则约束会把刚体
-// 持续推离静止姿态（部分胸部/裙摆模板写了同值非零端点）。
+// MMD 在界面里显示重力 -9.8，但物理世界用的是 -9.8 × 10（PMX 模型单位约为
+// 实物的 1/10）。倍数必须一致，否则布料会变得极「飘」：重力太小，约束和接触的
+// 残余冲量就足以把它顶在半空，看起来就是衣服自己飞起来。
+const float kGravityScale = 10.0f;
+// MMD 的物理固定步长是 1/120，每帧最多 10 个子步。
+const float kPhysicsFps = 120.0f;
+const int kMaxSubSteps = 10;
+
+// 6DOF 限位：把「锁死在某非零值」的轴改为锁定在静止位。部分胸部 / 裙摆模板
+// 写了同值非零端点（例如 y=0.05），若原样交给 Bullet，约束会在静止姿态就要求
+// 一个不存在的偏移，把整组刚体互相推挤（胸前一片会被挤成一团）。
 void settle_limits(Vec3& lo, Vec3& hi) {
     for (int k = 0; k < 3; ++k) {
         if (std::fabs(lo[k] - hi[k]) <= 1e-6f && std::fabs(lo[k]) > 1e-6f) {
@@ -47,6 +57,7 @@ void settle_limits(Vec3& lo, Vec3& hi) {
         }
     }
 }
+
 
 // PMX 关节框架使用 ZYX 顺序（R = Rz·Ry·Rx）。dll 侧按 YXZ 组四元数，
 // 这里把目标矩阵分解成 YXZ 三元组，等价于还原同一个旋转。
@@ -87,15 +98,28 @@ struct Physics::World {
     std::vector<btTypedConstraint*> constraints;
     btRigidBody* ground = nullptr;
     btCollisionShape* ground_shape = nullptr;
+    // 地面不属于任何碰撞组：用重叠过滤回调强制它与所有刚体/柔体求交
+    // （否则掩码为 0 的头发会直接穿过地面，与 MMD 的行为不符）。
+    btOverlapFilterCallback* filter = nullptr;
     bool kin_moved = false;
-    const float kin_move_epsilon = 0.001f;
-    float max_lin_vel = 300.0f;
-    float max_ang_vel = 150.0f;
-    float sleep_lin_vel = 0.05f;
-    float sleep_ang_vel = 0.05f;
 };
 
 Physics::~Physics() { release(); }
+
+namespace {
+
+// 地面强制参与碰撞：PMX 的掩码为 0 的刚体（常见于头发）在 Bullet 里「不与任何组
+// 碰撞」，会直接穿过地板。MMD 用一个重叠过滤回调把地面豁免出来。
+struct GroundFilter : public btOverlapFilterCallback {
+    btBroadphaseProxy* ground = nullptr;
+    bool needBroadphaseCollision(btBroadphaseProxy* a, btBroadphaseProxy* b) const override {
+        if (a == ground || b == ground) return true;
+        return (a->m_collisionFilterGroup & b->m_collisionFilterMask) != 0 &&
+               (b->m_collisionFilterGroup & a->m_collisionFilterMask) != 0;
+    }
+};
+
+}  // namespace
 
 bool Physics::build(const Model& model) {
     release();
@@ -108,9 +132,9 @@ bool Physics::build(const Model& model) {
     w->broadphase = new btDbvtBroadphase();
     w->solver = new btSequentialImpulseConstraintSolver();
     w->world = new btSoftRigidDynamicsWorld(w->dispatcher, w->broadphase, w->solver, w->config);
-    w->world->setGravity(btVector3(0.0f, gravity, 0.0f));
+    w->world->setGravity(btVector3(0.0f, gravity * kGravityScale, 0.0f));
     // 软体求解器使用世界信息里的重力，需与刚体重力保持一致。
-    w->world->getWorldInfo().m_gravity = btVector3(0.0f, gravity, 0.0f);
+    w->world->getWorldInfo().m_gravity = btVector3(0.0f, gravity * kGravityScale, 0.0f);
     w->world->getSolverInfo().m_numIterations = iterations > 0 ? iterations : 10;
     w->world->getSolverInfo().m_solverMode |= SOLVER_USE_WARMSTARTING;
 
@@ -123,7 +147,11 @@ bool Physics::build(const Model& model) {
                                                       btVector3(0, 0, 0));
         w->ground = new btRigidBody(info);
         w->ground->setFriction(0.8f);
-        w->world->addRigidBody(w->ground);
+        w->world->addRigidBody(w->ground, 0xFFFF, -1);
+        auto* gf = new GroundFilter();
+        gf->ground = w->ground->getBroadphaseProxy();
+        w->world->getPairCache()->setOverlapFilterCallback(gf);
+        w->filter = gf;
     }
 
     const std::size_t nr = model.rigid.size();
@@ -137,9 +165,13 @@ bool Physics::build(const Model& model) {
     last_step_positions_.assign(nr, Vec3{});
     const int nb = static_cast<int>(model.bones.size());
 
+    // 刚性链（六个轴全锁死的关节）仍交给求解器，由 Bullet 默认的限位 ERP 收敛；
+    // 曾把整组改成运动学跟随，实测静态姿态反而被拖坏，已废弃。
     for (std::size_t i = 0; i < nr; ++i) {
         const RigidBody& rb = model.rigid[i];
         const int bone = (rb.bone >= 0 && rb.bone < nb) ? rb.bone : -1;
+        // MMD：只有「骨骼跟随」(mode 0) 是运动学刚体，质量给 0；mode 1 / 2 都按
+        // PMX 质量参与演算。
         const float mass = rb.mode != 0 ? rb.mass : 0.0f;
         const bool kinematic = rb.mode == 0;
         const int shape = static_cast<int>(rb.shape);
@@ -173,29 +205,29 @@ bool Physics::build(const Model& model) {
         if (mass > 0.0f) cs->calculateLocalInertia(mass, inertia);
         auto* ms = new btDefaultMotionState(t);
         btRigidBody::btRigidBodyConstructionInfo info(mass, ms, cs, inertia);
-        if (mass > 0.0f) info.m_additionalDamping = true;
+        // MMD 对所有刚体都开 additionalDamping。
+        info.m_additionalDamping = true;
         btRigidBody* body = new btRigidBody(info);
         body->setDamping(rb.mov_damp, rb.rot_damp);
         body->setRestitution(rb.repel);
         body->setFriction(rb.friction);
+        // MMD：所有刚体都 DISABLE_DEACTIVATION，并给极低的休眠阈值。默认阈值
+        // （0.8 / 1.0 rad）会让布片在「还没被约束拉回去」的时候就睡着，冻结成
+        // 散开的形状，之后再也不动。
+        body->setSleepingThresholds(0.01f, 0.0017453f);  // 0.1 度
+        body->setActivationState(DISABLE_DEACTIVATION);
 
-        const int cg = 1 << (rb.group & 15);
+        // 与 MMD 一致：filterGroup = 1 << 组号（1..16），filterMask 用 PMX 原始掩码。
+        const int cg = 1 << (rb.group & 31);
         const int cm = rb.mask & 0xFFFF;
         if (mass <= 0.0f) {
             if (kinematic) {
                 body->setCollisionFlags(body->getCollisionFlags() |
                                         btCollisionObject::CF_KINEMATIC_OBJECT);
-                // 不能 DISABLE_DEACTIVATION：否则每帧激活所有接触的动态刚体，
-                // 物理岛永远无法休眠。按本帧是否移动在 ACTIVE/ISLAND_SLEEPING
-                // 之间切换（见 move_body）。
-                body->setActivationState(ISLAND_SLEEPING);
             } else {
                 body->setCollisionFlags(body->getCollisionFlags() |
                                         btCollisionObject::CF_STATIC_OBJECT);
             }
-        } else {
-            body->setActivationState(ACTIVE_TAG);
-            body->setDeactivationTime(0.0f);
         }
         w->world->addRigidBody(body, cg, cm);
         w->bodies.push_back(body);
@@ -226,13 +258,16 @@ bool Physics::build(const Model& model) {
         // Bullet 不允许约束两端是同一个刚体（btDiscreteDynamicsWorld::addConstraint 会断言），
         // PMX 里自连的关节本身也无意义，直接跳过。
         if (ba == bb) continue;
+
         btRigidBody* rbA = w->bodies[static_cast<std::size_t>(ba)];
         btRigidBody* rbB = w->bodies[static_cast<std::size_t>(bb)];
         const btTransform frame_world = make_transform(j.pos, joint_frame_euler(j.rot));
         const btTransform frame_a = rbA->getWorldTransform().inverse() * frame_world;
         const btTransform frame_b = rbB->getWorldTransform().inverse() * frame_world;
 
-        Vec3 min_loc = j.min_loc, max_loc = j.max_loc, min_rot = j.min_rot, max_rot = j.max_rot;
+        // 限位：锁死在同一非零值的轴改到静止位，其余按文件原样。
+        Vec3 min_loc = j.min_loc, max_loc = j.max_loc;
+        Vec3 min_rot = j.min_rot, max_rot = j.max_rot;
         if (j.type == 0 || j.type == 1) {
             settle_limits(min_loc, max_loc);
             settle_limits(min_rot, max_rot);
@@ -250,16 +285,22 @@ bool Physics::build(const Model& model) {
                 g->setAngularLowerLimit(to_bt(min_rot));
                 g->setAngularUpperLimit(to_bt(max_rot));
                 if (j.type == 0) {
+                    // 与 MMD 一致：只对弹簧系数非零的轴 enableSpring + setStiffness，
+                    // 阻尼与平衡点都用 Bullet 默认值（MMD 不设置这两项）。
                     for (int k = 0; k < 3; ++k) {
-                        g->enableSpring(k, true);
-                        g->setStiffness(k, slin[k]);
-                        g->setDamping(k, 0.5f);
-                        g->enableSpring(k + 3, true);
-                        g->setStiffness(k + 3, sang[k]);
-                        g->setDamping(k + 3, 0.5f);
+                        if (slin[k] != 0.0f) {
+                            g->enableSpring(k, true);
+                            g->setStiffness(k, slin[k]);
+                        }
+                        if (sang[k] != 0.0f) {
+                            g->enableSpring(k + 3, true);
+                            g->setStiffness(k + 3, sang[k]);
+                        }
                     }
-                    g->setEquilibriumPoint();
                 }
+                // 锁死轴不覆盖 STOP_ERP。MMD 直接用 Bullet 默认的 0.2：完全焊接的
+                // 长链（如长袖的 30 节刚体）在手臂转动时会带一点弹性滞后，看起来
+                // 是「摆过去」；把锁死轴改成 ERP=1.0 会让整条袖子像硬板一样瞬间跟手。
                 c = g;
                 break;
             }
@@ -304,6 +345,8 @@ bool Physics::build(const Model& model) {
                 continue;
         }
         c->setDbgDrawSize(1.0f);
+        // 关闭相连刚体之间的碰撞：PMX 里这类关节两端的碰撞体通常大幅重叠，
+        // 开着会让求解器先解穿透，把关节整体推开（胸部/袖口会鼓成一个球）。
         w->world->addConstraint(c, true);
         w->constraints.push_back(c);
     }
@@ -340,6 +383,7 @@ void Physics::release() {
         }
         delete w->world;
     }
+    delete w->filter;
     delete w->solver;
     delete w->broadphase;
     delete w->dispatcher;
@@ -353,8 +397,8 @@ bool Physics::set_params(float new_gravity, int new_iterations) {
     gravity = new_gravity;
     iterations = new_iterations > 0 ? new_iterations : 10;
     if (!world_) return false;
-    world_->world->setGravity(btVector3(0.0f, gravity, 0.0f));
-    world_->world->getWorldInfo().m_gravity = btVector3(0.0f, gravity, 0.0f);
+    world_->world->setGravity(btVector3(0.0f, gravity * kGravityScale, 0.0f));
+    world_->world->getWorldInfo().m_gravity = btVector3(0.0f, gravity * kGravityScale, 0.0f);
     world_->world->getSolverInfo().m_numIterations = iterations;
     return true;
 }
@@ -404,25 +448,11 @@ void Physics::move_body(int index, Vec3 pos, Quat q) {
     btQuaternion bq = to_bt(normalize(q));
     bq.normalize();
     t.setRotation(bq);
-    const btTransform prev = b->getWorldTransform();
-    const bool moved = (t.getOrigin() - prev.getOrigin()).length2() >
-                           world_->kin_move_epsilon * world_->kin_move_epsilon ||
-                       std::fabs(t.getRotation().angle(prev.getRotation())) > world_->kin_move_epsilon;
-    if (moved) world_->kin_moved = true;
     if (btMotionState* ms = b->getMotionState()) ms->setWorldTransform(t);
     b->setWorldTransform(t);
-    if (b->getCollisionFlags() & btCollisionObject::CF_KINEMATIC_OBJECT) {
-        if (moved) {
-            b->setActivationState(ACTIVE_TAG);
-            b->setDeactivationTime(0.0f);
-        } else {
-            b->setLinearVelocity(btVector3(0, 0, 0));
-            b->setAngularVelocity(btVector3(0, 0, 0));
-            b->setActivationState(ISLAND_SLEEPING);
-        }
-    } else {
-        b->activate(true);
-    }
+    // MMD 的运动学刚体常驻 DISABLE_DEACTIVATION，靠它把动态刚体一起拖走；
+    // 这里不再按「本帧是否移动」切换休眠状态（那会让布片中途睡死）。
+    b->setInterpolationWorldTransform(t);
 }
 
 void Physics::read_body(int index, Vec3& pos, Quat& q) const {
@@ -432,21 +462,6 @@ void Physics::read_body(int index, Vec3& pos, Quat& q) const {
     q = from_bt(t.getRotation());
 }
 
-void Physics::clamp_velocities() {
-    auto* w = world_;
-    if (!w) return;
-    for (auto* b : w->bodies) {
-        if (b->getMass() <= 0.0f) continue;
-        const btVector3 v = b->getLinearVelocity();
-        const float lv = v.length();
-        if (lv > w->max_lin_vel) b->setLinearVelocity(v * (w->max_lin_vel / lv));
-        else if (lv < w->sleep_lin_vel) b->setLinearVelocity(btVector3(0, 0, 0));
-        const btVector3 av = b->getAngularVelocity();
-        const float aav = av.length();
-        if (aav > w->max_ang_vel) b->setAngularVelocity(av * (w->max_ang_vel / aav));
-        else if (aav < w->sleep_ang_vel) b->setAngularVelocity(btVector3(0, 0, 0));
-    }
-}
 
 std::vector<int> Physics::dynamic_bones() const {
     std::vector<int> out;
@@ -485,11 +500,23 @@ btRigidBody* Physics::rigid_body(int rigid_index) const {
     return world_->bodies[static_cast<std::size_t>(bi)];
 }
 
+void Physics::clear_velocities() {
+    if (!world_) return;
+    for (auto* b : world_->bodies) {
+        b->clearForces();
+        b->setLinearVelocity(btVector3(0, 0, 0));
+        b->setAngularVelocity(btVector3(0, 0, 0));
+    }
+}
+
 void Physics::reset(Pose& pose, const MorphWeights* weights, bool warmup) {
     if (!world_) return;
     pose.clear_overrides();
     pose.apply(weights);
     const std::vector<Mat4>& W = pose.world();
+    // 与 MMD 的「物理リセット」一致：所有刚体都按当前姿态落到骨头上，
+    // 速度清零。MMD 会在这里用「全部按运动学」跑一步再做后续回写；
+    // 这里只摆放（不演算），避免把布片先甩出去。
     for (std::size_t i = 0; i < body_map_.size(); ++i) {
         const int bi = body_map_[i];
         if (bi < 0) continue;
@@ -509,19 +536,18 @@ void Physics::reset(Pose& pose, const MorphWeights* weights, bool warmup) {
         body_rotations_[i] = q;
     }
     for (auto* b : world_->bodies) {
-        if (b->getMass() > 0.0f) {
-            b->clearForces();
-            b->setLinearVelocity(btVector3(0, 0, 0));
-            b->setAngularVelocity(btVector3(0, 0, 0));
-        }
+        b->clearForces();
+        b->setLinearVelocity(btVector3(0, 0, 0));
+        b->setAngularVelocity(btVector3(0, 0, 0));
     }
+
 
     // 柔体按当前姿态（蒙皮后）重建，锚点重新绑定到刚体当前变换。
     reset_soft(pose, weights);
 
     if (warmup && warmup_steps > 0) {
         for (int k = 0; k < warmup_steps; ++k)
-            world_->world->stepSimulation(1.0f / 60.0f, 1, 1.0f / 60.0f);
+            world_->world->stepSimulation(1.0f / kPhysicsFps, kMaxSubSteps, 1.0f / kPhysicsFps);
         for (std::size_t i = 0; i < body_map_.size(); ++i) {
             const int bi = body_map_[i];
             if (bi < 0) continue;
@@ -541,10 +567,15 @@ void Physics::step(Pose& pose, float dt, const MorphWeights* weights) {
         return;
     }
     auto* w = world_;
-    const std::vector<Mat4>& W = pose.world();
     const int nb = pose.n;
 
-    // 1) 运动学刚体差分同步：保持插值变换，求解器才能推导出正确相对速度。
+    // 0) 先还原成「纯动画」姿态：上一帧的物理覆盖必须清掉。运动学刚体跟随的是
+    //    本帧动画姿态（而不是上一帧的物理结果），付与继承也要在干净姿态上求值。
+    pose.clear_overrides();
+    pose.apply(weights);
+    const std::vector<Mat4>& W = pose.world();
+
+    // 1) 运动学刚体同步：跟随骨骼把刚体搬到本帧位置。
     for (std::size_t i = 0; i < body_map_.size(); ++i) {
         const int bi = body_map_[i];
         if (bi < 0 || modes_[i] != 0) continue;
@@ -555,15 +586,8 @@ void Physics::step(Pose& pose, float dt, const MorphWeights* weights) {
                   mat3_to_quat(upper3(M)));
     }
 
-    // 2) 演算
-    if (w->kin_moved) {
-        // 关节约束不会唤醒休眠刚体：运动学父级一动，唤醒全部动态刚体。
-        for (auto* b : w->bodies)
-            if (b->getMass() > 0.0f) b->activate(true);
-        w->kin_moved = false;
-    }
-    w->world->stepSimulation(dt, 3, 1.0f / 60.0f);
-    clamp_velocities();
+    // 2) 演算：MMD 固定 1/120 秒步长，每帧最多 10 个子步。
+    w->world->stepSimulation(dt, kMaxSubSteps, 1.0f / kPhysicsFps);
     // 柔体与刚体同一次 stepSimulation 推进，这里只回读输出坐标。
     update_soft_output();
 
@@ -574,65 +598,29 @@ void Physics::step(Pose& pose, float dt, const MorphWeights* weights) {
         read_body(bi, body_positions_[i], body_rotations_[i]);
     }
 
-    // 4) 动态刚体覆盖骨骼：按求值顺序逐骨合成世界矩阵。
-    //    父级必须用「本帧已更新的」世界矩阵，否则每深一层都会把父骨的
-    //    位移/旋转再叠加一次，裙摆、衣袖这类多级链会在几秒内被拉爆。
-    std::vector<std::vector<int>> by_bone(static_cast<std::size_t>(nb));
+
+    // 4) 动态刚体覆盖骨骼：交给 Pose 按 eval_order 一次求值。
+    //    同一根骨骼挂多个刚体时以最后一个为准；「物理后变形」骨骼不接收覆盖。
+    std::unordered_map<int, BoneOverride> targets;
     for (std::size_t i = 0; i < body_map_.size(); ++i) {
         const int bi = body_map_[i];
         if (bi < 0 || modes_[i] == 0) continue;
         const int bone = bone_of_body_[i];
-        if (bone >= 0 && bone < nb) by_bone[static_cast<std::size_t>(bone)].push_back(i);
+        if (bone < 0 || bone >= nb) continue;
+        if (model_ && (model_->bones[static_cast<std::size_t>(bone)].flags &
+                       BF_AFTER_PHYSICS))
+            continue;
+        BoneOverride& ov = targets[bone];
+        ov.world = mul(from_quat_pos(body_rotations_[i], body_positions_[i]),
+                       inverse_rigid(offsets_[i]));
+        ov.keep_translation = modes_[i] == 2;
     }
-    bool any = false;
-    for (const auto& v : by_bone)
-        if (!v.empty()) { any = true; break; }
-    if (!any) {
+    if (targets.empty()) {
         pose.apply(weights);
         pose.world();
-        return;
+    } else {
+        pose.apply_physics_world(targets, weights);
     }
-
-    pose.clear_overrides();
-    static const Mat4 kIdentity = identity4();
-    std::vector<Mat4> bone_world(static_cast<std::size_t>(nb), kIdentity);
-    std::vector<Quat> ov_rot(static_cast<std::size_t>(nb));
-    std::vector<Vec3> ov_trans(static_cast<std::size_t>(nb));
-    std::vector<std::uint8_t> ov_mask(static_cast<std::size_t>(nb), 0);
-    for (int bone : pose.eval_order) {
-        const std::size_t b = static_cast<std::size_t>(bone);
-        const int p = pose.parent[b];
-        const Mat4& Wp = p >= 0 ? bone_world[static_cast<std::size_t>(p)] : kIdentity;
-        Quat q = pose.rot[b];
-        Vec3 t = pose.trans[b];
-        const auto& hit = by_bone[b];
-        if (!hit.empty()) {
-            const std::size_t i = hit.back();
-            const Mat4 body_m = from_quat_pos(body_rotations_[i], body_positions_[i]);
-            const Mat4 local = mul(mul(inverse_rigid(Wp), body_m), inverse_rigid(offsets_[i]));
-            q = mat3_to_quat(upper3(local));
-            if (modes_[i] == 2) {
-                // 「物理+骨骼对齐」：位移丢弃，仅旋转反馈给骨骼。
-                t = pose.base_trans[b];
-            } else {
-                t = Vec3(local.at(0, 3), local.at(1, 3), local.at(2, 3)) - pose.rest_off[b];
-            }
-            ov_rot[b] = q;
-            ov_trans[b] = t;
-            ov_mask[b] = 1;
-        }
-        bone_world[b] = mul(Wp, from_quat_pos(q, pose.rest_off[b] + t));
-    }
-    // 「物理后变形」骨骼不接收物理覆盖，但仍参与上面的世界矩阵推演
-    // （与 Python 版 physics_step 后过滤 override 的顺序一致）。
-    for (int bone = 0; bone < nb; ++bone) {
-        const std::size_t b = static_cast<std::size_t>(bone);
-        if (!ov_mask[b]) continue;
-        if (model_ && (model_->bones[b].flags & BF_AFTER_PHYSICS)) continue;
-        pose.ov_rot[bone] = ov_rot[b];
-        pose.ov_trans[bone] = ov_trans[b];
-    }
-    pose.invalidate_world();
 
     if (body_positions_.size() == last_step_positions_.size() && !body_positions_.empty()) {
         float maxd = 0.0f;
@@ -643,8 +631,7 @@ void Physics::step(Pose& pose, float dt, const MorphWeights* weights) {
         last_max_delta = maxd;
         last_step_positions_ = body_positions_;
     }
-    pose.apply(weights);
-    pose.world();
 }
 
 }  // namespace pmx
+

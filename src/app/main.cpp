@@ -56,6 +56,7 @@
 // 系统文件对话框（资源管理器）的过滤器：字符串内用 \0 分隔项，末尾再补一个 \0。
 const wchar_t* kPmxFilter = L"PMX 模型 (*.pmx)\0*.pmx\0所有文件 (*.*)\0*.*\0";
 const wchar_t* kVpdFilter = L"VPD 姿态 (*.vpd)\0*.vpd\0所有文件 (*.*)\0*.*\0";
+const wchar_t* kVmdFilter = L"VMD 动作 (*.vmd)\0*.vmd\0所有文件 (*.*)\0*.*\0";
 
 #ifdef _WIN32
 HWND g_owner = nullptr;  // 主窗口句柄，让对话框保持模态
@@ -124,6 +125,19 @@ std::string pick_save_file(const wchar_t*, const wchar_t*, const std::string&,
 #endif
 
 
+namespace {
+
+// 形态权重逐项比较：播放时只有权重变化才重建顶点形态与渲染基底。
+bool same_morph_weights(const pmx::MorphWeights& a, const pmx::MorphWeights& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (a[i].first != b[i].first || a[i].second != b[i].second) return false;
+    return true;
+}
+
+}  // namespace
+
+
 bool Viewer::load_model(const std::string& path, std::string* err) {
     try {
         model = pmx::load_pmx(path);
@@ -135,6 +149,13 @@ bool Viewer::load_model(const std::string& path, std::string* err) {
     morph_values.assign(model.morphs.size(), 0.0f);
     morph_weights.clear();
     morph_dirty = true;
+    // 换模型后旧的 VMD 绑定失效，动作随之清空。
+    motion.reset();
+    motion_binding = pmx::VmdBinding{};
+    motion_frame = 0.0f;
+    motion_playing = false;
+    motion_dirty = false;
+    vmd_path.clear();
     select(SelKind::None, -1);
     undo_stack.clear();
     redo_stack.clear();
@@ -181,6 +202,13 @@ void Viewer::reset_physics() {
         apply_morphs();
         physics.reset(*pose, &morph_weights, true);
     }
+#endif
+}
+
+void Viewer::settle_physics() {
+#ifdef PMX_ENABLE_PHYSICS
+    if (!physics_ptr || !physics_enabled) return;
+    physics.clear_velocities();
 #endif
 }
 
@@ -342,28 +370,32 @@ bool Viewer::save_model(const std::string& path, std::string* err) {
 void Viewer::handle_shortcuts() {
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput) return;
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_M, false)) set_preview_mode(!preview_mode);
     if (ImGui::IsKeyPressed(ImGuiKey_F, false) && !io.KeyCtrl) fit_camera();
     if (ImGui::IsKeyPressed(ImGuiKey_R, false) && !io.KeyCtrl) reset_pose();
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && !io.KeyCtrl) {
         physics_enabled = !physics_enabled;
         reset_physics();
     }
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-        if (io.KeyShift) redo();
-        else undo();
-    }
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
-    const bool ctrl_s = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false);
-    if (ctrl_s && !model_path.empty() && !io.KeyShift) {
-        std::string err;
-        if (!save_model(model_path, &err)) error = err;
-    } else if (ctrl_s) {
-        const std::string target = pick_save_file(
-            kPmxFilter, L"另存为 PMX 模型",
-            model_path.empty() ? std::string() : model_path, L"pmx");
-        if (!target.empty()) {
+    // 预览模式模型只读：撤销 / 重做 / 保存都不可用（载入模型仍然允许）。
+    if (!preview_mode) {
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+            if (io.KeyShift) redo();
+            else undo();
+        }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
+        const bool ctrl_s = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false);
+        if (ctrl_s && !model_path.empty() && !io.KeyShift) {
             std::string err;
-            if (!save_model(target, &err)) error = err;
+            if (!save_model(model_path, &err)) error = err;
+        } else if (ctrl_s) {
+            const std::string target = pick_save_file(
+                kPmxFilter, L"另存为 PMX 模型",
+                model_path.empty() ? std::string() : model_path, L"pmx");
+            if (!target.empty()) {
+                std::string err;
+                if (!save_model(target, &err)) error = err;
+            }
         }
     }
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) {
@@ -392,51 +424,61 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
     // 双击帧同时会触发 IsMouseClicked：先判双击，避免多压一条空撤销记录。
     const bool double_click = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
-    // ---- 按下：已选中的骨骼才可拖动，否则只操作视角
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !double_click) {
-        const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
-        if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
-            selection.index == hit.index && pose && !bone_drag_block(hit.index, true)[0]) {
-            push_pose_undo("移动骨骼", "drag_bone");  // 撤销记录推迟到真正拖动前
-            drag_mode = DRAG_MOVE;  // 左键位移（含 IK 控制器）
-            drag_bone = hit.index;
-        } else {
-            if (hit.kind == pmx::Selection::BONE)
-                status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
-            drag_mode = DRAG_ORBIT;
+    if (preview_mode) {
+        // 预览模式不挑骨骼、不改姿态，只做视角操作。
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+            drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) drag_mode = DRAG_PAN;
+    } else {
+        // ---- 按下：已选中的骨骼才可拖动，否则只操作视角
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !double_click) {
+            const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
+            if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
+                selection.index == hit.index && pose && !bone_drag_block(hit.index, true)[0]) {
+                push_pose_undo("移动骨骼", "drag_bone");  // 撤销记录推迟到真正拖动前
+                drag_mode = DRAG_MOVE;  // 左键位移（含 IK 控制器）
+                drag_bone = hit.index;
+                motion_playing = false;  // 手动摆姿时暂停动作，避免下一帧被覆盖
+            } else {
+                if (hit.kind == pmx::Selection::BONE)
+                    status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
+                drag_mode = DRAG_ORBIT;
+            }
         }
-    }
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-        const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
-        if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
-            selection.index == hit.index && pose && !bone_drag_block(hit.index, false)[0]) {
-            push_pose_undo("旋转骨骼", "drag_bone");
-            drag_mode = DRAG_ROTATE;  // 右键旋转
-            drag_bone = hit.index;
-        } else {
-            if (hit.kind == pmx::Selection::BONE)
-                status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
-            drag_mode = DRAG_PAN;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
+            if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
+                selection.index == hit.index && pose && !bone_drag_block(hit.index, false)[0]) {
+                push_pose_undo("旋转骨骼", "drag_bone");
+                drag_mode = DRAG_ROTATE;  // 右键旋转
+                drag_bone = hit.index;
+                motion_playing = false;  // 手动摆姿时暂停动作，避免下一帧被覆盖
+            } else {
+                if (hit.kind == pmx::Selection::BONE)
+                    status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
+                drag_mode = DRAG_PAN;
+            }
         }
-    }
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
-        drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+            drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
 
-    // ---- 双击选中：落点有多个可选中对象时，在鼠标旁弹候选框由用户指定。
-    if (double_click) {
-        drag_mode = DRAG_NONE;
-        drag_bone = -1;
-        const std::vector<pmx::Selection> hits =
-            pick_candidates_at(mx, my, fb_w, fb_h, pmx::PICK_ALL);
-        pick_choices.clear();
-        if (hits.size() > 1) {
-            pick_choices = hits;
-            pick_choice_pos[0] = io.MousePos.x;
-            pick_choice_pos[1] = io.MousePos.y;
-            pick_choice_frame = ImGui::GetFrameCount();
-            status = "落点有 " + std::to_string(hits.size()) + " 个可选中对象：请在候选框中选择";
-        } else {
-            apply_pick(hits.empty() ? pmx::Selection{} : hits.front());
+        // ---- 双击选中：落点有多个可选中对象时，在鼠标旁弹候选框由用户指定。
+        if (double_click) {
+            drag_mode = DRAG_NONE;
+            drag_bone = -1;
+            const std::vector<pmx::Selection> hits =
+                pick_candidates_at(mx, my, fb_w, fb_h, pmx::PICK_ALL);
+            pick_choices.clear();
+            if (hits.size() > 1) {
+                pick_choices = hits;
+                pick_choice_pos[0] = io.MousePos.x;
+                pick_choice_pos[1] = io.MousePos.y;
+                pick_choice_frame = ImGui::GetFrameCount();
+                status = "落点有 " + std::to_string(hits.size()) + " 个可选中对象：请在候选框中选择";
+            } else {
+                apply_pick(hits.empty() ? pmx::Selection{} : hits.front());
+            }
         }
     }
 
@@ -511,6 +553,17 @@ void Viewer::draw_ui() {
         if (apply_vpd_file(path, &err)) error.clear();
         else error = err;
     };
+    auto import_vmd = [this]() {
+        if (!pose) {
+            error = "尚未加载模型";
+            return;
+        }
+        const std::string path = pick_open_file(kVmdFilter, L"导入 VMD 动作");
+        if (path.empty()) return;
+        std::string err;
+        if (load_vmd_file(path, &err)) error.clear();
+        else error = err;
+    };
     auto save = [this]() {
         std::string target = model_path;
         if (target.empty())
@@ -555,6 +608,32 @@ void Viewer::draw_ui() {
         }
     };
 
+    auto export_vmd = [this]() {
+        if (!pose) return;
+        std::string default_path = model_path;
+        if (!default_path.empty()) {
+            const std::size_t dot = default_path.find_last_of('.');
+            const std::size_t slash = default_path.find_last_of("/\\");
+            if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+                default_path = default_path.substr(0, dot);
+            default_path += ".vmd";
+        }
+        const std::string out =
+            pick_save_file(kVmdFilter, L"导出 VMD 动作", default_path, L"vmd");
+        if (out.empty()) return;
+        try {
+            const int frame = static_cast<int>(std::lround(motion_frame));
+            const pmx::VmdExport res = pmx::save_vmd(out, model, *pose, &morph_weights, "",
+                                                     vpd_include_all, frame);
+            status = "已导出 VMD " + res.path + "（" + std::to_string(res.bones) + " 骨骼 / " +
+                     std::to_string(res.morphs) + " 形态，第 " + std::to_string(res.frame) +
+                     " 帧）";
+            error.clear();
+        } catch (const std::exception& e) {
+            error = e.what();
+        }
+    };
+
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float margin = pmxui::scale(8.0f);
     const float menu_h = ImGui::GetFrameHeight();
@@ -562,15 +641,41 @@ void Viewer::draw_ui() {
 
     // ------------------------------------------------------------ 顶部菜单栏
     if (ImGui::BeginMainMenuBar()) {
+        // 模式切换：编辑（可改模型）/ 预览（模型只读，只保留视角、物理、动作、形态）。
+        {
+            const ImVec4 acc = pmxtheme::accent();
+            auto mode_button = [&](const char* label, bool active) {
+                if (active) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, acc);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, acc);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, acc);
+                    ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::accent_text());
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                }
+                const bool pressed = ImGui::SmallButton(label);
+                if (active) {
+                    ImGui::PopStyleColor(4);
+                } else {
+                    ImGui::PopStyleColor(1);
+                }
+                return pressed;
+            };
+            if (mode_button("编辑", !preview_mode)) set_preview_mode(false);
+            if (mode_button("预览", preview_mode)) set_preview_mode(true);
+        }
         if (ImGui::BeginMenu("文件")) {
             if (ImGui::MenuItem("打开 PMX…", "Ctrl+O")) open_pmx();
             if (ImGui::MenuItem("导入 VPD…", nullptr, false, pose != nullptr)) import_vpd();
+            if (ImGui::MenuItem("导入 VMD…", nullptr, false, pose != nullptr)) import_vmd();
             ImGui::Separator();
-            if (ImGui::MenuItem("保存", "Ctrl+S", false, pose != nullptr)) save();
-            if (ImGui::MenuItem("另存为…", "Ctrl+Shift+S", false, pose != nullptr)) save_as();
+            const bool can_edit = pose != nullptr && !preview_mode;
+            if (ImGui::MenuItem("保存", "Ctrl+S", false, can_edit)) save();
+            if (ImGui::MenuItem("另存为…", "Ctrl+Shift+S", false, can_edit)) save_as();
             ImGui::Separator();
-            if (ImGui::MenuItem("导出 VPD…", nullptr, false, pose != nullptr)) export_vpd();
-            ImGui::MenuItem("导出全部骨骼", nullptr, &vpd_include_all);
+            if (ImGui::MenuItem("导出 VPD…", nullptr, false, can_edit)) export_vpd();
+            if (ImGui::MenuItem("导出 VMD…", nullptr, false, can_edit)) export_vmd();
+            ImGui::MenuItem("导出全部骨骼", nullptr, &vpd_include_all, can_edit);
             ImGui::Separator();
             if (ImGui::MenuItem("退出", "Alt+F4")) {
                 if (GLFWwindow* current = glfwGetCurrentContext())
@@ -579,6 +684,9 @@ void Viewer::draw_ui() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("视图")) {
+            if (ImGui::MenuItem("预览模式", "Ctrl+M", preview_mode))
+                set_preview_mode(!preview_mode);
+            ImGui::Separator();
             ImGui::MenuItem("模型网格", nullptr, &show_mesh);
             ImGui::MenuItem("骨骼", nullptr, &show_bones);
             ImGui::MenuItem("刚体", nullptr, &show_rigid);
@@ -681,7 +789,8 @@ void Viewer::draw_ui() {
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(pmxui::scale(320.0f), pmxui::scale(240.0f)),
                                         ImVec2(max_w, max_h));
-    ImGui::Begin("检查器");
+    // 窗口 ID 固定为 ###inspector，切换模式只改标题，位置/尺寸保持不变。
+    ImGui::Begin(preview_mode ? "预览###inspector" : "检查器###inspector");
 
     // 模型名 + 脏标记 + 文件路径，作为检查器标题区的上下文。
     const std::string doc_name =
@@ -691,7 +800,10 @@ void Viewer::draw_ui() {
     ImGui::PushStyleColor(ImGuiCol_Text, pmxtheme::accent());
     ImGui::TextUnformatted(doc_name.c_str());
     ImGui::PopStyleColor();
-    if (dirty) {
+    if (preview_mode) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("只读预览");
+    } else if (dirty) {
         ImGui::SameLine();
         ImGui::TextColored(pmxtheme::warning(), "● 未保存");
     }
@@ -727,25 +839,29 @@ void Viewer::draw_ui() {
     ImGui::PopStyleColor(4);
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(pose == nullptr);
-    if (ImGui::Button("保存")) save();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("保存到当前文件（Ctrl+S）");
-    ImGui::EndDisabled();
+    if (preview_mode) {
+        ImGui::TextDisabled("模型只读（Ctrl+M 返回编辑模式）");
+    } else {
+        ImGui::BeginDisabled(pose == nullptr);
+        if (ImGui::Button("保存")) save();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("保存到当前文件（Ctrl+S）");
+        ImGui::EndDisabled();
 
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!can_undo());
-    if (ImGui::Button("撤销")) undo();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_undo())
-        ImGui::SetTooltip("撤销：%s", undo_label().c_str());
-    ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!can_undo());
+        if (ImGui::Button("撤销")) undo();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_undo())
+            ImGui::SetTooltip("撤销：%s", undo_label().c_str());
+        ImGui::EndDisabled();
 
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!can_redo());
-    if (ImGui::Button("重做")) redo();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_redo())
-        ImGui::SetTooltip("重做：%s", redo_label().c_str());
-    ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!can_redo());
+        if (ImGui::Button("重做")) redo();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_redo())
+            ImGui::SetTooltip("重做：%s", redo_label().c_str());
+        ImGui::EndDisabled();
+    }
 
     if (!pose) {
         ImGui::Spacing();
@@ -766,16 +882,25 @@ void Viewer::draw_ui() {
                 ImGui::EndTabItem();
             }
         };
-        tab("信息", &panel_info);
-        tab("骨骼", &panel_bone);
-        tab("表示枠", &panel_frame);
-        tab("顶点", &panel_vertex);
-        tab("材质", &panel_material);
-        tab("面", &panel_face);
-        tab("形态", &panel_morph);
-        tab("物理", &panel_physics);
-        tab("柔体", &panel_soft);
-        tab("设置", &panel_settings);
+        if (preview_mode) {
+            // 预览模式只保留控制类标签：动作、物理开关、形态、设置。
+            tab("动作", &panel_motion);
+            tab("物理", &panel_preview_physics);
+            tab("形态", &panel_preview_morph);
+            tab("设置", &panel_settings);
+        } else {
+            tab("信息", &panel_info);
+            tab("骨骼", &panel_bone);
+            tab("表示枠", &panel_frame);
+            tab("顶点", &panel_vertex);
+            tab("材质", &panel_material);
+            tab("面", &panel_face);
+            tab("形态", &panel_morph);
+            tab("动作", &panel_motion);
+            tab("物理", &panel_physics);
+            tab("柔体", &panel_soft);
+            tab("设置", &panel_settings);
+        }
         ImGui::EndTabBar();
     }
     // 标签切换在下一帧生效，保持两帧后清零，避免一直强制选中。
@@ -844,6 +969,95 @@ bool Viewer::apply_vpd_file(const std::string& path, std::string* err) {
     }
 }
 
+bool Viewer::load_vmd_file(const std::string& path, std::string* err) {
+    if (!pose) {
+        if (err) *err = "尚未加载模型";
+        return false;
+    }
+    try {
+        auto loaded = std::make_unique<pmx::VmdMotion>(pmx::load_vmd(path));
+        motion = std::move(loaded);
+        motion_binding = pmx::bind_vmd(model, *motion);
+        motion_frame = 0.0f;
+        motion_speed = 1.0f;
+        motion_loop = true;
+        motion_playing = motion->max_frame > 0;
+        motion_dirty = true;
+        vmd_path = path;
+        apply_motion_frame();  // 先落到第 0 帧，物理复位也以该帧为初始姿态
+#ifdef PMX_ENABLE_PHYSICS
+        if (physics_enabled) reset_physics();
+#endif
+        const pmx::VmdMotion& m = *motion;
+        status = "已导入 VMD " + path + "（骨骼 " +
+                 std::to_string(motion_binding.bone_matched) + "/" +
+                 std::to_string(m.bone_tracks.size()) + " 匹配 · 形态 " +
+                 std::to_string(motion_binding.morph_matched) + "/" +
+                 std::to_string(m.morph_tracks.size()) + " 匹配 · " +
+                 std::to_string(m.max_frame) + " 帧）";
+        return true;
+    } catch (const std::exception& e) {
+        if (err) *err = e.what();
+        return false;
+    }
+}
+
+void Viewer::clear_motion() {
+    motion.reset();
+    motion_binding = pmx::VmdBinding{};
+    motion_frame = 0.0f;
+    motion_playing = false;
+    motion_dirty = false;
+    vmd_path.clear();
+    status = "已清除 VMD 动作";
+    if (physics_enabled) settle_physics();
+}
+
+void Viewer::apply_motion_frame() {
+    if (!motion || !pose) return;
+    pmx::MorphWeights weights;
+    pmx::evaluate_vmd(*motion, motion_binding, motion_frame, *pose, &weights);
+    if (!same_morph_weights(weights, morph_weights)) {
+        morph_weights = std::move(weights);
+        std::fill(morph_values.begin(), morph_values.end(), 0.0f);
+        for (const auto& [index, weight] : morph_weights)
+            if (index >= 0 && index < static_cast<int>(morph_values.size()))
+                morph_values[static_cast<std::size_t>(index)] = weight;
+        morph_dirty = true;
+    }
+    pose->invalidate_world();
+}
+
+void Viewer::update_motion(float dt) {
+    if (!motion || !pose) return;
+    bool jumped = false;
+    if (motion_playing) {
+        const float end = static_cast<float>(std::max(0, motion->max_frame));
+        // VMD 帧号按 30 fps 计；单帧 dt 上限 0.1s，避免拖动窗口后跳帧。
+        float next = motion_frame + std::min(dt, 0.1f) * 30.0f * motion_speed;
+        if (end <= 0.0f) {
+            next = 0.0f;
+        } else if (next > end) {
+            if (motion_loop) {
+                next = std::fmod(next, end);
+                jumped = true;
+            } else {
+                next = end;
+                motion_playing = false;
+            }
+        }
+        motion_frame = std::max(0.0f, next);
+        motion_dirty = true;
+    }
+    if (motion_dirty) {
+        apply_motion_frame();
+        motion_dirty = false;
+    }
+    // 循环回绕会把姿态从末帧瞬移到首帧。MMD / Blender 播放时不会重摆刚体，
+    // 这里只清速度：重摆会把几十节的袖链瞬间扯断，之后就被甩飞。
+    if (jumped) settle_physics();
+}
+
 void on_drop(GLFWwindow* window, int count, const char** paths) {
     auto* viewer = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
     if (!viewer || count <= 0) return;
@@ -863,6 +1077,10 @@ void on_drop(GLFWwindow* window, int count, const char** paths) {
     } else if (ends(".vpd")) {
         std::string err;
         if (!viewer->apply_vpd_file(path, &err)) viewer->error = err;
+        else viewer->error.clear();
+    } else if (ends(".vmd")) {
+        std::string err;
+        if (!viewer->load_vmd_file(path, &err)) viewer->error = err;
         else viewer->error.clear();
     }
 }
@@ -1072,6 +1290,7 @@ static int run_viewer(const std::vector<std::string>& args) {
 
         viewer.handle_shortcuts();
         viewer.handle_input(window, fb_w, fb_h);
+        viewer.update_motion(ImGui::GetIO().DeltaTime);
 
         if (viewer.pose) {
             if (viewer.morph_dirty) viewer.apply_morphs();

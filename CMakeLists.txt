@@ -50,6 +50,7 @@ set(PMX_CORE_SOURCES
     src/core/skinning.cpp
     src/core/morph.cpp
     src/core/vpd.cpp
+    src/core/vmd.cpp
     src/core/utf8_args.cpp
 )
 

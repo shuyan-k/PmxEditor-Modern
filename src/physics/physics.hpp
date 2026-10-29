@@ -35,7 +35,8 @@ public:
     float gravity = -9.8f;
     int iterations = 30;
     bool ground = true;
-    int warmup_steps = 30;
+    // MMD 的「物理リセット」只摆放刚体并跑一步，不做多步预热。
+    int warmup_steps = 1;
 
     // 静态刚体不参与演算；mode 0 为「骨骼跟随」运动学刚体。
     bool set_params(float new_gravity, int new_iterations);
@@ -43,6 +44,9 @@ public:
 
     // 复位到当前姿态（可选预热演算，避免开物理瞬间抖动）。
     void reset(Pose& pose, const MorphWeights* weights, bool warmup);
+    // 只清速度与累积力，不重摆刚体位置。播放中拖帧 / 回绕 / 暂停时用这个：
+    // MMD 与 Blender 播放时从不重摆刚体，重摆等于把刚性链瞬间拉断（袖子会被甩飞）。
+    void clear_velocities();
 
     // 每帧：同步运动学刚体 → stepSimulation → 回写骨骼覆盖。
     // weights 用于回写后重新叠加骨骼形态（与 Python 版 pose.apply 语义一致）。
@@ -94,7 +98,6 @@ private:
     void move_body(int index, Vec3 pos, Quat q);
     void set_body(int index, Vec3 pos, Quat q);
     void read_body(int index, Vec3& pos, Quat& q) const;
-    void clamp_velocities();
 
     // 柔体实现（softbody.cpp）：刚体世界就绪后构建、复位时按当前姿态重建。
     btSoftRigidDynamicsWorld* soft_world() const;

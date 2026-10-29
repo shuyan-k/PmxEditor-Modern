@@ -143,6 +143,7 @@ void Pose::reset() {
     ov_rot.clear();
     ov_trans.clear();
     ik_euler_.clear();
+    ik_enabled.clear();
     ik_clamp_hits = 0;
     rot = base_rot;
     trans = base_trans;
@@ -199,54 +200,89 @@ const std::vector<Mat4>& Pose::world() {
     return world_;
 }
 
-void Pose::compute_world() {
+Mat4 Pose::local_matrix(int bone, const std::vector<Mat4>& W) const {
     static const Mat4 kIdentity = identity4();
-    const std::size_t cn = static_cast<std::size_t>(n);
-    for (int bone : eval_order) {
-        const std::size_t i = static_cast<std::size_t>(bone);
-        const int p = parent[i];
-        const Mat4& Wp = p >= 0 ? world_[static_cast<std::size_t>(p)] : kIdentity;
-        Quat q = rot[i];
-        Vec3 t_local = rest_off[i] + trans[i];
+    const std::size_t i = static_cast<std::size_t>(bone);
+    const int p = parent[i];
+    const Mat4& Wp = p >= 0 ? W[static_cast<std::size_t>(p)] : kIdentity;
+    Quat q = rot[i];
+    Vec3 t_local = rest_off[i] + trans[i];
 
-        const std::uint16_t flags = flags_[i];
-        const int src = append_parent_[i];
-        if ((flags & (BF_INHERIT_ROT | BF_INHERIT_MOV)) && src >= 0 && src < n && src != bone) {
-            const float ratio = model_.bones[i].append_ratio;
-            if (ratio != 0.0f) {
-                if (flags & BF_INHERIT_ROT) {
-                    Quat q_src;
-                    if (flags & BF_LOCAL_APPEND) {
-                        q_src = rot[static_cast<std::size_t>(src)];
-                    } else {
-                        const int p_src = parent[static_cast<std::size_t>(src)];
-                        const Mat4& Wp_src = p_src >= 0 ? world_[static_cast<std::size_t>(p_src)]
-                                                        : kIdentity;
-                        Mat3 rel = mul(transpose(upper3(Wp_src)),
-                                       upper3(world_[static_cast<std::size_t>(src)]));
-                        q_src = mat3_to_quat(rel);
-                    }
-                    q = normalize(quat_mul(slerp_quat(identity_quat(), q_src, ratio), q));
+    const std::uint16_t flags = flags_[i];
+    const int src = append_parent_[i];
+    if ((flags & (BF_INHERIT_ROT | BF_INHERIT_MOV)) && src >= 0 && src < n && src != bone) {
+        const float ratio = model_.bones[i].append_ratio;
+        if (ratio != 0.0f) {
+            if (flags & BF_INHERIT_ROT) {
+                Quat q_src;
+                if (flags & BF_LOCAL_APPEND) {
+                    q_src = rot[static_cast<std::size_t>(src)];
+                } else {
+                    const int p_src = parent[static_cast<std::size_t>(src)];
+                    const Mat4& Wp_src = p_src >= 0 ? W[static_cast<std::size_t>(p_src)]
+                                                    : kIdentity;
+                    Mat3 rel = mul(transpose(upper3(Wp_src)),
+                                   upper3(W[static_cast<std::size_t>(src)]));
+                    q_src = mat3_to_quat(rel);
                 }
-                if (flags & BF_INHERIT_MOV) {
-                    Vec3 d;
-                    if (flags & BF_LOCAL_APPEND) {
-                        d = trans[static_cast<std::size_t>(src)] * ratio;
-                    } else {
-                        Vec3 d_world = Vec3(world_[static_cast<std::size_t>(src)].at(0, 3),
-                                            world_[static_cast<std::size_t>(src)].at(1, 3),
-                                            world_[static_cast<std::size_t>(src)].at(2, 3)) -
-                                       model_.bones[static_cast<std::size_t>(src)].pos;
-                        d = mul(transpose(upper3(Wp)), d_world) * ratio;
-                    }
-                    t_local += d;
+                q = normalize(quat_mul(slerp_quat(identity_quat(), q_src, ratio), q));
+            }
+            if (flags & BF_INHERIT_MOV) {
+                Vec3 d;
+                if (flags & BF_LOCAL_APPEND) {
+                    d = trans[static_cast<std::size_t>(src)] * ratio;
+                } else {
+                    Vec3 d_world = Vec3(W[static_cast<std::size_t>(src)].at(0, 3),
+                                        W[static_cast<std::size_t>(src)].at(1, 3),
+                                        W[static_cast<std::size_t>(src)].at(2, 3)) -
+                                   model_.bones[static_cast<std::size_t>(src)].pos;
+                    d = mul(transpose(upper3(Wp)), d_world) * ratio;
                 }
+                t_local += d;
             }
         }
-
-        Mat4 local = from_quat_pos(q, t_local);
-        world_[i] = mul(Wp, local);
     }
+
+    return mul(Wp, from_quat_pos(q, t_local));
+}
+
+void Pose::compute_world() {
+    std::vector<Mat4> W(static_cast<std::size_t>(n));
+    for (int bone : eval_order) W[static_cast<std::size_t>(bone)] = local_matrix(bone, W);
+    world_.swap(W);
+    dirty_ = false;
+}
+
+void Pose::apply_physics_world(const std::unordered_map<int, BoneOverride>& target,
+                               const MorphWeights* morph_weights) {
+    static const Mat4 kIdentity = identity4();
+    // 先得到「纯动画」的局部量（rot / trans），物理覆盖在其上计算。
+    ov_rot.clear();
+    ov_trans.clear();
+    apply(morph_weights);
+
+    std::vector<Mat4> W(static_cast<std::size_t>(n));
+    for (int bone : eval_order) {
+        const std::size_t b = static_cast<std::size_t>(bone);
+        const auto it = target.find(bone);
+        if (it == target.end()) {
+            W[b] = local_matrix(bone, W);
+            continue;
+        }
+        const int p = parent[b];
+        const Mat4& Wp = p >= 0 ? W[static_cast<std::size_t>(p)] : kIdentity;
+        const Mat4 local = mul(inverse_rigid(Wp), it->second.world);
+        const Quat q = mat3_to_quat(upper3(local));
+        const Vec3 t = it->second.keep_translation
+                           ? trans[b]
+                           : Vec3(local.at(0, 3), local.at(1, 3), local.at(2, 3)) - rest_off[b];
+        ov_rot[bone] = q;
+        ov_trans[bone] = t;
+        rot[b] = q;
+        trans[b] = t;
+        W[b] = mul(Wp, from_quat_pos(q, rest_off[b] + t));
+    }
+    world_.swap(W);
     dirty_ = false;
 }
 
@@ -289,6 +325,11 @@ void Pose::clear_overrides() {
     ov_rot.clear();
     ov_trans.clear();
     dirty_ = true;
+}
+
+void Pose::set_ik_enabled(int bone, bool enabled) {
+    if (bone < 0 || bone >= n) return;
+    ik_enabled[bone] = enabled;
 }
 
 std::unordered_set<int> Pose::changed_subtrees(const std::unordered_set<int>& changed) const {
@@ -360,8 +401,16 @@ int Pose::solve_ik_core(int max_loops, const std::unordered_set<int>* only) {
 
     for (const Chain& chain : chains_) {
         if (only && !only->count(chain.ik_bone)) continue;
+        const auto en = ik_enabled.find(chain.ik_bone);
+        if (en != ik_enabled.end() && !en->second) continue;
         const IK& ik = *model_.bones[static_cast<std::size_t>(chain.ik_bone)].ik;
         const int target = ik.target;
+
+        // 足 IK 这类「大腿 + 单侧铰链膝」两骨骼链：先把膝弯到目标所需的夹角，再交给
+        // CCD 收尾。CCD 从接近伸直的位形出发时每轮只有 0.002 rad，40 轮也弯不到位；
+        // 预先弯膝后增量条件数正常，几轮即可收敛。
+        if (prebend_knee(chain, ik)) ++solved;
+
         const auto& W = world();
         const Vec3 goal(W[static_cast<std::size_t>(chain.ik_bone)].at(0, 3),
                         W[static_cast<std::size_t>(chain.ik_bone)].at(1, 3),
@@ -378,7 +427,11 @@ int Pose::solve_ik_core(int max_loops, const std::unordered_set<int>* only) {
             if (distance() < 1e-3f) break;
             bool moved = false;
 
-            for (int li = chain.start + chain.count - 1; li >= chain.start; --li) {
+            // 从根（大腿）往靶侧（膝）遍历：先摆大腿再弯膝。反过来先弯膝时，
+            // 单侧限位会把膝的增量钳到接近伸直，等大腿再摆回来时膝已经顶在限位上，
+            // 腿就卡在 20° 左右弯不下去。
+            for (int oi = 0; oi < chain.count; ++oi) {
+                const int li = chain.start + (chain.count - 1 - oi);
                 const int link_bone = link_bones_[static_cast<std::size_t>(li)];
                 world();
                 Vec3 pivot(W[static_cast<std::size_t>(link_bone)].at(0, 3),
@@ -414,26 +467,38 @@ int Pose::solve_ik_core(int max_loops, const std::unordered_set<int>* only) {
                     } else {
                         quat_to_euler_stable(next_rotation, false, 0, 0, 0, rx, ry, rz);
                     }
-                    float cx = std::min(std::max(rx, limit.lo.x), limit.hi.x);
-                    float cy = std::min(std::max(ry, limit.lo.y), limit.hi.y);
-                    float cz = std::min(std::max(rz, limit.lo.z), limit.hi.z);
-                    bool clipped = cx != rx || cy != ry || cz != rz;
+                    // MMD 逐轴钳制：X → Y → Z，每钳完一轴立刻重建四元数再分解下一轴。
+                    // 一次性钳三个轴在单侧区间（如膝盖 X ∈ [-π, -0.5°]）会落到错误的
+                    // 等价解，膝盖就会反折。
+                    bool clipped = false;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        float nx, ny, nz;
+                        quat_to_euler_stable(next_rotation, true, rx, ry, rz, nx, ny, nz);
+                        rx = nx;
+                        ry = ny;
+                        rz = nz;
+                        const float v = axis == 0 ? rx : (axis == 1 ? ry : rz);
+                        const float lo = axis == 0 ? limit.lo.x : (axis == 1 ? limit.lo.y : limit.lo.z);
+                        const float hi = axis == 0 ? limit.hi.x : (axis == 1 ? limit.hi.y : limit.hi.z);
+                        const float c = std::min(std::max(v, lo), hi);
+                        if (c == v) continue;
+                        clipped = true;
+                        if (axis == 0) rx = c;
+                        else if (axis == 1) ry = c;
+                        else rz = c;
+                        next_rotation = euler_to_quat(rx, ry, rz);
+                    }
                     if (clipped) {
                         if (has_prev) {
                             const auto& prev = ik_euler_[link_bone];
-                            if (euler_distance(cx, cy, cz, prev[0], prev[1], prev[2]) < 1e-6f) {
+                            if (euler_distance(rx, ry, rz, prev[0], prev[1], prev[2]) < 1e-6f) {
                                 // 该轴已经顶在限制上，继续累计只会抖动，舍弃本轮旋转。
                                 continue;
                             }
                         }
-                        ik_euler_[link_bone] = {cx, cy, cz};
                         ++ik_clamp_hits;
-                        next_rotation = euler_to_quat(cx, cy, cz);
-                    } else if (has_prev) {
-                        ik_euler_[link_bone] = {rx, ry, rz};
-                    } else {
-                        ik_euler_[link_bone] = {rx, ry, rz};
                     }
+                    ik_euler_[link_bone] = {rx, ry, rz};
                 }
 
                 base_rot[static_cast<std::size_t>(link_bone)] = next_rotation;
@@ -452,6 +517,53 @@ int Pose::solve_ik_core(int max_loops, const std::unordered_set<int>* only) {
     }
     if (solved > 0) dirty_ = true;
     return solved;
+}
+
+bool Pose::prebend_knee(const Chain& chain, const IK& ik) {
+    if (chain.count != 2) return false;
+    const std::size_t base = static_cast<std::size_t>(chain.start);
+    const int knee = link_bones_[base];
+    const int root = link_bones_[base + 1];
+    const int target = ik.target;
+    if (knee < 0 || root < 0 || target < 0) return false;
+    if (!link_limited_[base] || link_limited_[base + 1]) return false;
+    if (parent[static_cast<std::size_t>(knee)] != root ||
+        parent[static_cast<std::size_t>(target)] != knee)
+        return false;
+    const IKLink& lim = link_limits_[base];
+    if (std::fabs(lim.lo.y) > 1e-4f || std::fabs(lim.hi.y) > 1e-4f ||
+        std::fabs(lim.lo.z) > 1e-4f || std::fabs(lim.hi.z) > 1e-4f)
+        return false;
+
+    const auto& W = world();
+    auto pos = [&](int b) {
+        return Vec3(W[static_cast<std::size_t>(b)].at(0, 3), W[static_cast<std::size_t>(b)].at(1, 3),
+                    W[static_cast<std::size_t>(b)].at(2, 3));
+    };
+    const Vec3 H = pos(root), K = pos(knee), E = pos(target), G = pos(chain.ik_bone);
+    const float L1 = length(K - H), L2 = length(E - K);
+    const float d0 = length(G - H);
+    if (L1 < 1e-3f || L2 < 1e-3f || d0 < 1e-4f) return false;
+    const float d = clampf(d0, std::fabs(L1 - L2) + 1e-3f, L1 + L2 - 1e-3f);
+    // 余弦定理给出的膝关节夹角：链长 L1/L2、髋到目标 d。伸直时夹角为 π。
+    const float interior =
+        std::acos(clampf((L1 * L1 + L2 * L2 - d * d) / (2.0f * L1 * L2), -1.0f, 1.0f));
+    const float bend = kPi - interior;
+    // 本来就接近伸直（夹角几乎为 0）时不需要预先弯膝，交给 CCD 微调即可；
+    // 这里只处理「CCD 从低条件数位形出发弯不到目标」的情况。
+    if (bend < 0.05f) return false;
+    // 单侧限位（膝盖只能朝一侧弯）决定符号；区间跨过 0 时按较近的一侧。
+    const float sign = lim.hi.x <= 0.0f ? -1.0f : (lim.lo.x >= 0.0f ? 1.0f : 0.0f);
+    if (sign == 0.0f) return false;
+    float rx, ry, rz;
+    quat_to_euler(rot[static_cast<std::size_t>(knee)], rx, ry, rz);
+    const float tx = clampf(sign * bend, lim.lo.x, lim.hi.x);
+    if (std::fabs(tx - rx) < 1e-4f) return false;
+    rot[static_cast<std::size_t>(knee)] =
+        base_rot[static_cast<std::size_t>(knee)] =
+            euler_to_quat(tx, clampf(ry, lim.lo.y, lim.hi.y), clampf(rz, lim.lo.z, lim.hi.z));
+    dirty_ = true;
+    return true;
 }
 
 int Pose::retry_stuck_chains(int max_loops, const std::unordered_set<int>* only) {
@@ -518,3 +630,4 @@ int Pose::retry_stuck_chains(int max_loops, const std::unordered_set<int>* only)
 }
 
 }  // namespace pmx
+

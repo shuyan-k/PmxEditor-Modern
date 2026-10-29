@@ -302,7 +302,8 @@ bool Physics::build_soft_at(const std::vector<Vec3>& positions) {
             added.last_positions.reserve(added.body->m_nodes.size());
             for (int i = 0; i < added.body->m_nodes.size(); ++i)
                 added.last_positions.push_back(from_bt(added.body->m_nodes[i].m_x));
-            const int cg = 1 << (sb.group & 15);
+            // 与刚体一致：filterGroup = 1 << 组号（1..16），掩码用 PMX 原始值。
+            const int cg = 1 << (sb.group & 31);
             const int cm = sb.mask & 0xFFFF;
             sw->addSoftBody(added.body, cg, cm);
         }

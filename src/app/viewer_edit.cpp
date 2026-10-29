@@ -95,9 +95,26 @@ void Viewer::push_pose_undo(const std::string& label, const std::string& coalesc
     last_coalesce_time = now;
 }
 
+void Viewer::set_preview_mode(bool preview) {
+    if (preview_mode == preview) return;
+    preview_mode = preview;
+    if (preview_mode) {
+        // 进入预览：清掉编辑态选择与拖动，避免残留高亮 / 撤销记录。
+        drag_mode = DRAG_NONE;
+        drag_bone = -1;
+        pick_choices.clear();
+        select(SelKind::None, -1);
+        status = "已切换到预览模式：模型只读，可控制视角 / 物理 / 动作 / 形态";
+    } else {
+        status = "已切换到编辑模式";
+    }
+}
+
 void Viewer::edit(const std::string& label, const std::function<void(pmx::Model&)>& fn,
                   const std::string& kind, const std::string& coalesce) {
     if (!pose || !fn) return;
+    // 预览模式下模型只读：所有修改入口直接忽略。
+    if (preview_mode) return;
     push_undo(label, coalesce);
     fn(model);
     mark_dirty();
@@ -105,7 +122,7 @@ void Viewer::edit(const std::string& label, const std::function<void(pmx::Model&
 }
 
 void Viewer::touched(const std::string& kind) {
-    if (!pose) return;
+    if (!pose || preview_mode) return;
     mark_dirty();
     refresh_after_edit(kind);
 }
@@ -125,6 +142,7 @@ void Viewer::restore_pose(const PoseEntry& entry) {
 }
 
 void Viewer::undo() {
+    if (preview_mode) return;
     if (undo_stack.empty() || !pose) {
         status = "没有可撤销的操作";
         return;
@@ -160,6 +178,7 @@ void Viewer::undo() {
 }
 
 void Viewer::redo() {
+    if (preview_mode) return;
     if (redo_stack.empty() || !pose) {
         status = "没有可重做的操作";
         return;
