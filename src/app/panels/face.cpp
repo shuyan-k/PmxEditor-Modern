@@ -52,18 +52,21 @@ void ensure_material_filter(const pmx::Model& model, FacePanelState& st) {
     st.filtered.clear();
     for (int i = 0; i < static_cast<int>(model.materials.size()); ++i) {
         const pmx::Material& mt = model.materials[static_cast<std::size_t>(i)];
-        if (st.search.empty() || pmxui::match_filter(st.search, mt.name, mt.name_en))
+        if (st.search.empty() ||
+            pmxui::match_filter(st.search, mt.name, mt.name_en,
+                                pmx::name_zh(pmx::NameKind::Material, mt.name, mt.name_en)))
             st.filtered.push_back(i);
     }
 }
 
 std::string material_label(const pmx::Model& model, int index) {
     if (index < 0 || index >= static_cast<int>(model.materials.size())) return "（无）";
-    char buf[192];
-    const std::string& nm = model.materials[static_cast<std::size_t>(index)].name;
-    std::snprintf(buf, sizeof(buf), "%02d · %s", index,
-                  nm.empty() ? "未命名材质" : nm.c_str());
-    return buf;
+    const pmx::Material& mt = model.materials[static_cast<std::size_t>(index)];
+    const std::string label =
+        pmx::name_with_zh(pmx::NameKind::Material, mt.name, mt.name_en);
+    char num[16];
+    std::snprintf(num, sizeof(num), "%02d · ", index);
+    return std::string(num) + (label.empty() ? "未命名材质" : label);
 }
 
 // 每个材质的 [起始面, 面数)，均以三角面为单位。
@@ -201,7 +204,8 @@ void panel_face(Viewer& v) {
     ImGui::Text("共 %zu 个三角面 · %d 个材质", model.indices.size() / 3, nmat);
 
     ImGui::SetNextItemWidth(pmxui::scale(-96.0f));
-    if (ImGui::InputTextWithHint("##fsearch", "搜索材质名", &st.search)) st.page = 0;
+    if (ImGui::InputTextWithHint("##fsearch", "搜索材质名 / 中文 / 英文名", &st.search))
+        st.page = 0;
     ImGui::SameLine();
     if (ImGui::Button("清除")) {
         st.search.clear();
@@ -225,14 +229,18 @@ void panel_face(Viewer& v) {
                 const int i = st.filtered[static_cast<std::size_t>(r)];
                 const std::size_t mi = static_cast<std::size_t>(i);
                 const std::string& name = model.materials[mi].name;
-                char row[288];
-                std::snprintf(row, sizeof(row), "%02d · %s   起 %d · %d 面", i,
-                              name.empty() ? "未命名材质" : name.c_str(), starts[mi],
-                              counts[mi]);
+                const std::string zh = pmx::name_with_zh(pmx::NameKind::Material, name,
+                                                        model.materials[mi].name_en);
+                char head[24];
+                std::snprintf(head, sizeof(head), "%02d · ", i);
+                const std::string row = std::string(head) +
+                                        (zh.empty() ? "未命名材质" : zh) + "   起 " +
+                                        std::to_string(starts[mi]) + " · " +
+                                        std::to_string(counts[mi]) + " 面";
                 if (counts[mi] <= 0)
                     ImGui::PushStyleColor(ImGuiCol_Text,
                                           ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                if (ImGui::Selectable(row, i == st.material))
+                if (ImGui::Selectable(row.c_str(), i == st.material))
                     select_material(v, st, i);
                 if (counts[mi] <= 0) ImGui::PopStyleColor();
             }
@@ -305,12 +313,13 @@ void panel_face(Viewer& v) {
         }
         const int rel = face - (face_mat >= 0 ? starts[static_cast<std::size_t>(face_mat)] : 0);
         ImGui::Text("面 %d（材质内第 %d 个）", face, rel);
-        if (face_mat >= 0)
-            ImGui::Text("材质 %d「%s」", face_mat,
-                        model.materials[static_cast<std::size_t>(face_mat)].name.empty()
-                            ? "未命名材质"
-                            : model.materials[static_cast<std::size_t>(face_mat)].name.c_str());
-        else
+        if (face_mat >= 0) {
+            const pmx::Material& mt =
+                model.materials[static_cast<std::size_t>(face_mat)];
+            std::string label = pmx::name_with_zh(pmx::NameKind::Material, mt.name, mt.name_en);
+            if (label.empty()) label = "未命名材质";
+            ImGui::Text("材质 %d「%s」", face_mat, label.c_str());
+        } else
             ImGui::TextDisabled("材质未定");
         ImGui::Text("三个顶点索引 %u / %u / %u",
                     static_cast<unsigned>(model.indices[base]),
@@ -363,8 +372,10 @@ void panel_face(Viewer& v) {
         ImGui::EndCombo();
     }
 
-    const std::string& src_name = model.materials[static_cast<std::size_t>(st.material)].name;
-    const std::string src_text = src_name.empty() ? "未命名材质" : src_name;
+    const pmx::Material& src_mt = model.materials[static_cast<std::size_t>(st.material)];
+    const std::string src_label =
+        pmx::name_with_zh(pmx::NameKind::Material, src_mt.name, src_mt.name_en);
+    const std::string src_text = src_label.empty() ? "未命名材质" : src_label;
 
     std::string note;
     bool can_move = false;
@@ -379,10 +390,12 @@ void panel_face(Viewer& v) {
             st.count == 1 ? "第 " + std::to_string(st.start + 1) + " 个面"
                           : "第 " + std::to_string(st.start + 1) + "–" +
                                 std::to_string(st.start + st.count) + " 个面";
-        const std::string& dst_name =
-            model.materials[static_cast<std::size_t>(st.dst)].name;
+        const std::string& dst_name = model.materials[static_cast<std::size_t>(st.dst)].name;
+        const std::string dst_label = pmx::name_with_zh(
+            pmx::NameKind::Material, dst_name,
+            model.materials[static_cast<std::size_t>(st.dst)].name_en);
         note = src_text + "：" + span + " → " +
-               (dst_name.empty() ? std::string("未命名材质") : dst_name);
+               (dst_label.empty() ? std::string("未命名材质") : dst_label);
         can_move = true;
     }
     ImGui::TextWrapped("%s", note.c_str());

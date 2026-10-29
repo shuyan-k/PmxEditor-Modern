@@ -76,11 +76,11 @@ void ensure_filter(const pmx::Model& model, VertexPanelState& st) {
 
 std::string bone_label(const pmx::Model& model, int index) {
     if (index < 0 || index >= static_cast<int>(model.bones.size())) return "（无）";
-    char buf[192];
-    const std::string& name = model.bones[static_cast<std::size_t>(index)].name;
-    std::snprintf(buf, sizeof(buf), "%03d · %s", index,
-                  name.empty() ? "未命名" : name.c_str());
-    return buf;
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%03d · ", index);
+    const pmx::Bone& bone = model.bones[static_cast<std::size_t>(index)];
+    const std::string label = pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
+    return std::string(buf) + (label.empty() ? "未命名" : label);
 }
 
 // 找出顶点所属的第一个面及材质；结果按「顶点号 + indices/材料数量」缓存。
@@ -108,15 +108,16 @@ void update_membership(const pmx::Model& model, VertexPanelState& st, int vi) {
                 }
                 acc += cnt;
             }
-            char buf[256];
             if (mat >= 0) {
-                const std::string& nm = model.materials[static_cast<std::size_t>(mat)].name;
-                std::snprintf(buf, sizeof(buf), "材质 %d「%s」· 面 %d", mat,
-                              nm.empty() ? "未命名材质" : nm.c_str(), face);
+                const pmx::Material& mt = model.materials[static_cast<std::size_t>(mat)];
+                std::string label =
+                    pmx::name_with_zh(pmx::NameKind::Material, mt.name, mt.name_en);
+                if (label.empty()) label = "未命名材质";
+                st.member = "材质 " + std::to_string(mat) + "「" + label + "」· 面 " +
+                            std::to_string(face);
             } else {
-                std::snprintf(buf, sizeof(buf), "面 %d（材质未定）", face);
+                st.member = "面 " + std::to_string(face) + "（材质未定）";
             }
-            st.member = buf;
             return;
         }
     }

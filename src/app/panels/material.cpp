@@ -130,6 +130,7 @@ void draw_material_detail(Viewer& v, int index) {
     ImGui::SeparatorText("基本");
     const std::string name_id = "material_name_" + std::to_string(index);
     pmxui::name_fields(v, mt.name, mt.name_en, name_id.c_str(), "material");
+    pmxui::zh_line(pmx::NameKind::Material, mt.name, mt.name_en);
     ImGui::TextDisabled("面数 %d", mt.face_count > 0 ? mt.face_count / 3 : 0);
 
     ImGui::SeparatorText("颜色");
@@ -267,14 +268,16 @@ void panel_material(Viewer& v) {
     ImGui::EndDisabled();
 
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##material_search", "搜索材质名 / 英文名", &filter);
+    ImGui::InputTextWithHint("##material_search", "搜索材质名 / 中文 / 英文名", &filter);
 
     const int material_count = static_cast<int>(v.model.materials.size());
     int shown_rows = 0;
     ImGui::BeginChild("##material_list", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
     for (int i = 0; i < material_count; ++i) {
         const pmx::Material& mt = v.model.materials[static_cast<std::size_t>(i)];
-        if (!pmxui::match_filter(filter, mt.name, mt.name_en)) continue;
+        if (!pmxui::match_filter(filter, mt.name, mt.name_en,
+                                 pmx::name_zh(pmx::NameKind::Material, mt.name, mt.name_en)))
+            continue;
         ++shown_rows;
 
         ImGui::PushID(i);
@@ -284,7 +287,9 @@ void panel_material(Viewer& v) {
                            ImVec2(pmxui::scale(16.0f), pmxui::scale(16.0f)));
         ImGui::SameLine();
 
-        std::string row = mt.name.empty() ? std::string("未命名材质") : mt.name;
+        std::string row =
+            pmx::name_with_zh(pmx::NameKind::Material, mt.name, mt.name_en);
+        if (row.empty()) row = "未命名材质";
         row += "  ·  ";
         row += std::to_string(mt.face_count > 0 ? mt.face_count / 3 : 0);
         row += " 面";

@@ -80,7 +80,8 @@ std::string morph_list_text(const pmx::Morph& morph, int index) {
     char prefix[24];
     std::snprintf(prefix, sizeof prefix, "%03d · ", index);
     std::string text(prefix);
-    text += morph.name.empty() ? "未命名形态" : morph.name;
+    const std::string label = pmx::name_with_zh(pmx::NameKind::Morph, morph.name, morph.name_en);
+    text += label.empty() ? "未命名形态" : label;
     text += " · ";
     text += morph_panel_name(morph.panel);
     text += " · ";
@@ -612,7 +613,7 @@ void panel_morph(Viewer& v) {
 
     // ------------------------------------------------------------ 搜索 + 列表
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##morph_search", "搜索形态名 / 英文名", &filter);
+    ImGui::InputTextWithHint("##morph_search", "搜索形态名 / 中文 / 英文名", &filter);
 
     morph_count = static_cast<int>(v.model.morphs.size());
     ImGui::BeginChild("##morph_list", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
@@ -621,7 +622,10 @@ void panel_morph(Viewer& v) {
         visible.reserve(v.model.morphs.size());
         for (int i = 0; i < morph_count; ++i) {
             const pmx::Morph& morph = v.model.morphs[static_cast<std::size_t>(i)];
-            if (pmxui::match_filter(filter, morph.name, morph.name_en)) visible.push_back(i);
+            if (pmxui::match_filter(filter, morph.name, morph.name_en,
+                                    pmx::name_zh(pmx::NameKind::Morph, morph.name,
+                                                 morph.name_en)))
+                visible.push_back(i);
         }
 
         if (morph_count == 0) {
@@ -667,6 +671,7 @@ void panel_morph(Viewer& v) {
         // -------------------------------------------------------- 基本
         ImGui::SeparatorText("基本");
         pmxui::name_fields(v, mo.name, mo.name_en, "morph", "morph");
+        pmxui::zh_line(pmx::NameKind::Morph, mo.name, mo.name_en);
 
         if (panel_owner != idx) {
             panel_owner = idx;

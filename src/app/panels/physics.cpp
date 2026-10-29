@@ -30,7 +30,8 @@ std::string rigid_item_text(const pmx::Model& model, int i) {
     std::snprintf(prefix, sizeof prefix, "%02d · ", i);
     std::string text(prefix);
     const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(i)];
-    text += rb.name.empty() ? "未命名刚体" : rb.name.c_str();
+    const std::string label = pmx::name_with_zh(pmx::NameKind::Rigid, rb.name, rb.name_en);
+    text += label.empty() ? "未命名刚体" : label;
     return text;
 }
 
@@ -39,7 +40,8 @@ std::string joint_item_text(const pmx::Model& model, int i) {
     std::snprintf(prefix, sizeof prefix, "%02d · ", i);
     std::string text(prefix);
     const pmx::Joint& jt = model.joints[static_cast<std::size_t>(i)];
-    text += jt.name.empty() ? "未命名关节" : jt.name.c_str();
+    const std::string label = pmx::name_with_zh(pmx::NameKind::Joint, jt.name, jt.name_en);
+    text += label.empty() ? "未命名关节" : label;
     return text;
 }
 
@@ -49,7 +51,9 @@ bool bone_combo(const char* label, int& value, const pmx::Model& model, const ch
     std::string preview;
     if (value >= 0 && value < n) {
         const pmx::Bone& bone = model.bones[static_cast<std::size_t>(value)];
-        preview = std::to_string(value) + " · " + (bone.name.empty() ? "未命名" : bone.name);
+        std::string label = pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
+        if (label.empty()) label = "未命名";
+        preview = std::to_string(value) + " · " + label;
     } else {
         preview = none_text;
     }
@@ -62,10 +66,10 @@ bool bone_combo(const char* label, int& value, const pmx::Model& model, const ch
             changed = true;
         }
         for (int i = 0; i < n; ++i) {
-            std::string text = std::to_string(i) + " · " +
-                               (model.bones[static_cast<std::size_t>(i)].name.empty()
-                                    ? "未命名"
-                                    : model.bones[static_cast<std::size_t>(i)].name);
+            const pmx::Bone& bone = model.bones[static_cast<std::size_t>(i)];
+            std::string label = pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
+            if (label.empty()) label = "未命名";
+            std::string text = std::to_string(i) + " · " + label;
             text += "##pb" + std::to_string(i);
             if (ImGui::Selectable(text.c_str(), value == i)) {
                 value = i;
@@ -153,6 +157,7 @@ void draw_rigid_detail(Viewer& v, int index) {
 
     ImGui::SeparatorText("基本");
     pmxui::name_fields(v, rb.name, rb.name_en, "rb", "physics", "重命名刚体");
+    pmxui::zh_line(pmx::NameKind::Rigid, rb.name, rb.name_en);
 
     {
         int bone = rb.bone;
@@ -230,6 +235,7 @@ void draw_joint_detail(Viewer& v, int index) {
 
     ImGui::SeparatorText("基本");
     pmxui::name_fields(v, jt.name, jt.name_en, "jt", "physics", "重命名关节");
+    pmxui::zh_line(pmx::NameKind::Joint, jt.name, jt.name_en);
 
     {
         int type = joint_type_index(jt);
@@ -387,7 +393,8 @@ void panel_physics(Viewer& v) {
     // ------------------------------------------------------------ 搜索 + 列表
     static char filter[128] = "";
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##physics_search", "搜索名称 / 关联骨骼", filter, sizeof filter);
+    ImGui::InputTextWithHint("##physics_search", "搜索名称 / 中文 / 关联骨骼", filter,
+                             sizeof filter);
 
     ImGui::BeginChild("##physics_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     std::vector<int> visible;
@@ -395,16 +402,23 @@ void panel_physics(Viewer& v) {
     if (kind == 0) {
         for (int i = 0; i < rigid_count; ++i) {
             const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(i)];
-            bool match = pmxui::match_filter(filter, rb.name, rb.name_en);
-            if (!match && rb.bone >= 0 && rb.bone < static_cast<int>(model.bones.size()))
+            bool match = pmxui::match_filter(
+                filter, rb.name, rb.name_en,
+                pmx::name_zh(pmx::NameKind::Rigid, rb.name, rb.name_en));
+            if (!match && rb.bone >= 0 && rb.bone < static_cast<int>(model.bones.size())) {
+                const pmx::Bone& bone = model.bones[static_cast<std::size_t>(rb.bone)];
                 match = pmxui::match_filter(
-                    filter, model.bones[static_cast<std::size_t>(rb.bone)].name, std::string());
+                    filter, bone.name, bone.name_en,
+                    pmx::name_zh(pmx::NameKind::Bone, bone.name, bone.name_en));
+            }
             if (match) visible.push_back(i);
         }
     } else {
         for (int i = 0; i < joint_count; ++i) {
             const pmx::Joint& jt = model.joints[static_cast<std::size_t>(i)];
-            if (pmxui::match_filter(filter, jt.name, jt.name_en)) visible.push_back(i);
+            if (pmxui::match_filter(filter, jt.name, jt.name_en,
+                                    pmx::name_zh(pmx::NameKind::Joint, jt.name, jt.name_en)))
+                visible.push_back(i);
         }
     }
 
@@ -427,7 +441,9 @@ void panel_physics(Viewer& v) {
                     if (rb.bone >= 0 && rb.bone < static_cast<int>(model.bones.size())) {
                         const pmx::Bone& bone =
                             model.bones[static_cast<std::size_t>(rb.bone)];
-                        row += bone.name.empty() ? "未命名" : bone.name.c_str();
+                        std::string label =
+                            pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
+                        row += label.empty() ? "未命名" : label;
                     } else {
                         row += "未关联";
                     }

@@ -10,6 +10,7 @@
 
 #include "app/ui_scale.hpp"
 #include "app/viewer.hpp"
+#include "core/name_zh.hpp"
 
 namespace pmxui {
 
@@ -19,11 +20,18 @@ inline std::string lower_copy(std::string s) {
     return s;
 }
 
+// 搜索同时匹配原名、英文对照名与中文译名。
 inline bool match_filter(const std::string& filter, const std::string& name,
-                         const std::string& name_en) {
+                         const std::string& name_en, const std::string& zh = {}) {
     if (filter.empty()) return true;
     const std::string needle = lower_copy(filter);
-    return lower_copy(name + " " + name_en).find(needle) != std::string::npos;
+    return lower_copy(name + " " + name_en + " " + zh).find(needle) != std::string::npos;
+}
+
+// 详情区的中文对照；未收录时不显示。
+inline void zh_line(pmx::NameKind kind, const std::string& name, const std::string& name_en) {
+    const std::string zh = pmx::name_zh(kind, name, name_en);
+    if (!zh.empty() && zh != name) ImGui::TextDisabled("中文：%s", zh.c_str());
 }
 
 // 名称 / 英文名输入框。返回是否有改动。

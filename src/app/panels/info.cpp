@@ -131,6 +131,7 @@ void panel_info(Viewer& v) {
     // ------------------------------------------------------------ 名称与描述
     ImGui::SeparatorText("显示名称");
     pmxui::name_fields(v, model.name, model.name_en, "info", "model");
+    pmxui::zh_line(pmx::NameKind::Model, model.name, model.name_en);
 
     ImGui::SeparatorText("描述");
     {

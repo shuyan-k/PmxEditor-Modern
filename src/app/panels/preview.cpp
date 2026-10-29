@@ -95,7 +95,8 @@ void panel_preview_morph(Viewer& v) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(
         std::max(pmxui::scale(80.0f), ImGui::GetContentRegionAvail().x - pmxui::scale(92.0f)));
-    ImGui::InputTextWithHint("##morph_filter", "搜索形态名…", filter, IM_ARRAYSIZE(filter));
+    ImGui::InputTextWithHint("##morph_filter", "搜索形态名 / 中文 / 英文名…", filter,
+                             IM_ARRAYSIZE(filter));
     ImGui::SameLine();
     if (ImGui::Button("全部复位")) {
         std::fill(v.morph_values.begin(), v.morph_values.end(), 0.0f);
@@ -108,16 +109,15 @@ void panel_preview_morph(Viewer& v) {
     for (int i = 0; i < count; ++i) {
         const pmx::Morph& mo = v.model.morphs[static_cast<std::size_t>(i)];
         if (!morph_matches_panel(mo, panel)) continue;
-        if (filter[0] != '\0') {
-            // 名称同时匹配日文原名与英文名，大小写不敏感。
-            const std::string needle = filter;
-            const std::string hay = mo.name + " " + mo.name_en;
-            if (hay.find(needle) == std::string::npos) continue;
-        }
+        // 名称同时匹配日文原名、英文对照名与中文译名，大小写不敏感。
+        if (!pmxui::match_filter(filter, mo.name, mo.name_en,
+                                 pmx::name_zh(pmx::NameKind::Morph, mo.name, mo.name_en)))
+            continue;
         ImGui::PushID(i);
         float percent = v.morph_values[static_cast<std::size_t>(i)] * 100.0f;
-        const std::string label =
-            (mo.name.empty() ? "形态 " + std::to_string(i) : mo.name) + "##m";
+        std::string display = pmx::name_with_zh(pmx::NameKind::Morph, mo.name, mo.name_en);
+        if (display.empty()) display = "形态 " + std::to_string(i);
+        const std::string label = display + "##m";
         if (ImGui::SliderFloat(label.c_str(), &percent, 0.0f, 100.0f, "%.0f%%")) {
             v.morph_values[static_cast<std::size_t>(i)] = percent / 100.0f;
             commit_morph_preview(v);

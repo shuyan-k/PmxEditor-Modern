@@ -16,7 +16,9 @@ std::string bone_entry_text(const pmx::Model& model, int i) {
     char prefix[24];
     std::snprintf(prefix, sizeof prefix, "%03d · ", i);
     std::string text(prefix);
-    text += model.bones[i].name.empty() ? "未命名" : model.bones[i].name;
+    const std::string label =
+        pmx::name_with_zh(pmx::NameKind::Bone, model.bones[i].name, model.bones[i].name_en);
+    text += label.empty() ? "未命名" : label;
     return text;
 }
 
@@ -24,7 +26,9 @@ std::string morph_entry_text(const pmx::Model& model, int i) {
     char prefix[24];
     std::snprintf(prefix, sizeof prefix, "%03d · ", i);
     std::string text(prefix);
-    text += model.morphs[i].name.empty() ? "未命名" : model.morphs[i].name;
+    const std::string label =
+        pmx::name_with_zh(pmx::NameKind::Morph, model.morphs[i].name, model.morphs[i].name_en);
+    text += label.empty() ? "未命名" : label;
     return text;
 }
 
@@ -32,13 +36,19 @@ std::string morph_entry_text(const pmx::Model& model, int i) {
 std::string frame_item_text(const pmx::Model& model, const pmx::DisplayFrameItem& item) {
     if (item.type == 0) {
         std::string name = "?";
-        if (item.index >= 0 && item.index < static_cast<int>(model.bones.size()))
-            name = model.bones[item.index].name.empty() ? "未命名" : model.bones[item.index].name;
+        if (item.index >= 0 && item.index < static_cast<int>(model.bones.size())) {
+            const pmx::Bone& bone = model.bones[item.index];
+            name = pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
+            if (name.empty()) name = "未命名";
+        }
         return "骨骼 · " + name;
     }
     std::string name = "?";
-    if (item.index >= 0 && item.index < static_cast<int>(model.morphs.size()))
-        name = model.morphs[item.index].name.empty() ? "未命名" : model.morphs[item.index].name;
+    if (item.index >= 0 && item.index < static_cast<int>(model.morphs.size())) {
+        const pmx::Morph& morph = model.morphs[item.index];
+        name = pmx::name_with_zh(pmx::NameKind::Morph, morph.name, morph.name_en);
+        if (name.empty()) name = "未命名";
+    }
     return "形态 · " + name;
 }
 
@@ -102,14 +112,17 @@ void panel_frame(Viewer& v) {
     // ------------------------------------------------------------ 搜索 + 列表
     static char filter[128] = "";
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##frame_search", "搜索表示枠名", filter, sizeof filter);
+    ImGui::InputTextWithHint("##frame_search", "搜索表示枠名 / 中文", filter, sizeof filter);
 
     ImGui::BeginChild("##frame_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     std::vector<int> visible;
     visible.reserve(model.frames.size());
-    for (int i = 0; i < frame_count; ++i)
-        if (pmxui::match_filter(filter, model.frames[i].name, model.frames[i].name_en))
+    for (int i = 0; i < frame_count; ++i) {
+        const pmx::DisplayFrame& f = model.frames[i];
+        if (pmxui::match_filter(filter, f.name, f.name_en,
+                                pmx::name_zh(pmx::NameKind::Frame, f.name, f.name_en)))
             visible.push_back(i);
+    }
 
     if (visible.empty()) {
         ImGui::TextDisabled("没有匹配的表示枠");
@@ -152,6 +165,7 @@ void panel_frame(Viewer& v) {
     // ------------------------------------------------------------ 基本
     ImGui::SeparatorText("基本");
     pmxui::name_fields(v, frame.name, frame.name_en, "frame", "model", "重命名表示枠");
+    pmxui::zh_line(pmx::NameKind::Frame, frame.name, frame.name_en);
     {
         bool special = frame.special != 0;
         if (ImGui::Checkbox("特殊枠", &special))

@@ -25,7 +25,9 @@ std::string bone_item_text(const pmx::Model& model, int i) {
     char prefix[24];
     std::snprintf(prefix, sizeof prefix, "%03d · ", i);
     std::string text(prefix);
-    text += model.bones[i].name.empty() ? "未命名" : model.bones[i].name;
+    const std::string label = pmx::name_with_zh(pmx::NameKind::Bone, model.bones[i].name,
+                                                model.bones[i].name_en);
+    text += label.empty() ? "未命名" : label;
     return text;
 }
 
@@ -148,14 +150,18 @@ void panel_bone(Viewer& v) {
     // ------------------------------------------------------------ 搜索 + 列表
     static char filter[128] = "";
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##bone_search", "搜索骨骼名 / 英文名", filter, sizeof filter);
+    ImGui::InputTextWithHint("##bone_search", "搜索骨骼名 / 中文 / 英文名", filter,
+                             sizeof filter);
 
     ImGui::BeginChild("##bone_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
     std::vector<int> visible;
     visible.reserve(model.bones.size());
-    for (int i = 0; i < bone_count; ++i)
-        if (pmxui::match_filter(filter, model.bones[i].name, model.bones[i].name_en))
+    for (int i = 0; i < bone_count; ++i) {
+        const pmx::Bone& b = model.bones[i];
+        if (pmxui::match_filter(filter, b.name, b.name_en,
+                                pmx::name_zh(pmx::NameKind::Bone, b.name, b.name_en)))
             visible.push_back(i);
+    }
 
     if (visible.empty()) {
         ImGui::TextDisabled("没有匹配的骨骼");
@@ -198,6 +204,7 @@ void panel_bone(Viewer& v) {
     // ------------------------------------------------------------ 基本
     ImGui::SeparatorText("基本");
     pmxui::name_fields(v, b.name, b.name_en, "bone", "bone", "重命名骨骼");
+    pmxui::zh_line(pmx::NameKind::Bone, b.name, b.name_en);
 
     {
         float pos[3] = {b.pos.x, b.pos.y, b.pos.z};
@@ -442,8 +449,11 @@ void panel_bone(Viewer& v) {
         for (int i = 0; i < link_count; ++i) {
             const pmx::IKLink& link = b.ik->links[i];
             std::string name = "?";
-            if (link.bone >= 0 && link.bone < bone_count)
-                name = model.bones[link.bone].name.empty() ? "未命名" : model.bones[link.bone].name;
+            if (link.bone >= 0 && link.bone < bone_count) {
+                const pmx::Bone& lb = model.bones[link.bone];
+                name = pmx::name_with_zh(pmx::NameKind::Bone, lb.name, lb.name_en);
+                if (name.empty()) name = "未命名";
+            }
             char range[160];
             if (link.limited) {
                 std::snprintf(range, sizeof range,
