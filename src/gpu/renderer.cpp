@@ -1019,7 +1019,9 @@ void SceneRenderer::rebuild_bone_overlay(const Model& model, Pose& pose,
             const Mat4& T = W[static_cast<std::size_t>(b.tail_bone)];
             tail = {T.at(0, 3), T.at(1, 3), T.at(2, 3)};
         } else {
-            tail = head + b.tail_offset;
+            // 尾端偏移是骨骼局部方向：必须跟着骨骼自身旋转，否则摆姿后骨骼线仍指向
+            // 静止方向，与蒙皮后的网格脱节（拾取也会跟着错位）。
+            tail = head + transform_dir(M, b.tail_offset);
         }
         Vec3 dir = tail - head;
         float len = length(dir);
@@ -1452,7 +1454,7 @@ void SceneRenderer::collect_picks(const Model& model, Pose& pose, Physics* physi
             const Mat4& T = W[static_cast<std::size_t>(b.tail_bone)];
             tail = {T.at(0, 3), T.at(1, 3), T.at(2, 3)};
         } else {
-            tail = head + b.tail_offset;
+            tail = head + transform_dir(M, b.tail_offset);
         }
         if (length(tail - head) < 1e-4f) tail = head + Vec3(0.0f, 0.3f, 0.0f);
         float hx, hy, tx, ty;
