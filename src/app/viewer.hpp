@@ -104,6 +104,12 @@ struct Viewer {
     bool preview_mode = false;
     void set_preview_mode(bool preview);
 
+    // 关闭请求（窗口 X / Alt+F4 / 菜单「退出」）：有未保存修改时先弹确认框。
+    bool close_requested = false;
+    // 保存当前模型；路径为空或 always_ask 时弹文件对话框。取消 / 失败返回 false。
+    bool save_model_dialog(bool always_ask);
+    void draw_close_confirm();
+
     double fps_time = 0.0;
     float fps = 0.0f;
     int frames = 0;
