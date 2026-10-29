@@ -162,14 +162,13 @@ void Viewer::set_preview_mode(bool preview) {
     if (preview_mode == preview) return;
     preview_mode = preview;
     if (preview_mode) {
-        // 进入预览：清掉编辑态选择与拖动，避免残留高亮 / 撤销记录。
+        // 进入预览：只清掉拖动状态，选择保留，切过来就能接着摆姿。
         drag_mode = DRAG_NONE;
         drag_bone = -1;
         pick_choices.clear();
-        select(SelKind::None, -1);
-        status = "已切换到预览模式：模型只读，可控制视角 / 物理 / 动作 / 形态";
+        status = "已切换到预览模式：可摆骨骼，模型数据只读";
     } else {
-        status = "已切换到编辑模式";
+        status = "已切换到编辑模式：只改数据，摆姿请用预览模式";
     }
 }
 
@@ -261,9 +260,13 @@ void Viewer::apply_manual_ik_mutes() {
 }
 
 void Viewer::undo() {
-    if (preview_mode) return;
     if (undo_stack.empty() || !pose) {
         status = "没有可撤销的操作";
+        return;
+    }
+    // 预览模式只做姿态试验：栈顶若是数据快照，拒绝执行（切回编辑模式再撤）。
+    if (preview_mode && undo_stack.back().has_model) {
+        status = "预览模式只能撤销摆姿操作；撤销数据修改请切回编辑模式";
         return;
     }
     last_coalesce.clear();
@@ -298,9 +301,12 @@ void Viewer::undo() {
 }
 
 void Viewer::redo() {
-    if (preview_mode) return;
     if (redo_stack.empty() || !pose) {
         status = "没有可重做的操作";
+        return;
+    }
+    if (preview_mode && redo_stack.back().has_model) {
+        status = "预览模式只能重做摆姿操作；重做数据修改请切回编辑模式";
         return;
     }
     last_coalesce.clear();

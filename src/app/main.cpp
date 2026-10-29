@@ -244,7 +244,9 @@ void Viewer::apply_pick(const pmx::Selection& hit) {
     if (hit.kind == pmx::Selection::BONE) {
         select(SelKind::Bone, hit.index);
         reveal_tab = "骨骼";
-        status = "已选中「" + bone_name(hit.index) + "」：左键拖动位移 · 右键拖动旋转";
+        status = preview_mode
+                     ? "已选中「" + bone_name(hit.index) + "」：左键拖动位移 · 右键拖动旋转"
+                     : "已选中「" + bone_name(hit.index) + "」：摆姿请切到预览模式（Ctrl+M）";
     } else if (hit.kind == pmx::Selection::RIGID) {
         select(SelKind::Rigid, hit.index);
         reveal_tab = "物理";
@@ -380,13 +382,14 @@ void Viewer::handle_shortcuts() {
         physics_enabled = !physics_enabled;
         reset_physics();
     }
-    // 预览模式模型只读：撤销 / 重做 / 保存都不可用（载入模型仍然允许）。
+    // 撤销 / 重做两种模式都可用：预览模式只允许撤销姿态条目，数据快照会被 undo() 拦下。
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (io.KeyShift) redo();
+        else undo();
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
+    // 预览模式模型只读：保存不可用（载入模型仍然允许）。
     if (!preview_mode) {
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-            if (io.KeyShift) redo();
-            else undo();
-        }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) redo();
         const bool ctrl_s = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false);
         if (ctrl_s && !model_path.empty() && !io.KeyShift) {
             std::string err;
@@ -427,59 +430,65 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
     // 双击帧同时会触发 IsMouseClicked：先判双击，避免多压一条空撤销记录。
     const bool double_click = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 
-    if (preview_mode) {
-        // 预览模式不挑骨骼、不改姿态，只做视角操作。
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-            ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
-            drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) drag_mode = DRAG_PAN;
-    } else {
-        // ---- 按下：已选中的骨骼才可拖动，否则只操作视角
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !double_click) {
-            const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
-            if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
-                selection.index == hit.index && pose && !bone_drag_block(hit.index, true)[0]) {
-                drag_mode = DRAG_MOVE;  // 左键位移（含 IK 控制器）
-                drag_bone = hit.index;
-                drag_moved = false;     // 撤销记录 / 取消动作都推迟到真正产生位移
-            } else {
-                if (hit.kind == pmx::Selection::BONE)
-                    status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
-                drag_mode = DRAG_ORBIT;
-            }
-        }
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-            const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
-            if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
-                selection.index == hit.index && pose && !bone_drag_block(hit.index, false)[0]) {
-                drag_mode = DRAG_ROTATE;  // 右键旋转
-                drag_bone = hit.index;
-                drag_moved = false;
-            } else {
-                if (hit.kind == pmx::Selection::BONE)
-                    status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
-                drag_mode = DRAG_PAN;
-            }
-        }
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
-            drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
+    // PmxEditor 把「改数据」与「试姿态」分开：预览模式相当于 TransformView（负责摆姿），
+    // 编辑模式相当于 PmxView（只改数据，不做临时变换）。因此拖动骨骼只在预览模式生效。
+    const bool can_pose = preview_mode;
 
-        // ---- 双击选中：落点有多个可选中对象时，在鼠标旁弹候选框由用户指定。
-        if (double_click) {
-            drag_mode = DRAG_NONE;
-            drag_bone = -1;
-            const std::vector<pmx::Selection> hits =
-                pick_candidates_at(mx, my, fb_w, fb_h, pmx::PICK_ALL);
-            pick_choices.clear();
-            if (hits.size() > 1) {
-                pick_choices = hits;
-                pick_choice_pos[0] = io.MousePos.x;
-                pick_choice_pos[1] = io.MousePos.y;
-                pick_choice_frame = ImGui::GetFrameCount();
-                status = "落点有 " + std::to_string(hits.size()) + " 个可选中对象：请在候选框中选择";
-            } else {
-                apply_pick(hits.empty() ? pmx::Selection{} : hits.front());
-            }
+    // ---- 按下：已选中的骨骼才可拖动，否则只操作视角
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !double_click) {
+        const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
+        if (can_pose && hit.kind == pmx::Selection::BONE &&
+            selection.kind == pmx::Selection::BONE && selection.index == hit.index && pose &&
+            !bone_drag_block(hit.index, true)[0]) {
+            drag_mode = DRAG_MOVE;  // 左键位移（含 IK 控制器）
+            drag_bone = hit.index;
+            drag_moved = false;     // 撤销记录 / 取消动作都推迟到真正产生位移
+        } else {
+            if (hit.kind == pmx::Selection::BONE && !can_pose)
+                status = "编辑模式只改数据；摆骨骼请切到预览模式（Ctrl+M）";
+            else if (hit.kind == pmx::Selection::BONE &&
+                     !(selection.kind == pmx::Selection::BONE &&
+                       selection.index == hit.index))
+                status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
+            drag_mode = DRAG_ORBIT;
+        }
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
+        if (can_pose && hit.kind == pmx::Selection::BONE &&
+            selection.kind == pmx::Selection::BONE && selection.index == hit.index && pose &&
+            !bone_drag_block(hit.index, false)[0]) {
+            drag_mode = DRAG_ROTATE;  // 右键旋转
+            drag_bone = hit.index;
+            drag_moved = false;
+        } else {
+            if (hit.kind == pmx::Selection::BONE && !can_pose)
+                status = "编辑模式只改数据；摆骨骼请切到预览模式（Ctrl+M）";
+            else if (hit.kind == pmx::Selection::BONE &&
+                     !(selection.kind == pmx::Selection::BONE &&
+                       selection.index == hit.index))
+                status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
+            drag_mode = DRAG_PAN;
+        }
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+        drag_mode = io.KeyShift ? DRAG_PAN : DRAG_ORBIT;
+
+    // ---- 双击选中：落点有多个可选中对象时，在鼠标旁弹候选框由用户指定。
+    if (double_click) {
+        drag_mode = DRAG_NONE;
+        drag_bone = -1;
+        const std::vector<pmx::Selection> hits =
+            pick_candidates_at(mx, my, fb_w, fb_h, pmx::PICK_ALL);
+        pick_choices.clear();
+        if (hits.size() > 1) {
+            pick_choices = hits;
+            pick_choice_pos[0] = io.MousePos.x;
+            pick_choice_pos[1] = io.MousePos.y;
+            pick_choice_frame = ImGui::GetFrameCount();
+            status = "落点有 " + std::to_string(hits.size()) + " 个可选中对象：请在候选框中选择";
+        } else {
+            apply_pick(hits.empty() ? pmx::Selection{} : hits.front());
         }
     }
 
@@ -860,28 +869,29 @@ void Viewer::draw_ui() {
 
     ImGui::SameLine();
     if (preview_mode) {
-        ImGui::TextDisabled("模型只读（Ctrl+M 返回编辑模式）");
+        ImGui::TextDisabled("可摆姿 · 数据只读（Ctrl+M 回编辑）");
     } else {
         ImGui::BeginDisabled(pose == nullptr);
         if (ImGui::Button("保存")) save();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("保存到当前文件（Ctrl+S）");
         ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!can_undo());
-        if (ImGui::Button("撤销")) undo();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_undo())
-            ImGui::SetTooltip("撤销：%s", undo_label().c_str());
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!can_redo());
-        if (ImGui::Button("重做")) redo();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_redo())
-            ImGui::SetTooltip("重做：%s", redo_label().c_str());
-        ImGui::EndDisabled();
     }
+
+    // 撤销 / 重做两种模式都显示：预览模式只允许撤销摆姿条目，数据快照会被拦下。
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!can_undo());
+    if (ImGui::Button("撤销")) undo();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_undo())
+        ImGui::SetTooltip("撤销：%s", undo_label().c_str());
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!can_redo());
+    if (ImGui::Button("重做")) redo();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && can_redo())
+        ImGui::SetTooltip("重做：%s", redo_label().c_str());
+    ImGui::EndDisabled();
 
     if (!pose) {
         ImGui::Spacing();
