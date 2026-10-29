@@ -33,7 +33,8 @@ std::string rigid_name_text(const pmx::Model& model, int i) {
     std::snprintf(prefix, sizeof prefix, "%02d · ", i);
     std::string text(prefix);
     const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(i)];
-    text += rb.name.empty() ? "未命名刚体" : rb.name.c_str();
+    const std::string label = pmx::name_with_zh(pmx::NameKind::Rigid, rb.name, rb.name_en);
+    text += label.empty() ? "未命名刚体" : label;
     return text;
 }
 
@@ -61,7 +62,9 @@ bool material_combo(const char* label, int& value, const pmx::Model& model) {
             std::snprintf(prefix, sizeof prefix, "%02d · ", i);
             std::string text(prefix);
             const pmx::Material& mt = model.materials[static_cast<std::size_t>(i)];
-            text += mt.name.empty() ? "未命名材质" : mt.name.c_str();
+            const std::string label =
+                pmx::name_with_zh(pmx::NameKind::Material, mt.name, mt.name_en);
+            text += label.empty() ? "未命名材质" : label;
             text += "##pm" + std::to_string(i);
             if (ImGui::Selectable(text.c_str(), value == i)) {
                 value = i;
@@ -204,6 +207,7 @@ void draw_soft_detail(Viewer& v, int index) {
 
     ImGui::SeparatorText("基本");
     pmxui::name_fields(v, sb.name, sb.name_en, "soft", "soft", "重命名柔体");
+    pmxui::zh_line(pmx::NameKind::Soft, sb.name, sb.name_en);
 
     {
         int shape = std::clamp(static_cast<int>(sb.shape), 0, 1);
@@ -473,7 +477,9 @@ void panel_soft(Viewer& v) {
                 char head[16];
                 std::snprintf(head, sizeof head, "%02d · ", i);
                 std::string row = head;
-                row += s.name.empty() ? "未命名柔体" : s.name.c_str();
+                const std::string label =
+                    pmx::name_with_zh(pmx::NameKind::Soft, s.name, s.name_en);
+                row += label.empty() ? "未命名柔体" : label;
                 row += "   · 材质 " + std::to_string(s.material) + " · 组 " +
                        std::to_string(static_cast<int>(s.group));
                 char mass[48];

@@ -42,6 +42,7 @@
 #include "app/viewer.hpp"
 #include "core/fs.hpp"
 #include "core/morph.hpp"
+#include "core/name_zh.hpp"
 #include "core/pmx.hpp"
 #include "core/pose.hpp"
 #include "core/utf8_args.hpp"
@@ -250,11 +251,15 @@ void Viewer::apply_pick(const pmx::Selection& hit) {
     } else if (hit.kind == pmx::Selection::RIGID) {
         select(SelKind::Rigid, hit.index);
         reveal_tab = "物理";
-        status = "已选中刚体「" + model.rigid[static_cast<std::size_t>(hit.index)].name + "」";
+        const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(hit.index)];
+        status = "已选中刚体「" +
+                 pmx::name_with_zh(pmx::NameKind::Rigid, rb.name, rb.name_en) + "」";
     } else {
         select(SelKind::Joint, hit.index);
         reveal_tab = "物理";
-        status = "已选中关节「" + model.joints[static_cast<std::size_t>(hit.index)].name + "」";
+        const pmx::Joint& jt = model.joints[static_cast<std::size_t>(hit.index)];
+        status = "已选中关节「" +
+                 pmx::name_with_zh(pmx::NameKind::Joint, jt.name, jt.name_en) + "」";
     }
     // 切面板要等下一帧生效，保持两帧让 SetSelected 与滚动都落地。
     reveal_frames = 2;
@@ -272,10 +277,14 @@ void Viewer::draw_pick_choices() {
             return "骨骼  " + (name.empty() ? "#" + std::to_string(c.index) : name);
         }
         if (c.kind == pmx::Selection::RIGID) {
-            const std::string& name = model.rigid[static_cast<std::size_t>(c.index)].name;
+            const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(c.index)];
+            const std::string name =
+                pmx::name_with_zh(pmx::NameKind::Rigid, rb.name, rb.name_en);
             return "刚体  " + (name.empty() ? "#" + std::to_string(c.index) : name);
         }
-        const std::string& name = model.joints[static_cast<std::size_t>(c.index)].name;
+        const pmx::Joint& jt = model.joints[static_cast<std::size_t>(c.index)];
+        const std::string name =
+            pmx::name_with_zh(pmx::NameKind::Joint, jt.name, jt.name_en);
         return "关节  " + (name.empty() ? "#" + std::to_string(c.index) : name);
     };
 
@@ -323,7 +332,8 @@ const char* Viewer::bone_drag_block(int index, bool move) const {
 
 std::string Viewer::bone_name(int index) const {
     if (index < 0 || index >= static_cast<int>(model.bones.size())) return std::string();
-    return model.bones[static_cast<std::size_t>(index)].name;
+    const pmx::Bone& bone = model.bones[static_cast<std::size_t>(index)];
+    return pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
 }
 
 void Viewer::fit_camera() {

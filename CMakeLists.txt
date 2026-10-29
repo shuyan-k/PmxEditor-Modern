@@ -52,6 +52,7 @@ set(PMX_CORE_SOURCES
     src/core/vpd.cpp
     src/core/vmd.cpp
     src/core/utf8_args.cpp
+    src/core/name_zh.cpp
 )
 
 add_library(pmx_core STATIC ${PMX_CORE_SOURCES})
