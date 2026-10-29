@@ -269,6 +269,27 @@ bool Physics::build(const Model& model) {
         Vec3 min_loc = j.min_loc, max_loc = j.max_loc;
         Vec3 min_rot = j.min_rot, max_rot = j.max_rot;
         if (j.type == 0 || j.type == 1) {
+            // 「三轴角限位全为 0」是建模 / 转换工具留下的默认值，本意是「不限位」：
+            // Bullet 只在 lo > hi 时才把轴当作自由轴，lo == hi == 0 会被当成「锁定在
+            // 静止位」，于是袖 / 发这类几十节的长链被焊成一根刚性长棍，跟着肘部整体
+            // 翻转——抬手臂时整条袖子拱过头顶就是这个原因（复位物理只是按当前姿态
+            // 重摆刚体，链仍然焊着，所以照样飞上去）。
+            // 只放开三轴全零且没有角弹簧的关节：只锁一两轴的（膝 / 肘 / 裙撑）是真的
+            // 铰链，必须保持锁定。范围取 Bullet 欧拉角不会走到万向节奇异的区间
+            // （X / Z ±π，Y ±π/2）；写成 lo > hi 的「完全自由」会让长链在求解器里
+            // 失稳（实测整链飞到数千单位外）。
+            const bool zero_rot =
+                std::fabs(min_rot.x) <= 1e-6f && std::fabs(max_rot.x) <= 1e-6f &&
+                std::fabs(min_rot.y) <= 1e-6f && std::fabs(max_rot.y) <= 1e-6f &&
+                std::fabs(min_rot.z) <= 1e-6f && std::fabs(max_rot.z) <= 1e-6f;
+            const bool ang_spring = std::fabs(j.spring_rot.x) > 1e-6f ||
+                                    std::fabs(j.spring_rot.y) > 1e-6f ||
+                                    std::fabs(j.spring_rot.z) > 1e-6f;
+            if (zero_rot && !ang_spring) {
+                const float kPi = 3.14159265f;
+                min_rot = {-kPi, -kPi * 0.5f, -kPi};
+                max_rot = {kPi, kPi * 0.5f, kPi};
+            }
             settle_limits(min_loc, max_loc);
             settle_limits(min_rot, max_rot);
         }
