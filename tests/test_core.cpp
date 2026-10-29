@@ -155,6 +155,26 @@ void test_pose(const pmx::Model& model) {
         pose.world();
     }
 
+    // 旋转骨骼只改变末端朝向，骨骼自身的原点（head）必须保持不动。
+    // 这是手动摆姿的前提：local_matrix = T(rest_off + trans) * R，平移量由父级决定，
+    // 与自身的 R 无关。这里不调用 solve_ik，单独验证姿态求值的这一性质。
+    int rot_checked = 0;
+    for (int b = 0; b < pose.n && rot_checked < 8; ++b) {
+        pose.reset();
+        pose.world();
+        const pmx::Mat4 mb = pose.world()[static_cast<std::size_t>(b)];
+        const pmx::Vec3 head0{mb.at(0, 3), mb.at(1, 3), mb.at(2, 3)};
+        pose.rotate_world(b, pmx::Vec3{0.0f, 0.0f, 1.0f}, 0.4f);
+        const std::vector<pmx::Mat4> wa = pose.world();
+        const pmx::Vec3 head1{wa[static_cast<std::size_t>(b)].at(0, 3),
+                              wa[static_cast<std::size_t>(b)].at(1, 3),
+                              wa[static_cast<std::size_t>(b)].at(2, 3)};
+        check_near(length(head1 - head0), 0.0, 1e-5, "旋转后骨骼原点不动");
+        ++rot_checked;
+    }
+    pose.reset();
+    pose.world();
+
     // IK 收敛：链末端应贴近目标（若模型带 IK）
     int ik_count = 0;
     for (const pmx::Bone& b : model.bones)

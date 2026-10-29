@@ -11,11 +11,55 @@ namespace {
 
 constexpr std::size_t kUndoLimit = 12;
 constexpr std::size_t kPoseLimit = 12;
+// 整模型快照的内存预算（粗估）。高端模型动辄数百 MB / 份，只按条数限制会让
+// 撤销栈随模型规模线性膨胀；超预算时从最旧的整模型条目开始丢弃。
+constexpr std::size_t kUndoBytesBudget = 256ull * 1024ull * 1024ull;
+// 无论预算如何，至少保留这么多整模型条目，保证「撤一步 / 重做一步」可用。
+constexpr std::size_t kUndoModelKeep = 2;
 constexpr double kCoalesceSeconds = 0.9;
 
 double now_seconds() {
     using clock = std::chrono::steady_clock;
     return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
+}
+
+// 粗略估算一份模型快照占用的堆内存，用于撤销栈的字节预算。
+// 只统计大块（顶点 SoA / 索引 / 骨骼 / 形态 / 刚体）与字符串，误差不重要。
+std::size_t approx_model_bytes(const pmx::Model& m) {
+    const std::size_t add_uv = static_cast<std::size_t>(std::max(0, m.add_uv_count));
+    const std::size_t per_vertex =
+        sizeof(pmx::Vec3) * 2 + sizeof(pmx::Vec2) + sizeof(float) * 2 + add_uv * 4 * sizeof(float) +
+        sizeof(std::uint8_t) + sizeof(std::array<int, 4>) + sizeof(std::array<float, 4>) +
+        sizeof(std::array<float, 9>);
+    std::size_t total = sizeof(pmx::Model);
+    total += m.vertices.size() * per_vertex;
+    total += m.indices.size() * sizeof(std::uint32_t);
+    total += m.textures.size() * (sizeof(std::string) + 64);
+    total += m.bones.size() * sizeof(pmx::Bone);
+    total += m.materials.size() * sizeof(pmx::Material);
+    total += m.morphs.size() * sizeof(pmx::Morph);
+    total += m.frames.size() * sizeof(pmx::DisplayFrame);
+    total += m.rigid.size() * sizeof(pmx::RigidBody);
+    total += m.joints.size() * sizeof(pmx::Joint);
+    total += m.soft_bodies.size() * sizeof(pmx::SoftBody);
+    for (const auto& b : m.bones) total += b.name.size() + b.name_en.size();
+    for (const auto& mt : m.materials) total += mt.name.size() + mt.name_en.size() + mt.memo.size();
+    for (const auto& mo : m.morphs) {
+        total += mo.name.size() + mo.name_en.size();
+        total += mo.offsets.size() * sizeof(pmx::MorphOffset);
+    }
+    for (const auto& f : m.frames) {
+        total += f.name.size() + f.name_en.size();
+        total += f.items.size() * sizeof(pmx::DisplayFrameItem);
+    }
+    for (const auto& sb : m.soft_bodies) {
+        total += sb.name.size() + sb.name_en.size();
+        total += sb.anchors.size() * sizeof(pmx::SoftBodyAnchor);
+        total += sb.pins.size() * sizeof(int);
+    }
+    total += m.name.size() + m.name_en.size() + m.comment.size() + m.comment_en.size() +
+             m.path.size();
+    return total;
 }
 
 // 模型快照与姿态条目分开计数，互不挤占。
@@ -36,6 +80,24 @@ void trim_stack(std::vector<Viewer::UndoEntry>& stack) {
     };
     trim_kind(false, kPoseLimit);
     trim_kind(true, kUndoLimit);
+
+    // 再按内存预算裁剪：从最旧的整模型条目开始丢，至少留下 kUndoModelKeep 条。
+    std::size_t bytes = 0;
+    std::size_t models = 0;
+    for (const auto& e : stack) {
+        if (e.has_model) {
+            bytes += e.bytes;
+            ++models;
+        }
+    }
+    while (bytes > kUndoBytesBudget && models > kUndoModelKeep) {
+        auto it = std::find_if(stack.begin(), stack.end(),
+                               [](const Viewer::UndoEntry& e) { return e.has_model; });
+        if (it == stack.end()) break;
+        bytes -= it->bytes;
+        --models;
+        stack.erase(it);
+    }
 }
 
 }  // namespace
@@ -70,6 +132,7 @@ void Viewer::push_undo(const std::string& label, const std::string& coalesce) {
     entry.has_model = true;
     entry.model = model;
     entry.pose = capture_pose();
+    entry.bytes = approx_model_bytes(entry.model);
     undo_stack.push_back(std::move(entry));
     trim_stack(undo_stack);
     redo_stack.clear();
@@ -133,12 +196,68 @@ void Viewer::restore_pose(const PoseEntry& entry) {
     pose->base_trans = entry.base_trans;
     pose->ov_rot = entry.ov_rot;
     pose->ov_trans = entry.ov_trans;
+    pose->ik_enabled = entry.ik_enabled;
+    // 撤销 / 重做换回了另一份姿态，不再保留「手动取消动作 / 手动关闭 IK」的记录。
+    clear_manual_pose();
     morph_values = entry.values;
     morph_weights = entry.weights;
     morph_dirty = true;
     apply_morphs();
     pose->solve_ik();
     pose->world();
+}
+
+void Viewer::remember_manual_pose(int bone) {
+    if (!motion || !pose || bone < 0 || bone >= pose->n) return;
+    motion_muted_bones.insert(bone);
+    motion_muted_rot[bone] = pose->base_rot[static_cast<std::size_t>(bone)];
+    motion_muted_trans[bone] = pose->base_trans[static_cast<std::size_t>(bone)];
+}
+
+void Viewer::clear_manual_pose() {
+    motion_muted_bones.clear();
+    motion_muted_rot.clear();
+    motion_muted_trans.clear();
+    manual_ik_mutes.clear();
+}
+
+void Viewer::mute_conflicting_ik(int bone) {
+    if (!pose || bone < 0 || bone >= pose->n) return;
+    // CCD 只旋转链上的骨骼。旋转 b 本身不会移动 b 的原点（local_matrix = T*R），
+    // 只有当 IK 会去旋转 b 的**祖先**时才会把 b 的 head 带走，这类链才需要临时关闭。
+    std::unordered_set<int> ancestors;
+    for (int p = pose->parent[static_cast<std::size_t>(bone)]; p >= 0 && p < pose->n;
+         p = pose->parent[static_cast<std::size_t>(p)])
+        ancestors.insert(p);
+    // subtrees 含自身：控制器与 b 一起刚性移动时，整条链的结论不变，不用关闭。
+    const std::vector<int>& sub = pose->subtrees[static_cast<std::size_t>(bone)];
+    auto in_subtree = [&sub](int index) {
+        return index >= 0 && std::find(sub.begin(), sub.end(), index) != sub.end();
+    };
+    for (int i = 0; i < static_cast<int>(model.bones.size()); ++i) {
+        const pmx::Bone& owner = model.bones[static_cast<std::size_t>(i)];
+        if (!(owner.flags & pmx::BF_IK) || !owner.ik) continue;
+        bool affects = false;
+        for (const pmx::IKLink& link : owner.ik->links)
+            if (ancestors.count(link.bone)) {
+                affects = true;
+                break;
+            }
+        if (!affects) continue;
+        // 只有这次旋转会改变目标 / 控制器（从而让 IK 重解）时才需要关闭：
+        // 转目标骨本身或转目标骨下面的骨骼，IK 的结论不变，关掉反而破坏动作。
+        const bool target_moved =
+            owner.ik->target != bone && in_subtree(owner.ik->target);
+        const bool controller_moved = i != bone && in_subtree(i);
+        if (!target_moved && !controller_moved) continue;
+        pose->set_ik_enabled(i, false);
+        manual_ik_mutes.insert(i);
+    }
+}
+
+void Viewer::apply_manual_ik_mutes() {
+    if (!pose) return;
+    for (int b : manual_ik_mutes) pose->set_ik_enabled(b, false);
 }
 
 void Viewer::undo() {
@@ -166,6 +285,7 @@ void Viewer::undo() {
     cur.has_model = true;
     cur.model = model;
     cur.pose = capture_pose();
+    cur.bytes = approx_model_bytes(cur.model);
     redo_stack.push_back(std::move(cur));
     trim_stack(redo_stack);
 
@@ -202,6 +322,7 @@ void Viewer::redo() {
     cur.has_model = true;
     cur.model = model;
     cur.pose = capture_pose();
+    cur.bytes = approx_model_bytes(cur.model);
     undo_stack.push_back(std::move(cur));
     trim_stack(undo_stack);
 

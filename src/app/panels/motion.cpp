@@ -51,7 +51,7 @@ void panel_motion(Viewer& v) {
                         static_cast<int>(motion.bone_tracks.size()),
                         v.motion_binding.morph_matched,
                         static_cast<int>(motion.morph_tracks.size()));
-    ImGui::TextDisabled("播放中手动拖动骨骼会自动暂停动作。");
+    ImGui::TextDisabled("播放中手动拖动骨骼只取消该骨骼的动作，其余骨骼继续播放。");
 
     // ------------------------------------------------------------ 播放
     ImGui::SeparatorText("播放");
@@ -64,7 +64,7 @@ void panel_motion(Viewer& v) {
         }
         v.motion_playing = !v.motion_playing;
     }
-    ImGui::SetItemTooltip("播放中手动拖动骨骼会自动暂停动作");
+    ImGui::SetItemTooltip("播放中拖动骨骼只覆盖被拖骨骼，其余骨骼继续按动作播放");
     ImGui::SameLine();
     if (ImGui::Button("回到起点")) {
         v.motion_frame = 0.0f;

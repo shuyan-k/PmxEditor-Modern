@@ -1,8 +1,10 @@
 // OpenGL 4.6 渲染器：Compute Shader 蒙皮 + 材质着色 + 骨骼/刚体/关节叠加层。
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "core/math.hpp"
@@ -119,6 +121,9 @@ private:
 
     GpuModel model_;
     std::unordered_map<std::string, Texture> textures_;
+    // 按贴图索引缓存：解析路径 / 查表只在首次使用时做，绘制时 O(1) 取纹理。
+    std::vector<Texture> texture_by_index_;
+    std::vector<std::uint8_t> texture_index_ready_;
 
     OverlayMesh bone_mesh_;       // 每帧重建：八面体（顶点色）
     OverlayMesh rigid_box_;       // 模板：单位盒
@@ -158,6 +163,13 @@ private:
     std::vector<float> inst_data_;
     std::vector<float> bone_verts_;
     std::vector<float> line_verts_;
+    // 每帧复用的临时缓冲，避免在绘制循环里反复分配 / 释放。
+    std::vector<int> opaque_ranges_;
+    std::vector<int> alpha_ranges_;
+    std::vector<std::pair<Mat4, Vec4>> inst_boxes_;
+    std::vector<std::pair<Mat4, Vec4>> inst_spheres_;
+    std::vector<std::pair<Mat4, Vec4>> inst_cylinders_;
+    std::vector<std::pair<Mat4, Vec4>> inst_joints_;
 
     // 单次拾取的原始命中：对象 + 到鼠标的屏幕像素距离。
     struct PickHit {

@@ -628,6 +628,8 @@ void SceneRenderer::release_model() {
     for (auto& [name, tex] : textures_)
         if (tex.id) glDeleteTextures(1, &tex.id);
     textures_.clear();
+    texture_by_index_.clear();
+    texture_index_ready_.clear();
 }
 
 bool SceneRenderer::upload_model(const Model& model, std::string* error) {
@@ -768,6 +770,9 @@ bool SceneRenderer::upload_model(const Model& model, std::string* error) {
     skin_matrices_.assign(static_cast<std::size_t>(std::max(1, nb)) * 16, 0.0f);
     inst_data_.clear();
     textures_.clear();
+    // 贴图索引缓存随模型一起重建：每个索引只解析一次路径。
+    texture_by_index_.assign(model.textures.size(), Texture{});
+    texture_index_ready_.assign(model.textures.size(), 0);
     return true;
 }
 
@@ -891,9 +896,20 @@ void SceneRenderer::upload_cpu_skin(const Model& model, Pose& pose) {
 SceneRenderer::Texture& SceneRenderer::texture_for(const Model& model, int index) {
     static Texture missing;
     if (index < 0 || index >= static_cast<int>(model.textures.size())) return missing;
+    if (static_cast<std::size_t>(index) < texture_index_ready_.size() &&
+        texture_index_ready_[static_cast<std::size_t>(index)])
+        return texture_by_index_[static_cast<std::size_t>(index)];
     const std::string path = model.resolve_texture(index);
     auto it = textures_.find(path);
-    if (it != textures_.end()) return it->second;
+    if (it != textures_.end()) {
+        // 同一个文件被多个材质引用：复用已加载的纹理，只补一次索引缓存。
+        if (static_cast<std::size_t>(index) < texture_by_index_.size()) {
+            texture_by_index_[static_cast<std::size_t>(index)] = it->second;
+            texture_index_ready_[static_cast<std::size_t>(index)] = 1;
+            return texture_by_index_[static_cast<std::size_t>(index)];
+        }
+        return it->second;
+    }
     Texture tex;
     int w = 0, h = 0, comp = 0;
     stbi_set_flip_vertically_on_load(0);
@@ -924,6 +940,11 @@ SceneRenderer::Texture& SceneRenderer::texture_for(const Model& model, int index
         tex.valid = true;
     }
     auto res = textures_.emplace(path, tex);
+    if (static_cast<std::size_t>(index) < texture_by_index_.size()) {
+        texture_by_index_[static_cast<std::size_t>(index)] = res.first->second;
+        texture_index_ready_[static_cast<std::size_t>(index)] = 1;
+        return texture_by_index_[static_cast<std::size_t>(index)];
+    }
     return res.first->second;
 }
 
@@ -1056,7 +1077,15 @@ void SceneRenderer::build_instances(const Model& model, Pose& pose, Physics* phy
     const Vec4 joint_selected(0.31f, 0.62f, 1.0f, std::min(1.0f, settings.joint_alpha + 0.32f));
 
     using Item = std::pair<Mat4, Vec4>;
-    std::vector<Item> boxes, spheres, cylinders, joints;
+    // 复用成员缓冲：刚体/关节数量在编辑过程中基本稳定，避免每帧重新分配。
+    inst_boxes_.clear();
+    inst_spheres_.clear();
+    inst_cylinders_.clear();
+    inst_joints_.clear();
+    std::vector<Item>& boxes = inst_boxes_;
+    std::vector<Item>& spheres = inst_spheres_;
+    std::vector<Item>& cylinders = inst_cylinders_;
+    std::vector<Item>& joints = inst_joints_;
     auto scale_mat = [](float sx, float sy, float sz) {
         Mat4 s;
         s.m[0] = sx;
@@ -1195,7 +1224,11 @@ void SceneRenderer::render(const Model& model, Pose& pose, Physics* physics, con
         glBindVertexArray(model_.vao);
         glBindBuffer(glc::GL_ELEMENT_ARRAY_BUFFER, model_.ebo);
 
-        std::vector<int> opaque, alpha;
+        // 复用成员缓冲：每帧只 clear 不重新分配，材质数通常几十个。
+        opaque_ranges_.clear();
+        alpha_ranges_.clear();
+        std::vector<int>& opaque = opaque_ranges_;
+        std::vector<int>& alpha = alpha_ranges_;
         // PMX 面片在右手系视图中是顺时针朝外（MMD 用左手系），需与模板几何分开处理绕序。
         glFrontFace(glc::GL_CW);
         // 相机位置与视图矩阵是全局 uniform，逐材质只改材质参数。

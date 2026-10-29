@@ -156,6 +156,7 @@ bool Viewer::load_model(const std::string& path, std::string* err) {
     motion_playing = false;
     motion_dirty = false;
     vmd_path.clear();
+    clear_manual_pose();
     select(SelKind::None, -1);
     undo_stack.clear();
     redo_stack.clear();
@@ -340,6 +341,7 @@ Viewer::PoseEntry Viewer::capture_pose() const {
     e.base_trans = pose->base_trans;
     e.ov_rot = pose->ov_rot;
     e.ov_trans = pose->ov_trans;
+    e.ik_enabled = pose->ik_enabled;
     e.weights = morph_weights;
     e.values = morph_values;
     return e;
@@ -348,6 +350,7 @@ Viewer::PoseEntry Viewer::capture_pose() const {
 void Viewer::reset_pose() {
     if (!pose) return;
     push_pose_undo("重置姿态");
+    clear_manual_pose();
     pose->reset();
     pose->solve_ik();
     pose->world();
@@ -436,10 +439,9 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
             const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
             if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
                 selection.index == hit.index && pose && !bone_drag_block(hit.index, true)[0]) {
-                push_pose_undo("移动骨骼", "drag_bone");  // 撤销记录推迟到真正拖动前
                 drag_mode = DRAG_MOVE;  // 左键位移（含 IK 控制器）
                 drag_bone = hit.index;
-                motion_playing = false;  // 手动摆姿时暂停动作，避免下一帧被覆盖
+                drag_moved = false;     // 撤销记录 / 取消动作都推迟到真正产生位移
             } else {
                 if (hit.kind == pmx::Selection::BONE)
                     status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
@@ -450,10 +452,9 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
             const pmx::Selection hit = pick_at(mx, my, fb_w, fb_h, pmx::PICK_BONE);
             if (hit.kind == pmx::Selection::BONE && selection.kind == pmx::Selection::BONE &&
                 selection.index == hit.index && pose && !bone_drag_block(hit.index, false)[0]) {
-                push_pose_undo("旋转骨骼", "drag_bone");
                 drag_mode = DRAG_ROTATE;  // 右键旋转
                 drag_bone = hit.index;
-                motion_playing = false;  // 手动摆姿时暂停动作，避免下一帧被覆盖
+                drag_moved = false;
             } else {
                 if (hit.kind == pmx::Selection::BONE)
                     status = "「" + bone_name(hit.index) + "」未选中：双击选中后才能位移 / 旋转";
@@ -498,17 +499,36 @@ void Viewer::handle_input(GLFWwindow* window, int fb_w, int fb_h) {
             break;
         case DRAG_MOVE:
             if (pose && drag_bone >= 0 && (dx != 0.0f || dy != 0.0f)) {
+                if (!drag_moved) {
+                    drag_moved = true;
+                    push_pose_undo("移动骨骼", "drag_bone");
+                    remember_manual_pose(drag_bone);  // 真正拖动才取消这根骨骼的动作
+                    const pmx::Bone& owner = model.bones[static_cast<std::size_t>(drag_bone)];
+                    if ((owner.flags & pmx::BF_IK) && owner.ik) {
+                        manual_ik_mutes.erase(drag_bone);
+                        pose->set_ik_enabled(drag_bone, true);
+                    }
+                }
                 const float k = camera.distance * 0.0016f;
                 const pmx::Vec3 delta = camera.right() * (dx * k) - camera.up_vec() * (dy * k);
                 pose->translate_world(drag_bone, delta);
+                remember_manual_pose(drag_bone);
                 pose->solve_ik();
                 pose->world();
             }
             break;
         case DRAG_ROTATE:
             if (pose && drag_bone >= 0 && (dx != 0.0f || dy != 0.0f)) {
+                if (!drag_moved) {
+                    drag_moved = true;
+                    push_pose_undo("旋转骨骼", "drag_bone");
+                    remember_manual_pose(drag_bone);  // 真正拖动才取消这根骨骼的动作
+                    // 旋转只改末端朝向：关闭会被这次旋转牵动的 IK 链，避免原点被 IK 拉走。
+                    mute_conflicting_ik(drag_bone);
+                }
                 pose->rotate_world(drag_bone, pmx::Vec3{0.0f, 1.0f, 0.0f}, dx * 0.012f);
                 pose->rotate_world(drag_bone, camera.right(), dy * 0.012f);
+                remember_manual_pose(drag_bone);
                 pose->solve_ik();
                 pose->world();
             }
@@ -951,6 +971,7 @@ bool Viewer::apply_vpd_file(const std::string& path, std::string* err) {
         // 先清空旧形态，避免上一个 VPD 的权重残留。
         std::fill(morph_values.begin(), morph_values.end(), 0.0f);
         morph_weights.clear();
+        clear_manual_pose();
         const pmx::VpdMatchResult result =
             pmx::apply_vpd(model, *pose, vpd, &morph_weights);
         for (const auto& [index, weight] : morph_weights)
@@ -984,6 +1005,7 @@ bool Viewer::load_vmd_file(const std::string& path, std::string* err) {
         motion_playing = motion->max_frame > 0;
         motion_dirty = true;
         vmd_path = path;
+        clear_manual_pose();
         apply_motion_frame();  // 先落到第 0 帧，物理复位也以该帧为初始姿态
 #ifdef PMX_ENABLE_PHYSICS
         if (physics_enabled) reset_physics();
@@ -1009,6 +1031,7 @@ void Viewer::clear_motion() {
     motion_playing = false;
     motion_dirty = false;
     vmd_path.clear();
+    clear_manual_pose();
     status = "已清除 VMD 动作";
     if (physics_enabled) settle_physics();
 }
@@ -1017,6 +1040,21 @@ void Viewer::apply_motion_frame() {
     if (!motion || !pose) return;
     pmx::MorphWeights weights;
     pmx::evaluate_vmd(*motion, motion_binding, motion_frame, *pose, &weights);
+    // 只取消被手动摆过的那几根骨骼：evaluate_vmd 会整体 reset，这里把手动值写回去。
+    if (!motion_muted_bones.empty()) {
+        for (int b : motion_muted_bones) {
+            if (b < 0 || b >= pose->n) continue;
+            const auto r = motion_muted_rot.find(b);
+            const auto t = motion_muted_trans.find(b);
+            if (r != motion_muted_rot.end())
+                pose->base_rot[static_cast<std::size_t>(b)] = r->second;
+            if (t != motion_muted_trans.end())
+                pose->base_trans[static_cast<std::size_t>(b)] = t->second;
+        }
+        pose->apply(&weights);
+    }
+    // VMD 的 reset 会清空 IK 开关，把「手动旋转时临时关闭」的链重新关掉。
+    apply_manual_ik_mutes();
     if (!same_morph_weights(weights, morph_weights)) {
         morph_weights = std::move(weights);
         std::fill(morph_values.begin(), morph_values.end(), 0.0f);

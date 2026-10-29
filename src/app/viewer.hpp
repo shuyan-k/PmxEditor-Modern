@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "app/camera.hpp"
@@ -83,6 +84,13 @@ struct Viewer {
     bool motion_playing = false;
     bool motion_loop = true;
     bool motion_dirty = false;  // 帧号变化，下一帧需要重新写入姿态
+    // 手动摆过姿态的骨骼：播放时只取消这些骨骼的动作，其余骨骼继续受 VMD 驱动。
+    std::unordered_set<int> motion_muted_bones;
+    std::unordered_map<int, pmx::Quat> motion_muted_rot;
+    std::unordered_map<int, pmx::Vec3> motion_muted_trans;
+    // 手动旋转 IK 链内的骨骼时临时关闭的 IK 链（控制器本身除外），
+    // 避免 IK 把被旋转骨骼的原点又拉回去。
+    std::unordered_set<int> manual_ik_mutes;
 
     bool physics_enabled = false;
     float gravity = -9.8f;
@@ -122,6 +130,8 @@ struct Viewer {
     enum DragMode { DRAG_NONE, DRAG_ORBIT, DRAG_PAN, DRAG_MOVE, DRAG_ROTATE };
     DragMode drag_mode = DRAG_NONE;
     int drag_bone = -1;
+    // 本次按下是否已经真正产生位移 / 旋转（单纯点击不应取消骨骼的动作）。
+    bool drag_moved = false;
 
     // 撤销条目：整模型快照 + 姿态/形态；has_model=false 时是轻量姿态条目。
     struct PoseEntry {
@@ -129,6 +139,8 @@ struct Viewer {
         std::vector<pmx::Vec3> base_trans;
         std::unordered_map<int, pmx::Quat> ov_rot;
         std::unordered_map<int, pmx::Vec3> ov_trans;
+        // 手动摆姿时临时关闭的 IK 链也要随撤销一起回滚，否则撤销后腿仍然不受 IK 控制。
+        std::unordered_map<int, bool> ik_enabled;
         pmx::MorphWeights weights;
         std::vector<float> values;
     };
@@ -137,6 +149,8 @@ struct Viewer {
         bool has_model = false;
         pmx::Model model;
         PoseEntry pose;
+        // 整模型快照的粗略字节数，用于按内存预算裁剪撤销栈。
+        std::size_t bytes = 0;
     };
     std::vector<UndoEntry> undo_stack;
     std::vector<UndoEntry> redo_stack;
@@ -150,6 +164,12 @@ struct Viewer {
     void clear_motion();
     void update_motion(float dt);
     void apply_motion_frame();
+    // 记住被手动摆过的骨骼：播放时用这里的值覆盖 VMD 轨道。
+    void remember_manual_pose(int bone);
+    void clear_manual_pose();
+    // 手动旋转骨骼 b 时，关闭那些会因为这次旋转而改变目标 / 链接位置的 IK 链。
+    void mute_conflicting_ik(int bone);
+    void apply_manual_ik_mutes();
     bool save_model(const std::string& path, std::string* err);
     void apply_morphs();
     void reset_physics();
