@@ -127,6 +127,9 @@ struct Viewer {
     // 取消选择后恢复隐藏。
     bool focus_overlay = false;
 
+    // Ctrl+F：切到预览模式的「检索」标签并把输入焦点放进搜索框。
+    bool focus_preview_search = false;
+
     // 双击落点附近有多个可选中对象时，在鼠标旁列出候选让用户点选。
     std::vector<pmx::Selection> pick_choices;
     float pick_choice_pos[2] = {0.0f, 0.0f};
