@@ -504,6 +504,7 @@ std::string lookup_jp(const Table& table, const std::string& name, int depth) {
         {"D", "D"},
         {"P", "P"},
         {"C", "C"},
+        {"B", "B"},  // 捩B / 捩1B 这类 B 型变体
     };
     for (const Suffix& s : kSuffixes) {
         if (!ends_with(key, s.suffix)) continue;
@@ -535,6 +536,7 @@ std::string lookup_en(const Table& table, const std::string& name, int depth) {
         {"d", "D"},
         {"p", "P"},
         {"c", "C"},
+        {"b", "B"},  // twistB / twist1B 这类 B 型变体
     };
     for (const Suffix& s : kSuffixes) {
         if (!ends_with(key, s.suffix)) continue;
@@ -605,8 +607,12 @@ std::string lookup_chain(const Table& jp, const Table& en, const std::string& na
 
 std::string lookup_kind(NameKind kind, const std::string& name, const std::string& name_en) {
     switch (kind) {
-        case NameKind::Bone:
-            return lookup_pair(bones_jp(), bones_en(), name, name_en);
+        case NameKind::Bone: {
+            if (auto zh = lookup_pair(bones_jp(), bones_en(), name, name_en); !zh.empty())
+                return zh;
+            // 髪_01 / 髪_0_2 / 腕捩_0_1 这类带数字组的骨骼链名。
+            return lookup_chain(bones_jp(), bones_en(), name);
+        }
         case NameKind::Morph:
             return lookup_pair(morphs_jp(), morphs_en(), name, name_en);
         case NameKind::Material:
