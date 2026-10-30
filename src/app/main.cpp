@@ -244,7 +244,8 @@ void Viewer::apply_pick(const pmx::Selection& hit) {
     }
     if (hit.kind == pmx::Selection::BONE) {
         select(SelKind::Bone, hit.index);
-        reveal_tab = "骨骼";
+        // 预览模式没有「骨骼」页，改揭示「检索」页并把该行滚到中间。
+        reveal_tab = preview_mode ? "检索" : "骨骼";
         status = preview_mode
                      ? "已选中「" + bone_name(hit.index) + "」：左键拖动位移 · 右键拖动旋转"
                      : "已选中「" + bone_name(hit.index) + "」：摆姿请切到预览模式（Ctrl+M）";
@@ -388,6 +389,16 @@ void Viewer::handle_shortcuts() {
     // 退出确认框是模态的：弹窗期间不响应其它快捷键（Esc 由弹窗自己处理）。
     if (close_requested) return;
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_M, false)) set_preview_mode(!preview_mode);
+    // Ctrl+F：预览模式切到「检索」并把输入焦点放进搜索框，方便快速定位骨骼。
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+        if (preview_mode) {
+            reveal_tab = "检索";
+            reveal_frames = 2;
+            focus_preview_search = true;
+        } else {
+            status = "编辑模式请用「骨骼」页的搜索框；快速检索并摆姿请切到预览模式（Ctrl+M）";
+        }
+    }
     if (ImGui::IsKeyPressed(ImGuiKey_F, false) && !io.KeyCtrl) fit_camera();
     if (ImGui::IsKeyPressed(ImGuiKey_R, false) && !io.KeyCtrl) reset_pose();
     if (ImGui::IsKeyPressed(ImGuiKey_P, false) && !io.KeyCtrl) {
@@ -903,7 +914,8 @@ void Viewer::draw_ui() {
             }
         };
         if (preview_mode) {
-            // 预览模式只保留控制类标签：动作、物理开关、形态、设置。
+            // 预览模式只保留控制类标签：检索、动作、物理开关、形态、设置。
+            tab("检索", &panel_preview_search);
             tab("动作", &panel_motion);
             tab("物理", &panel_preview_physics);
             tab("形态", &panel_preview_morph);
