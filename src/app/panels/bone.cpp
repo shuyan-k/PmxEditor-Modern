@@ -21,6 +21,16 @@ void set_bone_flag(pmx::Bone& bone, std::uint16_t flag, bool on) {
     else bone.flags = static_cast<std::uint16_t>(bone.flags & ~flag);
 }
 
+std::string bone_item_label(const pmx::Model& model, int i) {
+    char prefix[24];
+    std::snprintf(prefix, sizeof prefix, "%03d · ", i);
+    std::string text(prefix);
+    const std::string label =
+        pmxui::base_name(model.bones[i].name, model.bones[i].name_en);
+    text += label.empty() ? "未命名" : label;
+    return text;
+}
+
 std::string bone_item_text(const pmx::Model& model, int i) {
     char prefix[24];
     std::snprintf(prefix, sizeof prefix, "%03d · ", i);
@@ -176,10 +186,12 @@ void panel_bone(Viewer& v) {
                      p >= 0 && p < bone_count && depth < 12; p = model.bones[p].parent)
                     ++depth;
                 std::string text(depth * 2, ' ');
-                text += bone_item_text(model, i);
-                text += "##bone_row";
-                text += std::to_string(i);
-                if (ImGui::Selectable(text.c_str(), i == idx)) {
+                text += bone_item_label(model, i);
+                const std::string zh =
+                    pmxui::zh_only(pmx::NameKind::Bone, model.bones[i].name,
+                                   model.bones[i].name_en);
+                const std::string row_id = "bone_row" + std::to_string(i);
+                if (pmxui::zh_row(row_id.c_str(), text, zh, i == idx)) {
                     v.select(SelKind::Bone, i);
                     idx = i;
                 }

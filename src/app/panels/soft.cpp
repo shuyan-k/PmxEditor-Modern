@@ -477,16 +477,16 @@ void panel_soft(Viewer& v) {
                 char head[16];
                 std::snprintf(head, sizeof head, "%02d · ", i);
                 std::string row = head;
-                const std::string label =
-                    pmx::name_with_zh(pmx::NameKind::Soft, s.name, s.name_en);
+                const std::string label = pmxui::base_name(s.name, s.name_en);
                 row += label.empty() ? "未命名柔体" : label;
                 row += "   · 材质 " + std::to_string(s.material) + " · 组 " +
                        std::to_string(static_cast<int>(s.group));
                 char mass[48];
                 std::snprintf(mass, sizeof mass, "   质量 %.2f", s.total_mass);
                 row += mass;
-                row += "##soft_row" + std::to_string(i);
-                if (ImGui::Selectable(row.c_str(), i == idx)) {
+                const std::string zh = pmxui::zh_only(pmx::NameKind::Soft, s.name, s.name_en);
+                const std::string row_id = "soft_row" + std::to_string(i);
+                if (pmxui::zh_row(row_id.c_str(), row, zh, i == idx)) {
                     v.select(SelKind::Soft, i);
                     idx = i;
                 }

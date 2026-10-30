@@ -287,14 +287,15 @@ void panel_material(Viewer& v) {
                            ImVec2(pmxui::scale(16.0f), pmxui::scale(16.0f)));
         ImGui::SameLine();
 
-        std::string row =
-            pmx::name_with_zh(pmx::NameKind::Material, mt.name, mt.name_en);
+        std::string row = pmxui::base_name(mt.name, mt.name_en);
         if (row.empty()) row = "未命名材质";
         row += "  ·  ";
         row += std::to_string(mt.face_count > 0 ? mt.face_count / 3 : 0);
         row += " 面";
         const bool selected = (v.sel.kind == SelKind::Material && v.sel.index == i);
-        if (ImGui::Selectable(row.c_str(), selected)) v.select(SelKind::Material, i);
+        const std::string zh = pmxui::zh_only(pmx::NameKind::Material, mt.name, mt.name_en);
+        const std::string row_id = "mat_row" + std::to_string(i);
+        if (pmxui::zh_row(row_id.c_str(), row, zh, selected)) v.select(SelKind::Material, i);
 
         const std::string path =
             mt.texture >= 0 ? v.model.resolve_texture(mt.texture) : std::string();

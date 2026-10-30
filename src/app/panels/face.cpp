@@ -228,19 +228,21 @@ void panel_face(Viewer& v) {
             for (int r = clipper.DisplayStart; r < clipper.DisplayEnd; ++r) {
                 const int i = st.filtered[static_cast<std::size_t>(r)];
                 const std::size_t mi = static_cast<std::size_t>(i);
-                const std::string& name = model.materials[mi].name;
-                const std::string zh = pmx::name_with_zh(pmx::NameKind::Material, name,
-                                                        model.materials[mi].name_en);
+                const pmx::Material& mt = model.materials[mi];
+                const std::string base = pmxui::base_name(mt.name, mt.name_en);
                 char head[24];
                 std::snprintf(head, sizeof(head), "%02d · ", i);
                 const std::string row = std::string(head) +
-                                        (zh.empty() ? "未命名材质" : zh) + "   起 " +
+                                        (base.empty() ? "未命名材质" : base) + "   起 " +
                                         std::to_string(starts[mi]) + " · " +
                                         std::to_string(counts[mi]) + " 面";
+                const std::string zh = pmxui::zh_only(pmx::NameKind::Material, mt.name,
+                                                      mt.name_en);
+                const std::string row_id = "face_mat" + std::to_string(i);
                 if (counts[mi] <= 0)
                     ImGui::PushStyleColor(ImGuiCol_Text,
                                           ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                if (ImGui::Selectable(row.c_str(), i == st.material))
+                if (pmxui::zh_row(row_id.c_str(), row, zh, i == st.material))
                     select_material(v, st, i);
                 if (counts[mi] <= 0) ImGui::PopStyleColor();
             }

@@ -25,6 +25,26 @@ int joint_type_index(const pmx::Joint& jt) {
     return std::clamp(static_cast<int>(jt.type), 0, 5);
 }
 
+std::string rigid_item_label(const pmx::Model& model, int i) {
+    char prefix[16];
+    std::snprintf(prefix, sizeof prefix, "%02d · ", i);
+    std::string text(prefix);
+    const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(i)];
+    const std::string label = pmxui::base_name(rb.name, rb.name_en);
+    text += label.empty() ? "未命名刚体" : label;
+    return text;
+}
+
+std::string joint_item_label(const pmx::Model& model, int i) {
+    char prefix[16];
+    std::snprintf(prefix, sizeof prefix, "%02d · ", i);
+    std::string text(prefix);
+    const pmx::Joint& jt = model.joints[static_cast<std::size_t>(i)];
+    const std::string label = pmxui::base_name(jt.name, jt.name_en);
+    text += label.empty() ? "未命名关节" : label;
+    return text;
+}
+
 std::string rigid_item_text(const pmx::Model& model, int i) {
     char prefix[16];
     std::snprintf(prefix, sizeof prefix, "%02d · ", i);
@@ -434,31 +454,34 @@ void panel_physics(Viewer& v) {
             for (int k = clipper.DisplayStart; k < clipper.DisplayEnd; ++k) {
                 const int i = visible[static_cast<std::size_t>(k)];
                 std::string row;
+                std::string zh;
+                std::string row_id;
                 if (kind == 0) {
                     const pmx::RigidBody& rb = model.rigid[static_cast<std::size_t>(i)];
-                    row = rigid_item_text(model, i);
+                    row = rigid_item_label(model, i);
                     row += "   · 骨骼 ";
                     if (rb.bone >= 0 && rb.bone < static_cast<int>(model.bones.size())) {
                         const pmx::Bone& bone =
                             model.bones[static_cast<std::size_t>(rb.bone)];
-                        std::string label =
-                            pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
+                        const std::string label = pmxui::base_name(bone.name, bone.name_en);
                         row += label.empty() ? "未命名" : label;
                     } else {
                         row += "未关联";
                     }
                     row += " · 组 " + std::to_string(static_cast<int>(rb.group));
-                    row += "##rb_row" + std::to_string(i);
+                    zh = pmxui::zh_only(pmx::NameKind::Rigid, rb.name, rb.name_en);
+                    row_id = "rb_row" + std::to_string(i);
                 } else {
                     const pmx::Joint& jt = model.joints[static_cast<std::size_t>(i)];
-                    row = joint_item_text(model, i);
+                    row = joint_item_label(model, i);
                     row += "   · ";
                     row += kJointNames[joint_type_index(jt)];
                     row += "   " + std::to_string(jt.rigid_a) + " → " +
                            std::to_string(jt.rigid_b);
-                    row += "##jt_row" + std::to_string(i);
+                    zh = pmxui::zh_only(pmx::NameKind::Joint, jt.name, jt.name_en);
+                    row_id = "jt_row" + std::to_string(i);
                 }
-                if (ImGui::Selectable(row.c_str(), i == idx)) {
+                if (pmxui::zh_row(row_id.c_str(), row, zh, i == idx)) {
                     v.select(kind == 0 ? SelKind::Rigid : SelKind::Joint, i);
                     idx = i;
                 }
