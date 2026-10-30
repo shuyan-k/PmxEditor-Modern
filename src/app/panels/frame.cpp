@@ -121,7 +121,8 @@ void panel_frame(Viewer& v) {
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##frame_search", "搜索表示枠名 / 中文", filter, sizeof filter);
 
-    ImGui::BeginChild("##frame_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##frame_list", ImVec2(0, pmxui::scale(200.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     std::vector<int> visible;
     visible.reserve(model.frames.size());
     for (int i = 0; i < frame_count; ++i) {

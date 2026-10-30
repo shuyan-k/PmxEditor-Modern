@@ -465,7 +465,8 @@ void panel_soft(Viewer& v) {
     ImGui::EndDisabled();
 
     // ------------------------------------------------------------ 列表
-    ImGui::BeginChild("##soft_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##soft_list", ImVec2(0, pmxui::scale(200.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     if (soft_count == 0) {
         ImGui::TextDisabled("尚无柔体（PMX 2.1 才能保存）");
     } else {

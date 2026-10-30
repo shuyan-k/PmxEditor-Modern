@@ -416,7 +416,8 @@ void panel_physics(Viewer& v) {
     ImGui::InputTextWithHint("##physics_search", "搜索名称 / 中文 / 关联骨骼", filter,
                              sizeof filter);
 
-    ImGui::BeginChild("##physics_list", ImVec2(0, pmxui::scale(200.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##physics_list", ImVec2(0, pmxui::scale(200.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     std::vector<int> visible;
     visible.reserve(static_cast<std::size_t>(count));
     if (kind == 0) {

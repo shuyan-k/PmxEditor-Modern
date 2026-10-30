@@ -616,7 +616,8 @@ void panel_morph(Viewer& v) {
     ImGui::InputTextWithHint("##morph_search", "搜索形态名 / 中文 / 英文名", &filter);
 
     morph_count = static_cast<int>(v.model.morphs.size());
-    ImGui::BeginChild("##morph_list", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##morph_list", ImVec2(0, pmxui::scale(180.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     {
         std::vector<int> visible;
         visible.reserve(v.model.morphs.size());
