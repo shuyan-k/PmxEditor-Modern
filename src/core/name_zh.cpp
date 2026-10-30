@@ -17,7 +17,7 @@ struct Entry {
 };
 
 const Entry kBones[] = {
-    {"全ての親", "all parents", "根骨骼"},
+    {"全ての親", "all parents|all parent|master|root", "根骨骼"},
     {"センター", "center", "中心"},
     {"グルーブ", "groove", "旋转中心"},
     {"操作中心", "operation center", "操作中心"},
@@ -242,6 +242,94 @@ const Entry kBones[] = {
     {"ひじD", "elbow d", "肘D"},
     {"左ひじD", "left elbow d|elbowd.l", "左肘D"},
     {"右ひじD", "right elbow d|elbowd.r", "右肘D"},
+    // 尾巴 / 衣装 / 饰品 / 武器等常见附加骨骼
+    {"尻尾", "tail", "尾巴"},
+    {"しっぽ", "tail", "尾巴"},
+    {"シッポ", "tail", "尾巴"},
+    {"ケツ", "butt", "臀部"},
+    {"お尻", "butt", "臀部"},
+    {"袖", "sleeve", "袖子"},
+    {"袖口", "cuff", "袖口"},
+    {"ネクタイ", "necktie|tie", "领带"},
+    {"リボン", "ribbon", "蝴蝶结"},
+    {"蝶ネクタイ", "bow tie|bowtie", "蝴蝶结领带"},
+    {"ベルト", "belt", "腰带"},
+    {"マフラー", "scarf", "围巾"},
+    {"マント", "mantle", "披风"},
+    {"ケープ", "cape", "斗篷"},
+    {"フード", "hood", "兜帽"},
+    {"襟", "collar", "衣领"},
+    {"ポケット", "pocket", "口袋"},
+    {"ネックレス", "necklace", "项链"},
+    {"ペンダント", "pendant", "吊坠"},
+    {"イヤリング", "earring", "耳环"},
+    {"ピアス", "piercing", "耳钉"},
+    {"ヘッドホン", "headphones", "耳机"},
+    {"ヘッドセット", "headset", "头戴设备"},
+    {"イヤホン", "earphones", "耳塞"},
+    {"帽子", "hat", "帽子"},
+    {"ハット", "hat", "帽子"},
+    {"カチューシャ", "headband", "发箍"},
+    {"髪留め", "hairpin", "发夹"},
+    {"眼鏡", "glasses", "眼镜"},
+    {"サングラス", "sunglasses", "墨镜"},
+    {"マスク", "mask", "面罩"},
+    {"手袋", "glove|gloves", "手套"},
+    {"グローブ", "glove", "手套"},
+    {"靴", "shoe|shoes", "鞋子"},
+    {"ブーツ", "boot|boots", "靴子"},
+    {"ハイヒール", "high heels|heels", "高跟鞋"},
+    {"靴下", "socks|sock", "袜子"},
+    {"ストッキング", "stockings", "丝袜"},
+    {"ニーソ", "knee socks", "过膝袜"},
+    {"翼", "wing|wings", "翅膀"},
+    {"羽", "feather", "羽毛"},
+    {"羽根", "feather", "羽毛"},
+    {"角", "horn", "角"},
+    {"剣", "sword", "剑"},
+    {"刀", "katana", "刀"},
+    {"鞘", "sheath", "刀鞘"},
+    {"銃", "gun", "枪"},
+    {"サーベル", "saber", "军刀"},
+    {"杖", "staff|wand", "法杖"},
+    {"弓", "bow", "弓"},
+    {"矢", "arrow", "箭"},
+    {"盾", "shield", "盾"},
+    // 四肢与躯干的别称
+    {"上腕", "upper arm", "上臂"},
+    {"前腕", "forearm", "前臂"},
+    {"二の腕", "upper arm", "上臂"},
+    {"太もも", "thigh", "大腿"},
+    {"腿", "thigh", "大腿"},
+    {"脚", "leg", "腿"},
+    {"すね", "shin", "小腿"},
+    {"脛", "shin", "小腿"},
+    {"ふくらはぎ", "calf", "小腿肚"},
+    {"かかと", "heel", "脚跟"},
+    {"踵", "heel", "脚跟"},
+    {"背中", "back", "背部"},
+    {"背骨", "spine", "脊骨"},
+    {"腹", "belly", "腹部"},
+    {"お腹", "belly", "肚子"},
+    {"骨盤", "pelvis", "骨盆"},
+    {"ウエスト", "waist", "腰围"},
+    {"ヒップ", "hip", "臀部"},
+    {"肩甲骨", "shoulder blade", "肩胛骨"},
+    {"鎖骨", "collarbone", "锁骨"},
+    {"うなじ", "nape", "后颈"},
+    {"額", "forehead", "额头"},
+    {"口", "mouth", "嘴"},
+    {"瞳", "pupil", "瞳孔"},
+    {"黒目", "iris", "黑眼珠"},
+    {"白目", "sclera", "白眼球"},
+    {"まつ毛", "eyelashes", "睫毛"},
+    {"睫毛", "eyelashes", "睫毛"},
+    {"体", "body", "身体"},
+    {"体幹", "torso", "躯干"},
+    {"胴", "torso", "躯干"},
+    {"ギミック", "gimmick", "机关"},
+    {"ハンドル", "handle", "把手"},
+    {"持ち物", "prop", "道具"},
 };
 
 const Entry kMorphs[] = {
@@ -590,7 +678,29 @@ std::string lookup_chain(const Table& jp, const Table& en, const std::string& na
         }
         const std::size_t start = sep == std::string::npos ? 0 : sep + sep_len;
         const std::string tail = base.substr(start);
-        if (!all_digits(tail)) break;
+        if (!all_digits(tail)) {
+            // 没有分隔符时（髪01 / 袖01 / スカート0_1 的基名段），从尾部切出连续数字。
+            if (sep != std::string::npos) break;
+            std::size_t dstart = tail.size();
+            while (dstart > 0) {
+                const char c = tail[dstart - 1];
+                if (c >= '0' && c <= '9') {
+                    --dstart;
+                    continue;
+                }
+                // 全角数字 U+FF10..U+FF19：EF BC 90..99
+                if (dstart >= 3 && tail[dstart - 3] == '\xEF' && tail[dstart - 2] == '\xBC' &&
+                    tail[dstart - 1] >= '\x90' && tail[dstart - 1] <= '\x99') {
+                    dstart -= 3;
+                    continue;
+                }
+                break;
+            }
+            if (dstart == 0 || dstart == tail.size()) break;
+            groups.insert(groups.begin(), normalize(tail.substr(dstart), false));
+            base = tail.substr(0, dstart);
+            continue;
+        }
         groups.insert(groups.begin(), normalize(tail, false));
         if (sep == std::string::npos) {
             base.clear();

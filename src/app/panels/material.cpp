@@ -272,7 +272,8 @@ void panel_material(Viewer& v) {
 
     const int material_count = static_cast<int>(v.model.materials.size());
     int shown_rows = 0;
-    ImGui::BeginChild("##material_list", ImVec2(0, pmxui::scale(180.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##material_list", ImVec2(0, pmxui::scale(180.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     for (int i = 0; i < material_count; ++i) {
         const pmx::Material& mt = v.model.materials[static_cast<std::size_t>(i)];
         if (!pmxui::match_filter(filter, mt.name, mt.name_en,

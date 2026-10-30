@@ -420,7 +420,8 @@ void panel_vertex(Viewer& v) {
     if (ImGui::Button("下一页")) ++st.page;
     ImGui::EndDisabled();
 
-    ImGui::BeginChild("##vlist", ImVec2(0, pmxui::scale(170.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##vlist", ImVec2(0, pmxui::scale(170.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     if (total == 0) {
         ImGui::TextDisabled("无匹配结果");
     } else {

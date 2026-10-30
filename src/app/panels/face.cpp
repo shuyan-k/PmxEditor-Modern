@@ -218,7 +218,8 @@ void panel_face(Viewer& v) {
     material_spans(model, starts, counts);
 
     ImGui::SeparatorText("材质");
-    ImGui::BeginChild("##matlist", ImVec2(0, pmxui::scale(150.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##matlist", ImVec2(0, pmxui::scale(150.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     if (st.filtered.empty()) {
         ImGui::TextDisabled("无匹配结果");
     } else {
@@ -277,7 +278,8 @@ void panel_face(Viewer& v) {
     if (ImGui::Button("下一页")) ++st.page;
     ImGui::EndDisabled();
 
-    ImGui::BeginChild("##facelist", ImVec2(0, pmxui::scale(170.0f)), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##facelist", ImVec2(0, pmxui::scale(170.0f)),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY);
     if (fcount == 0) {
         ImGui::TextDisabled("该材质没有面");
     } else {
