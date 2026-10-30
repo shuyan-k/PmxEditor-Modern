@@ -34,6 +34,48 @@ inline void zh_line(pmx::NameKind kind, const std::string& name, const std::stri
     if (!zh.empty() && zh != name) ImGui::TextDisabled("中文：%s", zh.c_str());
 }
 
+// 展示用的原文：日文优先，空则回退英文名。
+inline std::string base_name(const std::string& name, const std::string& name_en) {
+    return name.empty() ? name_en : name;
+}
+
+// 只取译名；未收录或与原文相同时返回空。
+inline std::string zh_only(pmx::NameKind kind, const std::string& name,
+                           const std::string& name_en) {
+    const std::string zh = pmx::name_zh(kind, name, name_en);
+    return zh == base_name(name, name_en) ? std::string() : zh;
+}
+
+// 列表行：原文保持原位（含调用方给的缩进 / 前缀），中文译名贴右边缘。
+// id 用于生成行 ID，selected 与普通 Selectable 相同。返回是否被点击。
+inline bool zh_row(const char* id, const std::string& text, const std::string& zh,
+                   bool selected = false) {
+    ImGui::PushID(id);
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const ImVec2 size(width, ImGui::GetTextLineHeight() + style.FramePadding.y * 2.0f);
+    const bool clicked =
+        ImGui::Selectable("##zh_row", selected, ImGuiSelectableFlags_None, size);
+    const ImVec2 rmin = ImGui::GetItemRectMin();
+    const ImVec2 rmax = ImGui::GetItemRectMax();
+    const float ty = rmin.y + style.FramePadding.y;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
+    float text_right = rmax.x;
+    if (!zh.empty()) {
+        const float x = rmax.x - style.FramePadding.x - ImGui::CalcTextSize(zh.c_str()).x;
+        if (x > rmin.x + style.FramePadding.x) {
+            dl->AddText(ImVec2(x, ty), col, zh.c_str());
+            text_right = x - std::max(style.ItemInnerSpacing.x, 4.0f);
+        }
+    }
+    dl->PushClipRect(rmin, ImVec2(std::min(rmax.x, text_right), rmax.y), true);
+    dl->AddText(ImVec2(rmin.x + style.FramePadding.x, ty), col, text.c_str());
+    dl->PopClipRect();
+    ImGui::PopID();
+    return clicked;
+}
+
 // 名称 / 英文名输入框。返回是否有改动。
 inline bool name_fields(Viewer& v, std::string& name, std::string& name_en, const char* id,
                         const char* kind, const char* label = "修改名称") {

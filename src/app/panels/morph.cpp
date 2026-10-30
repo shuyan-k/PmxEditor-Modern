@@ -80,7 +80,7 @@ std::string morph_list_text(const pmx::Morph& morph, int index) {
     char prefix[24];
     std::snprintf(prefix, sizeof prefix, "%03d · ", index);
     std::string text(prefix);
-    const std::string label = pmx::name_with_zh(pmx::NameKind::Morph, morph.name, morph.name_en);
+    const std::string label = pmxui::base_name(morph.name, morph.name_en);
     text += label.empty() ? "未命名形态" : label;
     text += " · ";
     text += morph_panel_name(morph.panel);
@@ -638,11 +638,12 @@ void panel_morph(Viewer& v) {
             while (clipper.Step()) {
                 for (int k = clipper.DisplayStart; k < clipper.DisplayEnd; ++k) {
                     const int i = visible[static_cast<std::size_t>(k)];
-                    std::string text =
-                        morph_list_text(v.model.morphs[static_cast<std::size_t>(i)], i);
-                    text += "##morph_row";
-                    text += std::to_string(i);
-                    if (ImGui::Selectable(text.c_str(), i == idx)) {
+                    const pmx::Morph& mo = v.model.morphs[static_cast<std::size_t>(i)];
+                    std::string text = morph_list_text(mo, i);
+                    const std::string zh = pmxui::zh_only(pmx::NameKind::Morph, mo.name,
+                                                          mo.name_en);
+                    const std::string row_id = "morph_row" + std::to_string(i);
+                    if (pmxui::zh_row(row_id.c_str(), text, zh, i == idx)) {
                         v.select(SelKind::Morph, i);
                         idx = i;
                     }

@@ -32,24 +32,31 @@ std::string morph_entry_text(const pmx::Model& model, int i) {
     return text;
 }
 
-// 项目列表里的显示文本：类型 0 骨骼 / 1 形态。
-std::string frame_item_text(const pmx::Model& model, const pmx::DisplayFrameItem& item) {
+// 项目列表里的显示文本：类型 0 骨骼 / 1 形态。原文追加到 left，译名写入 zh。
+void frame_item_parts(const pmx::Model& model, const pmx::DisplayFrameItem& item,
+                      std::string& left, std::string& zh) {
+    zh.clear();
     if (item.type == 0) {
-        std::string name = "?";
+        left += "骨骼 · ";
         if (item.index >= 0 && item.index < static_cast<int>(model.bones.size())) {
             const pmx::Bone& bone = model.bones[item.index];
-            name = pmx::name_with_zh(pmx::NameKind::Bone, bone.name, bone.name_en);
-            if (name.empty()) name = "未命名";
+            const std::string name = pmxui::base_name(bone.name, bone.name_en);
+            left += name.empty() ? "未命名" : name;
+            zh = pmxui::zh_only(pmx::NameKind::Bone, bone.name, bone.name_en);
+        } else {
+            left += "?";
         }
-        return "骨骼 · " + name;
+        return;
     }
-    std::string name = "?";
+    left += "形态 · ";
     if (item.index >= 0 && item.index < static_cast<int>(model.morphs.size())) {
         const pmx::Morph& morph = model.morphs[item.index];
-        name = pmx::name_with_zh(pmx::NameKind::Morph, morph.name, morph.name_en);
-        if (name.empty()) name = "未命名";
+        const std::string name = pmxui::base_name(morph.name, morph.name_en);
+        left += name.empty() ? "未命名" : name;
+        zh = pmxui::zh_only(pmx::NameKind::Morph, morph.name, morph.name_en);
+    } else {
+        left += "?";
     }
-    return "形态 · " + name;
 }
 
 }  // namespace
@@ -136,14 +143,15 @@ void panel_frame(Viewer& v) {
                 char prefix[24];
                 std::snprintf(prefix, sizeof prefix, "%03d · ", i);
                 std::string text(prefix);
-                text += f.name.empty() ? "未命名表示枠" : f.name;
+                const std::string name = pmxui::base_name(f.name, f.name_en);
+                text += name.empty() ? "未命名表示枠" : name;
                 if (f.special)
                     text += "   (特殊枠 · " + std::to_string(f.items.size()) + " 项)";
                 else
                     text += "   (" + std::to_string(f.items.size()) + " 项)";
-                text += "##frame_row";
-                text += std::to_string(i);
-                if (ImGui::Selectable(text.c_str(), i == idx)) {
+                const std::string zh = pmxui::zh_only(pmx::NameKind::Frame, f.name, f.name_en);
+                const std::string row_id = "frame_row" + std::to_string(i);
+                if (pmxui::zh_row(row_id.c_str(), text, zh, i == idx)) {
                     v.select(SelKind::Frame, i);
                     idx = i;
                 }
@@ -192,10 +200,10 @@ void panel_frame(Viewer& v) {
         char prefix[16];
         std::snprintf(prefix, sizeof prefix, "%02d  ", i);
         std::string text(prefix);
-        text += frame_item_text(model, frame.items[i]);
-        text += "##frame_item";
-        text += std::to_string(i);
-        if (ImGui::Selectable(text.c_str(), i == item_row)) item_row = i;
+        std::string zh;
+        frame_item_parts(model, frame.items[static_cast<std::size_t>(i)], text, zh);
+        const std::string row_id = "frame_item" + std::to_string(i);
+        if (pmxui::zh_row(row_id.c_str(), text, zh, i == item_row)) item_row = i;
     }
     if (item_count == 0) ImGui::TextDisabled("暂无项目");
     ImGui::EndChild();
